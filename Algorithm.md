@@ -634,13 +634,13 @@ AccessCoPilot():
 Flow (Capacity Shaping)
 ```mermaid
 flowchart LR
-  T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short-horizon forecast]
+  T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short horizon forecast]
   F --> N[Need mix]
   T --> S[Supply mix]
-  N --> D[Delta (need - supply)]
+  N --> D[Delta need vs supply]
   S --> D
-  D -->|Significant?| R[Micro-releases / template rebalance]
-  R --> A[Audit micro_release]
+  D -->|Significant?| R[Micro releases / template rebalance]
+  R --> A[Audit micro release]
 ```
 
 ---
