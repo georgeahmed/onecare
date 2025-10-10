@@ -2,6 +2,10 @@
 **Modern Access Edition (NHS & FHIR‑Native)**  
 **Version 1.2 — Updated 2025**
 
+> [!TIP]
+> This version adds a modern, colorful presentation with themed diagrams, collapsible algorithm blocks, and a quick visual legend.
+> Diagrams follow a consistent palette so it’s easier to scan architecture and flows at a glance.
+
 > This document converts the attached *Maqbool_report* into a software‑ready, algorithmic Markdown specification. It preserves all essential logic and flows while structuring them into explicit initialization, processing, and output stages with concrete data models, event topics, and pseudocode suitable for implementation. It fully embeds all meaningful and important information from the report so this file is self‑contained (safe to remove the original report if needed).
 
 ---
@@ -124,6 +128,15 @@ accessibility_and_language:
 
 ### 0.8 High‑Level Architecture
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {
+  'primaryColor': '#0ea5e9',
+  'secondaryColor': '#6366f1',
+  'tertiaryColor': '#10b981',
+  'primaryTextColor': '#0f172a',
+  'lineColor': '#64748b',
+  'fontFamily': 'Inter, ui-sans-serif, system-ui',
+  'fontSize': '16px'
+}}}%%
 graph TD
   subgraph Channels
     P[Web/App Portal]
@@ -171,12 +184,29 @@ graph TD
   SC --> FHIR
   SC --> FEAT
   SC -.-> OBJ
+
+  classDef channel fill:#0ea5e9,stroke:#0369a1,color:#ffffff;
+  classDef core fill:#6366f1,stroke:#3730a3,color:#ffffff;
+  classDef data fill:#10b981,stroke:#065f46,color:#ffffff;
+  classDef ext fill:#f59e0b,stroke:#b45309,color:#0f172a;
+  classDef audit fill:#334155,stroke:#1f2937,color:#ffffff;
+
+  class P,T channel;
+  class O,TR,BK,PH,CS,SC,ICS core;
+  class FHIR,OBJ,FEAT,AUD data;
+  class EB,GP,CPCS,OOH ext;
+  class OBS audit;
 ```
+
+Visual Legend: 🟦 Channels · 🟪 Core Services · 🟩 Data · 🟧 External · ⬛ Audit
 
 ### 0.9 Core Flows (Sequences)
 
 Unified Intake → Orchestrate → Triage → Task
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {
+  'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'
+}}}%%
 sequenceDiagram
   participant Patient
   participant Portal as "Portal/IVR"
@@ -196,6 +226,9 @@ sequenceDiagram
 
 Telephony Parity with Callback Windows
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {
+  'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'
+}}}%%
 sequenceDiagram
   participant Caller
   participant IVR as "Cloud IVR"
@@ -220,6 +253,9 @@ sequenceDiagram
 - Any inbound event `e` on ingress topics, with `auth`, `idempotency_key`, `payload`.
 
 ### 1.2 Algorithm
+<details>
+<summary>View Orchestrator Algorithm</summary>
+
 ```pseudocode
 Orchestrate(e):
   ctx := initContext(e)
@@ -254,10 +290,13 @@ Orchestrate(e):
   EmitAudit("success", {e, R, routes})
   return OK
 ```
+
+</details>
 **Outputs:** Published events, persisted FHIR bundle, metrics, immutable audit.
 
 Sequence (Orchestrate)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant S as Source (Portal/IVR/API)
   participant O as Orchestrator
@@ -281,6 +320,9 @@ Guarantees continuous access across web and phone (eliminates the "8am rush"), w
 **Schedule:** Every minute per practice.  
 **Goal:** Ensure portal is open within `CORE_HOURS`; display OOH banner outside.
 
+<details>
+<summary>View Portal Uptime Guard</summary>
+
 ```pseudocode
 GuardPortal(practice):
   now := LocalTime(practice.tz)
@@ -297,10 +339,15 @@ GuardPortal(practice):
      else:
         BlockSubmissionsWithAdvice(practice.portal)
 ```
+
+</details>
 **Outputs:** Portal state, incident notices, audit.
 
 ### 2.2 Urgent‑Safety Gate (red‑flag diversion)
 **Trigger:** Immediately on submission (web or phone transcript).
+
+<details>
+<summary>View Urgent‑Safety Gate</summary>
 
 ```pseudocode
 SafeguardGate(doc, patient):
@@ -317,6 +364,8 @@ SafeguardGate(doc, patient):
      return DIVERTED
   return SAFE_TO_CONTINUE
 ```
+
+</details>
 **Outputs:** Patient urgent advice, Staff safety alert, audit (diverted) or pass‑through.
 
 ### 2.3 Telephony Parity (cloud IVR → same digital flow)
@@ -353,6 +402,7 @@ HandleCall(call):
 
 Sequence (Telephony Parity)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant Caller
   participant IVR
@@ -373,6 +423,9 @@ sequenceDiagram
 ## 3) AI Triage, SLA Re‑prioritisation & De‑duplication
 
 ### 3.1 Unified Triage (web + phone + walk‑in)
+<details>
+<summary>View Unified Triage Algorithm</summary>
+
 ```pseudocode
 Triage(doc):
   intent    := IntentClassifier(doc.text)
@@ -402,10 +455,13 @@ Triage(doc):
   NotifyOwnerQueue(owner, task)
   return task
 ```
+
+</details>
 **Outputs:** `Task` in clinician queue, owner/team notification, audit.
 
 Sequence (Triage and Aging)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant Tri as Triage Service
   participant FS as Feature Store
@@ -421,6 +477,9 @@ sequenceDiagram
 
 ### 3.2 SLA Re‑prioritisation (aging)
 **Schedule:** Every 5 minutes.
+<details>
+<summary>View SLA Re‑prioritisation (Aging)</summary>
+
 ```pseudocode
 AgeOpenTasks():
   for t in OpenTasks(status in {requested, ready}):
@@ -430,9 +489,14 @@ AgeOpenTasks():
        UpdateTaskPriority(t, newLabel)
        NotifyOwnerQueue(t.owner, t, reason="SLA aging")
 ```
+
+</details>
 **Guarantees:** Monotonic escalation; audited.
 
 ### 3.3 Cross‑Channel De‑duplication
+<details>
+<summary>View Cross‑Channel De‑duplication</summary>
+
 ```pseudocode
 Deduplicate(doc, window=W, tau=SIM_THRESHOLD):
   recents := FetchPatientRequests(doc.patient, last=W)
@@ -444,11 +508,16 @@ Deduplicate(doc, window=W, tau=SIM_THRESHOLD):
   return DISTINCT
 ```
 
+</details>
+
 ---
 
 ## 4) Booking — Local, PCN Enhanced Access & GP Connect Broker
 
 ### 4.1 Search & Rank
+<details>
+<summary>View Search & Rank</summary>
+
 ```pseudocode
 SearchAndRankAppointments(request):
   intent := DetermineAppointmentType(request)                 # GP, nurse, phlebotomy...
@@ -467,9 +536,14 @@ SearchAndRankAppointments(request):
     s.rank_score = R1*PrefScore(prefs, s) - R2*tt + R3*cont + R4*util + R5*lang + R6*access
   return TopK(sortDesc(S, by=rank_score), k=5)
 ```
+
+</details>
 **Outputs:** Ranked options (typically top 3–5) for patient/clinician choice.
 
 ### 4.2 Federated Book via GP Connect
+<details>
+<summary>View Federated Booking</summary>
+
 ```pseudocode
 FederatedBook(slot, patient, reason):
   if !EligibilityCheck(slot.org, patient): return INELIGIBLE
@@ -480,8 +554,11 @@ FederatedBook(slot, patient, reason):
   return BOOKED(appt)
 ```
 
+</details>
+
 Sequence (Booking via GP Connect)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant UI as "Portal/Clinician UI"
   participant BK as "Booking Service"
@@ -502,6 +579,9 @@ sequenceDiagram
 ## 5) Pharmacy First Router (minor ailments deflection)
 
 ### 5.1 Condition Classification & Eligibility
+<details>
+<summary>View Pharmacy First Router</summary>
+
 ```pseudocode
 PharmacyFirstRoute(doc, patient):
   cond := SymptomToCondition(doc)                             # sore throat, UTI, impetigo, etc.
@@ -525,8 +605,11 @@ PharmacyFirstRoute(doc, patient):
   return BOOKED_PHARMACY(slot, sr)
 ```
 
+</details>
+
 Flow (Pharmacy First)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 flowchart LR
   A[Doc + Patient] --> B{Eligible per rules?}
   B -- No --> C[Not eligible -> GP]
@@ -583,6 +666,7 @@ AccessCoPilot():
 
 Flow (Capacity Shaping)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 flowchart LR
   T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short-horizon forecast]
   F --> N[Need mix]
@@ -622,6 +706,7 @@ AmbientScribe(encounter):
 
 Sequence (Ambient Scribe)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant Clin as Clinician
   participant Scribe
@@ -712,6 +797,7 @@ OnAppointmentCancelled(slot):
 
 Sequence (Cross‑Org Referral)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 sequenceDiagram
   participant Home as "Home Practice"
   participant ICS as "ICS Hub"
@@ -743,11 +829,24 @@ Notes: Example defaults from the report include URGENT contact within 2 hours an
 - **Hourly dashboards:** practice / PCN / ICS views.  
 - **Monthly Access Assurance Pack:** trends, breaches, mitigations, Co‑Pilot decisions, signatures.  
 
+Visual KPI Snapshot (example)
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'pie1':'#0ea5e9','pie2':'#10b981','pie3':'#f59e0b','pie4':'#6366f1'}}}%%
+pie title SLA Hit Rate (Example)
+  "STAT" : 5
+  "URGENT" : 25
+  "SOON" : 30
+  "ROUTINE" : 40
+```
+
 ---
 
 ## 11) Identity, Authorization, Consent & Safety Gates
 
 ### 11.1 Authorization = RBAC + Relationship + ABAC + Purpose‑of‑Use
+<details>
+<summary>View Authorization</summary>
+
 ```pseudocode
 Authorize(actor, action, subject, scope):
   if !RBAC(actor.role, action): return false
@@ -755,12 +854,19 @@ Authorize(actor, action, subject, scope):
   if !ABAC_OK(actor, subject, scope): return false           # sensitivity, time, device, location
   return true
 ```
+
+</details>
 ### 11.2 Consent & Break‑Glass
+<details>
+<summary>View Consent & Break‑Glass</summary>
+
 ```pseudocode
 CheckConsent(patient, purpose, resources):
   rules := FetchActiveFHIRConsent(patient)
   return EvaluatePurposeAndScopes(rules, purpose, resources)
 ```
+
+</details>
 Break‑glass grants emergency access w/ reason, heavy audit, post‑hoc review.
 
 ### 11.3 Clinical Safety Gates
@@ -791,11 +897,16 @@ ComposePatientAdvice(draft, locale):
 - **Regular penetration testing** and full **DSPT** compliance.
 
 ### 12.2 Immutable Audit (WORM) + SIEM
+<details>
+<summary>View Immutable Audit</summary>
+
 ```pseudocode
 EmitAudit(action, obj):
   rec := { action, actor, subject, resources, ts, outcome, model_ver? }
   AppendWORM(rec); StreamToSIEM(rec); AnomalyDetect(rec)
 ```
+
+</details>
 ### 12.3 Observability & Resilience
 - SLOs: triage p95 < 2s; scribe draft < 60s; portal p99 < 300ms.  
 - Backpressure & circuit breakers; graceful degradation (rule‑based fallbacks).  
@@ -807,6 +918,9 @@ EmitAudit(action, obj):
 ## 13) MLOps & Governance
 
 ### 13.1 Lifecycle
+<details>
+<summary>View MLOps Lifecycle</summary>
+
 ```pseudocode
 ModelLifecycle(model):
   data := CurateDeidentifiedTrainingData(FeatureStore, window=6-12m)
@@ -816,6 +930,8 @@ ModelLifecycle(model):
   CanaryDeploy(v, pct=5%) -> Monitor(latency, agreement, outcomes, bias, drift)
   if Stable(): PromoteTo100% else: Rollback()
 ```
+
+</details>
 ### 13.2 Explainability & Feedback
 - Log inputs/outputs (hashed identifiers), prompt/response archives for LLMs.  
 - SHAP/LIME explanations for predictive models.  
@@ -838,6 +954,9 @@ ModelLifecycle(model):
 
 ## Appendix A — Priority Mapping (monotonic)
 
+<details>
+<summary>View Priority Mapping</summary>
+
 ```pseudocode
 MapPriority(score):
   if score >= S_STAT:   return "stat"
@@ -845,6 +964,8 @@ MapPriority(score):
   if score >= S_SOON:   return "soon"
   return "routine"
 ```
+
+</details>
 **Constraints:**  
 1) Higher clinical acuity never lowers score.  
 2) Life‑threatening → **STAT** override.  
@@ -853,6 +974,9 @@ MapPriority(score):
 ---
 
 ## Appendix B — Continuity & Fairness‑Aware Assignment
+<details>
+<summary>View Continuity & Fairness Assignment</summary>
+
 ```pseudocode
 AssignBestOwner(neededSkills, capacity, patient):
   candidates := FilterBySkills(capacity, neededSkills)
@@ -864,6 +988,8 @@ AssignBestOwner(neededSkills, capacity, patient):
   )
   return best
 ```
+
+</details>
 
 ---
 
@@ -899,6 +1025,7 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 Event Topics Map (illustrative)
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
 flowchart LR
   P[Portal] -->|portal.submission.created| EB[(Event Bus)]
   T[Cloud IVR] -->|telephony.call.transcribed| EB
