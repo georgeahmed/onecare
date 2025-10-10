@@ -1,12 +1,5 @@
 # ONECARE (Maqbool) — AI‑Powered Clinical Operating System
-**Modern Access Edition (NHS & FHIR‑Native)**  
-**Version 1.2 — Updated 2025**
-
-> [!TIP]
-> This version adds a modern, colorful presentation with themed diagrams, collapsible algorithm blocks, and a quick visual legend.
-> Diagrams follow a consistent palette so it’s easier to scan architecture and flows at a glance.
-
-> This document converts the attached *Maqbool_report* into a software‑ready, algorithmic Markdown specification. It preserves all essential logic and flows while structuring them into explicit initialization, processing, and output stages with concrete data models, event topics, and pseudocode suitable for implementation. It fully embeds all meaningful and important information from the report so this file is self‑contained (safe to remove the original report if needed).
+ 
 
 ---
 
