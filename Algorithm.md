@@ -135,7 +135,7 @@ graph TD
     TR[Triage Service]
     BK[Booking Service]
     PH[Pharmacy Router]
-    CS[Capacity Shaper / Co‑Pilot]
+    CS[Capacity Shaper / Co-Pilot]
     SC[Ambient Scribe]
     ICS[ICS Hub / Broker]
   end
@@ -151,7 +151,7 @@ graph TD
   OBS[Observability/SIEM]
   GP[GP Connect]
   CPCS[CPCS/Pharmacy]
-  OOH[Out‑of‑Hours Provider]
+  OOH[Out-of-Hours Provider]
 
   P -->|portal.submission| O
   T -->|telephony.call.transcribed| O
@@ -179,9 +179,9 @@ Unified Intake → Orchestrate → Triage → Task
 ```mermaid
 sequenceDiagram
   participant Patient
-  participant Portal as Portal/IVR
+  participant Portal as "Portal/IVR"
   participant Orc as Orchestrator
-  participant F as FHIR Store
+  participant F as "FHIR Store"
   participant Tri as Triage
   participant Q as Clinician Queue
   Patient->>Portal: Submit narrative / call intent
@@ -198,7 +198,7 @@ Telephony Parity with Callback Windows
 ```mermaid
 sequenceDiagram
   participant Caller
-  participant IVR as Cloud IVR
+  participant IVR as "Cloud IVR"
   participant ASR
   participant Orc as Orchestrator
   participant Tri
@@ -261,7 +261,7 @@ Sequence (Orchestrate)
 sequenceDiagram
   participant S as Source (Portal/IVR/API)
   participant O as Orchestrator
-  participant F as FHIR Store
+  participant F as "FHIR Store"
   participant E as Event Bus
   S->>O: ingress event (auth, scope)
   O->>O: VerifySignature + ReplayGuard
@@ -483,10 +483,10 @@ FederatedBook(slot, patient, reason):
 Sequence (Booking via GP Connect)
 ```mermaid
 sequenceDiagram
-  participant UI as Portal/Clinician UI
-  participant BK as Booking Service
-  participant GC as GP Connect
-  participant F as FHIR Store
+  participant UI as "Portal/Clinician UI"
+  participant BK as "Booking Service"
+  participant GC as "GP Connect"
+  participant F as "FHIR Store"
   UI->>BK: booking.search(request)
   BK->>GC: SlotSearch(serviceType, window)
   GC-->>BK: Slots
@@ -529,7 +529,7 @@ Flow (Pharmacy First)
 ```mermaid
 flowchart LR
   A[Doc + Patient] --> B{Eligible per rules?}
-  B -- No --> C[Not eligible → GP]
+  B -- No --> C[Not eligible -> GP]
   B -- Yes --> D[Find nearby pharmacies]
   D --> E{Slot available?}
   E -- Yes --> F[Send CPCS referral with slot]
@@ -584,12 +584,12 @@ AccessCoPilot():
 Flow (Capacity Shaping)
 ```mermaid
 flowchart LR
-  T[Telemetry: arrivals, queue, no‑shows, staffing] --> F[Short‑horizon forecast]
+  T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short-horizon forecast]
   F --> N[Need mix]
   T --> S[Supply mix]
   N --> D[Delta (need - supply)]
   S --> D
-  D -->|Significant?| R[Micro‑releases / template rebalance]
+  D -->|Significant?| R[Micro-releases / template rebalance]
   R --> A[Audit micro_release]
 ```
 
@@ -631,7 +631,7 @@ sequenceDiagram
   Scribe->>Scribe: Record encrypted audio
   Scribe->>LLM: Transcript + entities + context
   LLM-->>Scribe: Draft SOAP + draft bundle
-  Scribe-->>Clin: Present draft + low‑confidence spans
+  Scribe-->>Clin: Present draft + low-confidence spans
   Clin-->>Scribe: Approve or edit
   Scribe->>F: Commit bundle (Condition/Observation/MedicationRequest/...)
   Scribe->>F: Store audio as Binary/DocumentReference
@@ -713,10 +713,10 @@ OnAppointmentCancelled(slot):
 Sequence (Cross‑Org Referral)
 ```mermaid
 sequenceDiagram
-  participant Home as Home Practice
-  participant ICS as ICS Hub
-  participant ToOrg as Receiving Org
-  participant F as FHIR Store
+  participant Home as "Home Practice"
+  participant ICS as "ICS Hub"
+  participant ToOrg as "Receiving Org"
+  participant F as "FHIR Store"
   Home->>ICS: CreateCrossOrgReferral(bundle)
   ICS->>ToOrg: SecureShare Bundle (FHIR/MESH/XDS)
   ICS->>F: Mirror Task/ServiceRequest
@@ -907,7 +907,7 @@ flowchart LR
   UI[UI/Client] -->|booking.search.requested| EB
   EB -->|booking.appointment.booked| BK[Booking]
   EB -->|pharmacy.referral.sent| PH[Pharmacy Router]
-  EB -->|copilot.proposal.created| CS[Capacity/Co‑Pilot]
+  EB -->|copilot.proposal.created| CS[Capacity/Co-Pilot]
   CS -->|analytics.kpi.updated| EB
   Any -->|audit.*| EB
   EB --> SIEM[SIEM/Observability]
