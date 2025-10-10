@@ -1,0 +1,115 @@
+core_hours:
+  start: "08:00"
+  end: "18:30"
+enhanced_access_windows:
+  - weekdays_evening
+  - saturday
+red_flag_set:
+  - "chest pain"
+  - "shortness of breath"
+  - "severe bleeding"
+  - "unresponsive"
+  - "suicidal ideation"
+priority_thresholds:
+  stat: 0.9
+  urgent: 0.7
+  soon: 0.4
+  routine: 0.0
+sla_targets:
+  stat_immediate: "PT0M"
+  urgent_first_contact: "PT2H"
+  soon_same_day: "PT12H"
+  routine_initial_response: "P2D"
+hold_back_fraction: 0.10
+fairness_floors:
+  telephone_min_fraction: 0.15
+  interpreter_support: true
+privacy_policy:
+  retention_days: 3650
+  minimize_data: true
+ooh_policy:
+  accept_submissions: true
+  patient_message: >
+    Outside core hours. For urgent medical help, contact NHS 111 (24/7)
+    or call 999 for emergencies. You may submit your issue now and we
+    will review it when we re-open.
+callback_windows_by_priority:
+  stat: "immediate"
+  urgent: "within_2h"
+  soon: "same_day"
+  routine: "within_48h"
+accessibility_and_language:
+  interpreter_languages: ["en", "ur", "pa", "pl", "ar"]
+  offer_bsl: true
+  collect_patient_prefs: ["female_clinician", "wheelchair_access", "language_preference"]
+safety_gate:
+  model_ner: "bioclinicalbert"
+  model_classifier: "medalpaca-sm"
+  multilingual_mode: "native"
+  translate_engine: "none"
+  red_flag_threshold: 0.65
+  emergency_confidence: 0.70
+  acuity_model: "xgboost"
+  acuity_threshold_emergency: 0.75
+  timeout_ms: 800
+  fallback: "rules"
+triage:
+  score_weights:
+    acuity: 1.0
+    risk: 0.5
+    complexity: 0.2
+    time: 0.5
+    capacity: 0.2
+  aging_interval: "PT5M"
+  sim_threshold: 0.8
+  dedup_window: "PT72H"
+provider_assignment:
+  weights:
+    availability: 1.0
+    workload: 1.0
+    continuity: 0.5
+    resolution_rate: 0.2
+    distance: 0.2
+    fairness: 0.5
+telephony:
+  ivr_intent_classifier: "default"
+  max_callback_retries: 3
+  emergency_transfer_enabled: true
+ambient_scribe:
+  enabled: true
+  asr_model: "whisper-large-v3-medical"
+  asr_diarization: true
+  llm_model: "medpalm2"
+  max_summary_tokens: 2048
+  uncertainty_highlight: true
+  require_clinician_approval: true
+  store_audio: "binary"
+  terminology:
+    condition: "SNOMED-CT"
+    medication: "dm+d"
+  timeout_ms: 30000
+  fallback_mode: "transcript"
+security:
+  audit_all_events: true
+  worm_audit_store: true
+  auth_required: true
+  encryption: "TLS1.2+"
+observability:
+  metrics_collection: true
+  slo:
+    triage_p95_ms: 2000
+    scribe_draft_p95_s: 60
+    portal_core_uptime: 0.999
+    audit_coverage: 1.0
+  alerts:
+    triage_latency_breach:
+      threshold_ms: 2000
+      duration: "PT5M"
+    scribe_backlog:
+      threshold_queue_length: 5
+      duration: "PT1M"
+    portal_downtime:
+      threshold_minutes: 5
+    fairness_monitor:
+      telephone_fraction_floor: 0.15
+      check_window: "P1D"
