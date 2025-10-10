@@ -128,7 +128,6 @@ accessibility_and_language:
 
 ### 0.8 High‑Level Architecture
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 graph TD
   subgraph Channels
     P[Web/App Portal]
@@ -176,27 +175,13 @@ graph TD
   SC --> FHIR
   SC --> FEAT
   SC -.-> OBJ
-
-  classDef channel fill:#f1f5f9,stroke:#cbd5e1,color:#0f172a;
-  classDef core fill:#eef2ff,stroke:#c7d2fe,color:#0f172a;
-  classDef data fill:#ecfdf5,stroke:#a7f3d0,color:#0f172a;
-  classDef ext fill:#fffbeb,stroke:#fde68a,color:#0f172a;
-  classDef audit fill:#f8fafc,stroke:#cbd5e1,color:#0f172a;
-
-  class P,T channel;
-  class O,TR,BK,PH,CS,SC,ICS core;
-  class FHIR,OBJ,FEAT,AUD data;
-  class EB,GP,CPCS,OOH ext;
-  class OBS audit;
 ```
 
-Legend: Channels · Core Services · Data · External · Audit
 
 ### 0.9 Core Flows (Sequences)
 
 Unified Intake → Orchestrate → Triage → Task
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Patient
   participant Portal as "Portal/IVR"
@@ -216,7 +201,6 @@ sequenceDiagram
 
 Telephony Parity with Callback Windows
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Caller
   participant IVR as "Cloud IVR"
@@ -284,7 +268,6 @@ Orchestrate(e):
 
 Sequence (Orchestrate)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant S as Source (Portal/IVR/API)
   participant O as Orchestrator
@@ -390,7 +373,6 @@ HandleCall(call):
 
 Sequence (Telephony Parity)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Caller
   participant IVR
@@ -449,7 +431,6 @@ Triage(doc):
 
 Sequence (Triage and Aging)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Tri as Triage Service
   participant FS as Feature Store
@@ -546,7 +527,6 @@ FederatedBook(slot, patient, reason):
 
 Sequence (Booking via GP Connect)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant UI as "Portal/Clinician UI"
   participant BK as "Booking Service"
@@ -597,7 +577,6 @@ PharmacyFirstRoute(doc, patient):
 
 Flow (Pharmacy First)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 flowchart LR
   A[Doc + Patient] --> B{Eligible per rules?}
   B -- No --> C[Not eligible -> GP]
@@ -654,7 +633,6 @@ AccessCoPilot():
 
 Flow (Capacity Shaping)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 flowchart LR
   T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short-horizon forecast]
   F --> N[Need mix]
@@ -694,7 +672,6 @@ AmbientScribe(encounter):
 
 Sequence (Ambient Scribe)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Clin as Clinician
   participant Scribe
@@ -785,7 +762,6 @@ OnAppointmentCancelled(slot):
 
 Sequence (Cross‑Org Referral)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Home as "Home Practice"
   participant ICS as "ICS Hub"
@@ -817,15 +793,7 @@ Notes: Example defaults from the report include URGENT contact within 2 hours an
 - **Hourly dashboards:** practice / PCN / ICS views.  
 - **Monthly Access Assurance Pack:** trends, breaches, mitigations, Co‑Pilot decisions, signatures.  
 
-Visual KPI Snapshot (example)
-```mermaid
-%%{init: {'theme':'neutral'}}%%
-pie title SLA Hit Rate (Example)
-  "STAT" : 5
-  "URGENT" : 25
-  "SOON" : 30
-  "ROUTINE" : 40
-```
+ 
 
 ---
 
@@ -1013,7 +981,6 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 Event Topics Map (illustrative)
 ```mermaid
-%%{init: {'theme':'neutral'}}%%
 flowchart LR
   P[Portal] -->|portal.submission.created| EB[(Event Bus)]
   T[Cloud IVR] -->|telephony.call.transcribed| EB
