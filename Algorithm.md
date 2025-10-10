@@ -67,6 +67,18 @@ ACCESSIBILITY_AND_LANGUAGE = {       # used in search/rank + fairness
   offer_bsl: true,
   collect_patient_prefs: ["female_clinician", "wheelchair_access", "language_preference"]
 }
+SAFETY_GATE = {                      # transformer-based pre-triage safety gate
+  MODEL_NER: "bioclinicalbert",     # bio/clinical BERT variant for NER
+  MODEL_CLASSIFIER: "medalpaca-sm", # emergency classifier model id
+  MULTILINGUAL_MODE: "native",      # native | translate
+  TRANSLATE_ENGINE: "none",         # if MULTILINGUAL_MODE=translate
+  RED_FLAG_THRESHOLD: 0.65,          # entity-based risk threshold
+  EMERGENCY_CONFIDENCE: 0.70,        # classifier confidence for emergency
+  ACUITY_MODEL: "xgboost",          # ensemble model for acuity
+  ACUITY_THRESHOLD_EMERGENCY: 0.75,  # emergency cut-off
+  TIMEOUT_MS: 800,                   # fail-fast budget for gate
+  FALLBACK: "rules"                  # rules | none
+}
 ```
 
 ### 0.5.1 Config (YAML Example)
@@ -184,7 +196,8 @@ sequenceDiagram
   Portal->>Orc: ingress event (+auth, idempotency)
   Orc->>Orc: authZ + consent + normalize + validate
   Orc->>F: Upsert FHIR Bundle (atomic)
-  Orc->>Tri: triage.input event
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri->>Tri: risk/acuity/complexity + score
   Tri->>F: Create Task(for=Patient, owner, priority)
   Tri->>Q: Notify owner/team
@@ -202,7 +215,8 @@ sequenceDiagram
   IVR->>ASR: Audio
   ASR-->>IVR: Transcript
   IVR->>Orc: telephony.call.transcribed
-  Orc->>Tri: triage.input (if not diverted)
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri-->>IVR: Priority (tentative)
   IVR-->>Caller: Offer CALLBACK_WINDOWS_BY_PRIORITY
 ```
@@ -305,7 +319,7 @@ GuardPortal(practice):
 </details>
 **Outputs:** Portal state, incident notices, audit.
 
-### 2.2 Urgent‑Safety Gate (red‑flag diversion)
+### 2.2 Urgent‑Safety Gate (transformer‑based red‑flag diversion)
 **Trigger:** Immediately on submission (web or phone transcript).
 
 <details>
@@ -313,14 +327,37 @@ GuardPortal(practice):
 
 ```pseudocode
 SafeguardGate(doc, patient):
-  snapshot := FetchRecentContext(patient)                     # vitals, conditions, meds
-  ctxdoc   := ComposeContext(doc, snapshot)
+  # 1) Semantic red‑flag detection via transformer NLP (BioBERT/ClinicalBERT or similar; multilingual if needed)
+  nlp_results      := TransformerModel.analyze(doc)                 # structured extraction from text
+  symptom_list     := nlp_results.symptoms                          # e.g., ["chest pain", "dizziness"] with context
+  severity_list    := nlp_results.severity                          # e.g., descriptors, pain scores
+  temporal_list    := nlp_results.temporal                          # e.g., onset/duration
+  context_entities := nlp_results.context_entities                  # e.g., history of diabetes
 
-  rf := RiskNLP(ctxdoc, RED_FLAG_SET)                        # keyword/semantic red flags
-  acuity := AcuityModel(ctxdoc)                               # Emergency/Urgent/Routine
+  high_risk_symptom_flag := false
+  for s in symptom_list:
+    if SymptomLexicon.isRedFlag(s):
+       high_risk_symptom_flag := true
+       break
 
-  if rf.emergency || acuity == EMERGENCY:
-     ShowUrgentAdvice(patient.locale)                         # 999/A&E or 111 per config
+  # Optional redundancy: whole‑text emergency classifier
+  if TransformerModel.classify_emergency(doc) == true:
+     high_risk_symptom_flag := true
+
+  # 2) Patient context integration (demographics + history)
+  age          := patient.age
+  comorbid     := patient.comorbidities
+
+  # 3) Acuity prediction via ensemble ML model (e.g., gradient boosted trees)
+  features := {}
+  features["symptom_embeddings"] := ModelEmbedder.encode(symptom_list, severity_list, temporal_list)
+  features["patient_age"]        := age
+  features["patient_comorbid"]   := PatientVector.encode(comorbid)
+  severity_prediction := AcuityModel.predict(features)              # "Emergency" | "Urgent" | "Routine"
+
+  # 4) Safety gate decision and diversion
+  if high_risk_symptom_flag || severity_prediction == "Emergency":
+     ShowUrgentAdvice(patient.locale)                               # localized 999/A&E or 111 guidance
      CreateSafetyAlert(doc, patient)
      EmitAudit("urgent_diversion", {doc, patient})
      return DIVERTED
@@ -329,6 +366,14 @@ SafeguardGate(doc, patient):
 
 </details>
 **Outputs:** Patient urgent advice, Staff safety alert, audit (diverted) or pass‑through.
+
+#### Model Choices & Performance
+- Backbones: BioBERT/ClinicalBERT/BioClinicalBERT for symptom/entity NER; consider XLM-R/mBERT or translate-then-NER for multilingual input.
+- Emergency classifier: lightweight transformer head or distilled LLM (e.g., MedAlpaca small). Calibrate with Platt/temperature; set `RED_FLAG_THRESHOLD` and `EMERGENCY_CONFIDENCE`.
+- Acuity: gradient-boosted trees (e.g., XGBoost/LightGBM) over encoded symptoms + patient context. Calibrate thresholds for “Emergency”.
+- Latency/throughput: target p50 < 300ms, p95 < 800ms. Use quantization (int8), batch small requests, prefer CPU inference where possible; GPU optional for bursts. Enforce `TIMEOUT_MS` with `FALLBACK="rules"` to maintain safety.
+- Multilingual strategy: prefer native multilingual models when available; if translating, preserve clinical terms and run lexicon checks post-translation.
+- Monitoring: log anonymized confidence + decisions, track false negatives, drift, and per-language performance; periodic offline evaluation and re-tuning.
 
 ### 2.3 Telephony Parity (cloud IVR → same digital flow)
 **Input:** Inbound call.  
@@ -374,7 +419,8 @@ sequenceDiagram
   IVR->>ASR: Audio stream
   ASR-->>IVR: Transcript
   IVR->>Orc: telephony.call.transcribed
-  Orc->>Tri: triage.input (SAFE)
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri-->>IVR: Priority suggestion
   IVR-->>Caller: Offer callback window from config
 ```
@@ -389,29 +435,33 @@ sequenceDiagram
 
 ```pseudocode
 Triage(doc):
-  intent    := IntentClassifier(doc.text)
-  riskFlags := RiskNLP(doc.text)                              # secondary check
-  acuity    := AcuityModel(doc + patient features)
-  complexity:= ComplexityModel(doc, patient)
+  # Preliminary analysis of patient request
+  intent          := IntentClassifier(doc.text)
+  entities        := ClinicalNER(doc.text)                       # extract key symptoms/conditions for context (NER)
+  riskFlags       := RiskClassifier(entities, doc.text)          # identify high-risk terms (e.g., red-flag symptoms)
+  acuityScore     := AcuityModel(doc, doc.patient)               # ML-predicted acuity
+  complexityScore := ComplexityModel(doc.patient)                # estimate complexity (e.g., multimorbidity)
 
-  neededSkills := SkillExtractor(doc)
-  capacity     := QueryRotaAndSchedules(neededSkills)
+  # Required skills and provider availability
+  requiredSkills := SkillExtractor(intent, entities)             # infer needed clinician skills/role
+  availableTeam  := QueryRotaAndSchedules(requiredSkills)       # on-duty providers with matching skills & capacity
 
-  # Composite priority score
-  wf := riskFlags.weight
-  td := TimeDecay( now() - doc.created_at )                   # 0 at creation
-  cm := CapacityMismatch(neededSkills, capacity)
-  score := W1*acuity + W2*wf + W3*td + W4*complexity - W5*cm
+  # Composite priority scoring (higher = more urgent)
+  riskWeight  := riskFlags.weight
+  timeFactor  := TimeDecay(now() - doc.created_at)               # increase score over time (SLA aging)
+  capacityGap := CapacityGap(requiredSkills, availableTeam)      # demand-supply gap for skill
+  score       := w1*acuityScore + w2*riskWeight + w3*complexityScore + w4*timeFactor - w5*capacityGap
 
-  if IsLifeThreatening(riskFlags, acuity):
+  if IsLifeThreatening(riskFlags, acuityScore):
      CreateSafetyAlert(doc.patient)
      EmitAudit("life_threat_override", doc)
      priorityLabel := "stat"
   else:
-     priorityLabel := MapPriority(score, PRIORITY_THRESHOLDS) # stat/urgent/soon/routine
+     priorityLabel := MapPriority(score, PRIORITY_THRESHOLDS)   # STAT / URGENT / SOON / ROUTINE
 
-  owner := AssignBestOwner(neededSkills, capacity, doc.patient)
-  task  := CreateFHIRTask(doc, owner, priorityLabel)          # status=requested, input refs, for=Patient
+  # Assign to best-suited clinician (skill match, continuity, workload balance)
+  owner := SelectBestProvider(availableTeam, doc.patient, requiredSkills, priorityLabel)
+  task  := CreateFHIRTask(doc, owner, priorityLabel)            # FHIR Task for patient, with assignee and priority
   Persist(task)
   NotifyOwnerQueue(owner, task)
   return task
@@ -427,7 +477,7 @@ sequenceDiagram
   participant FS as Feature Store
   participant F as FHIR Store
   Tri->>FS: Fetch features (patient/context)
-  Tri->>Tri: Intent + RiskNLP + Acuity + Complexity
+  Tri->>Tri: Intent + ClinicalNER + RiskClassifier + Acuity + Complexity
   Tri->>F: Create Task(for, owner, priority)
   loop Every 5 minutes
     Tri->>F: Recompute score by age
@@ -817,7 +867,7 @@ CheckConsent(patient, purpose, resources):
 Break‑glass grants emergency access w/ reason, heavy audit, post‑hoc review.
 
 ### 11.3 Clinical Safety Gates
-- **Red‑Flag diversion** (pre‑triage).  
+- **Transformer‑based red‑flag diversion** (pre‑triage via SafeguardGate: NER + emergency classifier + ensemble acuity).  
 - **Human confirmation** of AI outputs (triage assignments, patient advice, scribe).  
 - **Communication guardrails** (plain language, safety‑netting).  
 - Safety case & hazard log (DCB0129/0160).
@@ -905,10 +955,10 @@ ModelLifecycle(model):
 <summary>View Priority Mapping</summary>
 
 ```pseudocode
-MapPriority(score):
-  if score >= S_STAT:   return "stat"
-  if score >= S_URGENT: return "urgent"
-  if score >= S_SOON:   return "soon"
+MapPriority(score, thresholds):
+  if score >= thresholds.stat:   return "stat"
+  if score >= thresholds.urgent: return "urgent"
+  if score >= thresholds.soon:   return "soon"
   return "routine"
 ```
 
@@ -925,13 +975,15 @@ MapPriority(score):
 <summary>View Continuity & Fairness Assignment</summary>
 
 ```pseudocode
-AssignBestOwner(neededSkills, capacity, patient):
-  candidates := FilterBySkills(capacity, neededSkills)
+SelectBestProvider(availableTeam, patient, requiredSkills, priorityLabel):
+  candidates := FilterBySkills(availableTeam, requiredSkills)
   best := argmax_c in candidates of (
-    α*Availability(c) + β*ResolutionRate(c, issueType)
-  + γ*Continuity(patient, c)
-  - δ*Distance(patient, c.site) 
-  + ζ*FairnessBoost(patient.needs, c.capabilities)
+    α*Availability(c)                    # current capacity / queue
+  - β*Workload(c)                        # workload balance
+  + γ*Continuity(patient, c)             # preferred/seen-before GP weighting
+  + δ*ResolutionRate(c, requiredSkills)  # historical effectiveness for similar cases
+  - ε*Distance(patient, c.site)          # if site matters
+  + ζ*FairnessBoost(patient.needs, c.capabilities, priorityLabel)
   )
   return best
 ```
@@ -957,7 +1009,7 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 ## Appendix D — Configuration Summary
 - **Hours & windows:** `CORE_HOURS_*`, `ENHANCED_ACCESS_WINDOWS`  
-- **Safety:** `RED_FLAG_SET`, `PRIORITY_THRESHOLDS`, `SLA_TARGETS`  
+- **Safety:** `RED_FLAG_SET`, `PRIORITY_THRESHOLDS`, `SLA_TARGETS`, `SAFETY_GATE.*`  
 - **Capacity:** `HOLD_BACK_FRACTION`  
 - **Equity:** `FAIRNESS_FLOORS`  
 - **Privacy & retention:** `PRIVACY_POLICY`
