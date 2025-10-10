@@ -128,15 +128,7 @@ accessibility_and_language:
 
 ### 0.8 High‑Level Architecture
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {
-  'primaryColor': '#0ea5e9',
-  'secondaryColor': '#6366f1',
-  'tertiaryColor': '#10b981',
-  'primaryTextColor': '#0f172a',
-  'lineColor': '#64748b',
-  'fontFamily': 'Inter, ui-sans-serif, system-ui',
-  'fontSize': '16px'
-}}}%%
+%%{init: {'theme':'neutral'}}%%
 graph TD
   subgraph Channels
     P[Web/App Portal]
@@ -185,11 +177,11 @@ graph TD
   SC --> FEAT
   SC -.-> OBJ
 
-  classDef channel fill:#0ea5e9,stroke:#0369a1,color:#ffffff;
-  classDef core fill:#6366f1,stroke:#3730a3,color:#ffffff;
-  classDef data fill:#10b981,stroke:#065f46,color:#ffffff;
-  classDef ext fill:#f59e0b,stroke:#b45309,color:#0f172a;
-  classDef audit fill:#334155,stroke:#1f2937,color:#ffffff;
+  classDef channel fill:#f1f5f9,stroke:#cbd5e1,color:#0f172a;
+  classDef core fill:#eef2ff,stroke:#c7d2fe,color:#0f172a;
+  classDef data fill:#ecfdf5,stroke:#a7f3d0,color:#0f172a;
+  classDef ext fill:#fffbeb,stroke:#fde68a,color:#0f172a;
+  classDef audit fill:#f8fafc,stroke:#cbd5e1,color:#0f172a;
 
   class P,T channel;
   class O,TR,BK,PH,CS,SC,ICS core;
@@ -198,15 +190,13 @@ graph TD
   class OBS audit;
 ```
 
-Visual Legend: 🟦 Channels · 🟪 Core Services · 🟩 Data · 🟧 External · ⬛ Audit
+Legend: Channels · Core Services · Data · External · Audit
 
 ### 0.9 Core Flows (Sequences)
 
 Unified Intake → Orchestrate → Triage → Task
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {
-  'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'
-}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Patient
   participant Portal as "Portal/IVR"
@@ -226,9 +216,7 @@ sequenceDiagram
 
 Telephony Parity with Callback Windows
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {
-  'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'
-}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Caller
   participant IVR as "Cloud IVR"
@@ -296,7 +284,7 @@ Orchestrate(e):
 
 Sequence (Orchestrate)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant S as Source (Portal/IVR/API)
   participant O as Orchestrator
@@ -402,7 +390,7 @@ HandleCall(call):
 
 Sequence (Telephony Parity)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Caller
   participant IVR
@@ -461,7 +449,7 @@ Triage(doc):
 
 Sequence (Triage and Aging)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Tri as Triage Service
   participant FS as Feature Store
@@ -558,7 +546,7 @@ FederatedBook(slot, patient, reason):
 
 Sequence (Booking via GP Connect)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant UI as "Portal/Clinician UI"
   participant BK as "Booking Service"
@@ -609,7 +597,7 @@ PharmacyFirstRoute(doc, patient):
 
 Flow (Pharmacy First)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 flowchart LR
   A[Doc + Patient] --> B{Eligible per rules?}
   B -- No --> C[Not eligible -> GP]
@@ -666,7 +654,7 @@ AccessCoPilot():
 
 Flow (Capacity Shaping)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 flowchart LR
   T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short-horizon forecast]
   F --> N[Need mix]
@@ -706,7 +694,7 @@ AmbientScribe(encounter):
 
 Sequence (Ambient Scribe)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Clin as Clinician
   participant Scribe
@@ -797,7 +785,7 @@ OnAppointmentCancelled(slot):
 
 Sequence (Cross‑Org Referral)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 sequenceDiagram
   participant Home as "Home Practice"
   participant ICS as "ICS Hub"
@@ -831,7 +819,7 @@ Notes: Example defaults from the report include URGENT contact within 2 hours an
 
 Visual KPI Snapshot (example)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'pie1':'#0ea5e9','pie2':'#10b981','pie3':'#f59e0b','pie4':'#6366f1'}}}%%
+%%{init: {'theme':'neutral'}}%%
 pie title SLA Hit Rate (Example)
   "STAT" : 5
   "URGENT" : 25
@@ -1025,7 +1013,7 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 Event Topics Map (illustrative)
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor': '#0ea5e9','secondaryColor': '#6366f1','tertiaryColor': '#10b981','primaryTextColor': '#0f172a','lineColor': '#64748b','fontFamily': 'Inter, ui-sans-serif, system-ui'}}}%%
+%%{init: {'theme':'neutral'}}%%
 flowchart LR
   P[Portal] -->|portal.submission.created| EB[(Event Bus)]
   T[Cloud IVR] -->|telephony.call.transcribed| EB
