@@ -1,5 +1,4 @@
 # ONECARE (Maqbool) — AI‑Powered Clinical Operating System
- 
 
 ---
 
