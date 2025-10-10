@@ -578,14 +578,14 @@ PharmacyFirstRoute(doc, patient):
 Flow (Pharmacy First)
 ```mermaid
 flowchart LR
-  A[Doc + Patient] --> B{Eligible per rules?}
-  B -- No --> C[Not eligible -> GP]
+  A[Doc and Patient] --> B{Eligible per rules?}
+  B -- No --> C[Not eligible to GP]
   B -- Yes --> D[Find nearby pharmacies]
   D --> E{Slot available?}
   E -- Yes --> F[Send CPCS referral with slot]
-  E -- No  --> G{Slotless referral allowed?}
-  G -- Yes --> H[Send CPCS referral (slotless)]
-  G -- No  --> I[Return NO_PHARMACY_SLOTS]
+  E -- No --> G{Slotless referral allowed?}
+  G -- Yes --> H[Send CPCS referral - slotless]
+  G -- No --> I[Return NO_PHARMACY_SLOTS]
 ```
 ### 5.2 Outcome Write‑back
 - Listen for pharmacy outcome → ingest as `Observation` / `Condition` / `MedicationRequest` + update/close original `Task`.  
