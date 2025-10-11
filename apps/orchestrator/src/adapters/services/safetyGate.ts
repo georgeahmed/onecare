@@ -2,6 +2,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import { PortalSubmission, SafetyDecision } from '@onecare/events';
 import { logger } from '@onecare/observability';
+import { context, trace } from '@opentelemetry/api';
 
 function isIpV4Private(ip: string): boolean {
   const m = ip.split('.').map((s) => Number(s));
@@ -31,7 +32,12 @@ function enforceAllowlist(url: URL) {
   if (allow.length > 0 && !allow.includes(hostname)) throw new Error('blocked_not_allowlisted');
 }
 
-function postJson<T>(urlStr: string, body: unknown, headers?: Record<string, string>): Promise<T> {
+function postJson<T>(
+  urlStr: string,
+  body: unknown,
+  headers?: Record<string, string>,
+  signal?: AbortSignal
+): Promise<T> {
   return new Promise((resolve, reject) => {
     try {
       const url = new URL(urlStr);
@@ -63,6 +69,17 @@ function postJson<T>(urlStr: string, body: unknown, headers?: Record<string, str
           }
         });
       });
+      if (signal) {
+        const abort = () => {
+          req.destroy(new Error('aborted'));
+        };
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+        signal.addEventListener('abort', abort, { once: true });
+        req.on('close', () => signal.removeEventListener('abort', abort));
+      }
       req.on('error', reject);
       req.write(payload);
       req.end();
@@ -75,8 +92,9 @@ function postJson<T>(urlStr: string, body: unknown, headers?: Record<string, str
 export async function analyzePortalSubmission(
   submission: PortalSubmission,
   endpoint = process.env.PY_SAFETY_GATE_URL || 'http://localhost:8081',
-  correlationId?: string
+  options?: { correlationId?: string; signal?: AbortSignal }
 ): Promise<SafetyDecision> {
+  const correlationId = options?.correlationId;
   const url = `${endpoint.replace(/\/$/, '')}/analyze`;
   // SSRF allowlist/guards
   try {
@@ -88,10 +106,23 @@ export async function analyzePortalSubmission(
   // Propagate correlationId outbound if provided
   const headers: Record<string, string> = {};
   if (correlationId) headers['x-correlation-id'] = correlationId;
+  const traceParent = currentTraceParent();
+  if (traceParent) headers['traceparent'] = traceParent;
   try {
-    return await postJson<SafetyDecision>(url, submission, headers);
+    return await postJson<SafetyDecision>(url, submission, headers, options?.signal);
   } catch (err) {
     logger.warn('safety gate call failed', { err: (err as Error)?.message, correlationId });
     throw err;
   }
+}
+
+function currentTraceParent(): string | undefined {
+  const span = trace.getSpan(context.active());
+  if (!span) return undefined;
+  const spanContext = span.spanContext();
+  if (!spanContext || !spanContext.traceId || !spanContext.spanId) return undefined;
+  const traceId = spanContext.traceId;
+  const spanId = spanContext.spanId;
+  const flags = spanContext.traceFlags?.toString(16).padStart(2, '0') ?? '01';
+  return `00-${traceId}-${spanId}-${flags}`;
 }

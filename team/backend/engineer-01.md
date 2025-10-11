@@ -32,7 +32,7 @@ Contracts & Validation
 - Release: docs/RELEASE_READINESS.md
 
 Status: in-progress
-Progress: 21%
+Progress: 24%
 
 Dependencies
 - integrations/engineer-01 (FHIR repo, Object Store, Consent)
@@ -65,7 +65,7 @@ Tasks
 - [ ] BE-01.7b — HTTP edge schema validation
 - [ ] BE-01.7c — Profile validation hook + error mapping
 - [ ] BE-01.7d — Wire upsert + audit + unit tests
-- [ ] BE-01.8a — callWithGuard (timeout/retry/backoff)
+- [x] BE-01.8a — callWithGuard (timeout/retry/backoff)
 - [ ] BE-01.8b — Circuit breaker (half-open) semantics
 - [ ] BE-01.8c — Correlation propagation + metrics/OTel
 - [ ] BE-01.8d — Safety fallback ('rules') + budgets

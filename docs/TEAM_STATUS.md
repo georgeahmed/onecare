@@ -2,7 +2,7 @@ TEAM STATUS
 
 | Engineer | Status | Progress | Done/Total | Bugs | Deps |
 |---|---|---|---:|---:|---:|
-| team/backend/engineer-01.md | in-progress | 21% | 7/34 | 0 | 4 |
+| team/backend/engineer-01.md | in-progress | 24% | 8/34 | 0 | 4 |
 | team/backend/engineer-02.md | in-progress | 17% | 4/23 | 0 | 3 |
 | team/backend/engineer-03.md | planned | 0% | 0/21 | 0 | 4 |
 | team/backend/engineer-04.md | planned | 0% | 0/14 | 0 | 3 |

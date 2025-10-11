@@ -1,13 +1,15 @@
-// Lightweight guardrail wrapper with timeout, retries (exp backoff + jitter), and a simple CB.
+import { logger } from '@onecare/observability';
 
 export interface GuardOptions {
   timeoutMs?: number;
-  maxRetries?: number; // number of retries after the first attempt
-  baseDelayMs?: number; // base delay for exponential backoff
-  cbFailureThreshold?: number; // consecutive failures before open
-  cbCooldownMs?: number; // time to half-open
-  now?: () => number; // injectable time for tests
-  sleep?: (ms: number) => Promise<void>; // injectable sleep for tests
+  maxRetries?: number;
+  baseDelayMs?: number;
+  cbFailureThreshold?: number;
+  cbCooldownMs?: number;
+  correlationId?: string;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 }
 
 type CBState = 'closed' | 'open' | 'half-open';
@@ -21,16 +23,24 @@ interface CircuitBreaker {
 const breakers = new Map<string, CircuitBreaker>();
 
 function getBreaker(name: string): CircuitBreaker {
-  let b = breakers.get(name);
-  if (!b) {
-    b = { state: 'closed', failures: 0, openedAt: 0 };
-    breakers.set(name, b);
+  let breaker = breakers.get(name);
+  if (!breaker) {
+    breaker = { state: 'closed', failures: 0, openedAt: 0 };
+    breakers.set(name, breaker);
   }
-  return b;
+  return breaker;
 }
 
-function jitter(base: number): number {
-  return Math.floor(Math.random() * base);
+function jitter(base: number, random: () => number): number {
+  return Math.floor(random() * base);
+}
+
+function log(event: string, name: string, correlationId: string | undefined, extra?: Record<string, unknown>) {
+  logger.info(event, {
+    name,
+    ...(correlationId ? { correlationId } : {}),
+    ...(extra ?? {}),
+  });
 }
 
 export async function callWithGuard<T>(
@@ -44,57 +54,81 @@ export async function callWithGuard<T>(
     baseDelayMs = 100,
     cbFailureThreshold = 5,
     cbCooldownMs = 15000,
+    correlationId,
     now = () => Date.now(),
-    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    random = Math.random,
   } = opts;
 
-  const b = getBreaker(name);
-  const tnow = now();
-  if (b.state === 'open') {
-    if (tnow - b.openedAt >= cbCooldownMs) {
-      b.state = 'half-open';
+  const breaker = getBreaker(name);
+  const startedAt = now();
+
+  if (breaker.state === 'open') {
+    if (startedAt - breaker.openedAt >= cbCooldownMs) {
+      breaker.state = 'half-open';
+      log('cb.half_open', name, correlationId);
     } else {
-      throw Object.assign(new Error('circuit_open'), { code: 'circuit_open' });
+      log('cb.reject', name, correlationId, { since: startedAt - breaker.openedAt });
+      const err = Object.assign(new Error('circuit_open'), { code: 'circuit_open' });
+      throw err;
     }
   }
 
   let attempt = 0;
-  // attempt loop: initial + retries
+  const maxAttempts = maxRetries + 1;
+
   for (;;) {
-    attempt++;
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
+    attempt += 1;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const attemptStart = now();
     try {
-      const result = await fn(ac.signal);
-      clearTimeout(t);
-      // success → reset breaker
-      b.failures = 0;
-      b.state = 'closed';
+      const span = fn(controller.signal);
+      const result = await span;
+      clearTimeout(timer);
+      if (breaker.state !== 'closed') {
+        log('cb.closed', name, correlationId);
+      }
+      breaker.state = 'closed';
+      breaker.failures = 0;
       return result;
-    } catch (err: any) {
-      clearTimeout(t);
-      const isTimeout = ac.signal.aborted;
-      // classify retryable
-      const retryable = isTimeout || isRetryable(err);
-      if (retryable && attempt <= maxRetries + 1) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1) + jitter(baseDelayMs);
-        await sleep(delay);
-        continue; // next attempt
+    } catch (error) {
+      clearTimeout(timer);
+      const elapsed = now() - attemptStart;
+      const retryable = controller.signal.aborted || isRetryable(error);
+
+      if (controller.signal.aborted) {
+        log('call.timeout', name, correlationId, { attempt, elapsed });
       }
 
-      // update breaker on failure
-      b.failures += 1;
-      if (b.failures >= cbFailureThreshold) {
-        b.state = 'open';
-        b.openedAt = now();
+      if (retryable && attempt < maxAttempts) {
+        const backoff = baseDelayMs * Math.pow(2, attempt - 1) + jitter(baseDelayMs, random);
+        log('call.retry', name, correlationId, { attempt, backoff, reason: classifyErrorCode(error) });
+        await sleep(backoff);
+        continue;
       }
-      throw err;
+
+      breaker.failures += 1;
+      if (breaker.failures >= cbFailureThreshold) {
+        breaker.state = 'open';
+        breaker.openedAt = now();
+        log('cb.open', name, correlationId, { failures: breaker.failures });
+      }
+
+      throw error;
     }
   }
 }
 
-function isRetryable(err: any): boolean {
-  const code = String(err?.code || err?.name || '').toLowerCase();
+function classifyErrorCode(err: unknown): string | undefined {
+  if (!err) return undefined;
+  const code = (err as { code?: string; name?: string }).code ?? (err as { name?: string }).name;
+  return code ? String(code).toLowerCase() : undefined;
+}
+
+function isRetryable(err: unknown): boolean {
+  const code = classifyErrorCode(err);
+  if (!code) return false;
   return (
     code.includes('timeout') ||
     code.includes('econnreset') ||
@@ -104,3 +138,6 @@ function isRetryable(err: any): boolean {
   );
 }
 
+export function resetGuardBreakers(): void {
+  breakers.clear();
+}

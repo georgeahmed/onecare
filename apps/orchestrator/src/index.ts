@@ -1,7 +1,7 @@
 import * as http from 'http';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
-import { callWithGuard, CircuitBreaker } from './adapters/common/guardrails';
+import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
@@ -49,7 +49,6 @@ void initTracing('orchestrator').catch((err: unknown) => {
 
 let bus: MessageBus = getBus();
 markNatsBusConnected(bus, !wantsNats);
-const safetyBreaker = new CircuitBreaker('safety_gate');
 let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
 let natsConn: NatsConnection | null = null;
@@ -404,6 +403,12 @@ function recordIdempotencyTtl(ttlSeconds: number, correlationId: string | undefi
   });
 }
 
+function classifyErrorCode(err: unknown): string | undefined {
+  if (!err) return undefined;
+  const code = (err as { code?: string; name?: string }).code ?? (err as { name?: string }).name;
+  return code ? String(code).toLowerCase() : undefined;
+}
+
 const server = http.createServer((req, res) => {
   if (!req.url) {
     res.statusCode = 400;
@@ -533,12 +538,32 @@ const server = http.createServer((req, res) => {
       recordIdempotencyTtl(idempotencyTtlSeconds, corr);
       logger.info('idempotency.reserved', { key: idemKey, correlationId: corr, ttlSeconds: idempotencyTtlSeconds });
 
-      const decision = await callWithGuard(
-        'safety_gate',
-        () => analyzePortalSubmission(submission, undefined, corr),
-        { timeoutMs: safetyGateTimeoutMs, maxRetries: 1, baseDelayMs: 10 },
-        safetyBreaker
-      );
+      let decision: Awaited<ReturnType<typeof analyzePortalSubmission>>;
+      try {
+        decision = await callWithGuard(
+          'safety_gate',
+          (signal) =>
+            analyzePortalSubmission(submission, undefined, {
+              correlationId: corr,
+              signal,
+            }),
+          {
+            timeoutMs: safetyGateTimeoutMs,
+            maxRetries: 1,
+            baseDelayMs: 10,
+            correlationId: corr,
+          }
+        );
+      } catch (err) {
+        const code = classifyErrorCode(err);
+        if (code === 'circuit_open' && safetyGateFallbackMode === 'rules') {
+          logger.warn('safety.fallback.rules', { correlationId: corr });
+          recordAudit('orchestrator.safety.fallback', corr, { mode: 'rules' });
+          decision = { outcome: 'SAFE_TO_CONTINUE', reason: 'FALLBACK_RULES' };
+        } else {
+          throw err;
+        }
+      }
 
       if (decision.outcome === 'SAFE_TO_CONTINUE') {
         const bundle = normalizeToFhir(submission);
