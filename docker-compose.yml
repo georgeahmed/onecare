@@ -2,6 +2,7 @@ version: '3.9'
 services:
   nats:
     image: nats:2.10-alpine
+    restart: unless-stopped
     command:
       [
         "-js",
@@ -22,6 +23,18 @@ services:
       - "8222:8222"
     volumes:
       - nats-data:/data/jetstream
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8222/healthz || exit 1"]
       interval: 5s
@@ -31,6 +44,7 @@ services:
     build:
       context: .
       dockerfile: apps/orchestrator/Dockerfile
+    restart: unless-stopped
     environment:
       - PORT=3001
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
@@ -43,6 +57,14 @@ services:
       - NATS_MAX_RECONNECT_ATTEMPTS=10
     ports:
       - "3001:3001"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 384M
     depends_on:
       safety-gate:
         condition: service_started
@@ -55,15 +77,33 @@ services:
     build:
       context: services-py
       dockerfile: safety_gate_service/Dockerfile
+    restart: unless-stopped
     ports:
       - "8081:8081"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   scribe:
     build:
       context: services-py
       dockerfile: scribe_service/Dockerfile
+    restart: unless-stopped
     ports:
       - "8082:8082"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
 volumes:
   nats-data:

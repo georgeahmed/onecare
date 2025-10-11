@@ -86,6 +86,10 @@ Run with Docker Compose
 - Start: docker-compose up --build
 - Stop: docker-compose down -v
 - Services: orchestrator waits for NATS to become healthy; readiness at /ready only turns green after the bus connects
+- Resource guardrails: compose applies `restart: unless-stopped` and limits containers to ~0.5–0.75 CPU / 512–768 MiB RAM (see `docker-compose.yml`). Use `docker compose --compatibility up` if your CLI ignores `deploy.resources`.
+- NATS ulimits: `nofile` raised to 65536 to avoid JetStream issues under fan-out load.
+- Adjust resources by editing `deploy.resources` (for CPU/memory) or overriding via `docker compose run -e`. Keep orchestrator ≥0.5 CPU/512 MiB when running tests.
+- Verify limits during load by running `docker stats` and confirming containers stay within their budgets (look for throttling in the `CPUPerc` column).
 
 Exposed ports
 - Orchestrator: localhost:3001
