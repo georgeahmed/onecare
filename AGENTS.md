@@ -60,6 +60,7 @@ Security & Privacy Checklist
 - Timeouts on all outbound calls; retries are bounded with backoff; idempotency keys on ingress.
 - Validate and sanitize all inputs, including filenames/URLs.
 - Respect retention and minimization policies in `config/`.
+- Apply the subject/action scopes in `docs/SECURITY_AUTHZ.md`; capture consent + audit evidence as defined.
 
 Data Handling & FHIR Guidance
 - Never publish PHI-rich resources on the broker; share IDs/refs, not full `Patient` resources.
