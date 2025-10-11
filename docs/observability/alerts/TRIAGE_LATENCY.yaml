@@ -1,0 +1,59 @@
+# Template: Triage latency SLO burn alerts
+# Purpose: Detect when the triage (safety gate) 95th percentile latency exceeds the agreed SLO target.
+# Replace the {{ ... }} placeholders with concrete values for your environment before applying.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{RULE_NAME}}
+  labels:
+    team: "{{TEAM_LABEL}}"
+    service: "{{SERVICE_LABEL}}"
+    env: "{{ENVIRONMENT_LABEL}}"
+spec:
+  groups:
+    - name: triage-latency.slo
+      rules:
+        - alert: TriageLatencySLOWarning
+          expr: |
+            histogram_quantile(
+              {{SLO_QUANTILE}},
+              sum(
+                rate({{LATENCY_HISTOGRAM_METRIC}}{service="{{SERVICE_LABEL}}", route="{{ROUTE_LABEL}}"}[{{WARNING_WINDOW}}])
+              ) by (le)
+            ) > {{WARNING_THRESHOLD_MS}}
+          for: {{WARNING_FOR}}
+          labels:
+            severity: "{{WARNING_SEVERITY}}"
+            slo: "triage-latency"
+            env: "{{ENVIRONMENT_LABEL}}"
+            team: "{{TEAM_LABEL}}"
+          annotations:
+            summary: "Triage latency {{SLO_QUANTILE}} quantile exceeded {{WARNING_THRESHOLD_MS}} ms"
+            description: |-
+              The {{SLO_QUANTILE}} quantile of triage latency ({{ROUTE_LABEL}}) rose above {{WARNING_THRESHOLD_MS}} ms
+              over {{WARNING_WINDOW}}. Review recent deploys, dependency latency, and queue depth before the SLO burns.
+            runbook: "{{RUNBOOK_URL}}"
+            dashboard: "{{DASHBOARD_URL}}"
+            sloTarget: "{{SLO_TARGET_MS}}"
+        - alert: TriageLatencySLOCritical
+          expr: |
+            histogram_quantile(
+              {{SLO_QUANTILE}},
+              sum(
+                rate({{LATENCY_HISTOGRAM_METRIC}}{service="{{SERVICE_LABEL}}", route="{{ROUTE_LABEL}}"}[{{CRITICAL_WINDOW}}])
+              ) by (le)
+            ) > {{CRITICAL_THRESHOLD_MS}}
+          for: {{CRITICAL_FOR}}
+          labels:
+            severity: "{{CRITICAL_SEVERITY}}"
+            slo: "triage-latency"
+            env: "{{ENVIRONMENT_LABEL}}"
+            team: "{{TEAM_LABEL}}"
+          annotations:
+            summary: "Triage latency {{SLO_QUANTILE}} quantile sustained above {{CRITICAL_THRESHOLD_MS}} ms"
+            description: |-
+              The {{SLO_QUANTILE}} quantile of triage latency has breached {{CRITICAL_THRESHOLD_MS}} ms for {{CRITICAL_WINDOW}}.
+              Error budget burn is likely; activate mitigation (e.g., feature freeze, dependency failovers) per runbook.
+            runbook: "{{RUNBOOK_URL}}"
+            dashboard: "{{DASHBOARD_URL}}"
+            sloTarget: "{{SLO_TARGET_MS}}"

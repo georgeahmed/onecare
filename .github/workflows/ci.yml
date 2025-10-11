@@ -55,6 +55,8 @@ jobs:
         run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/data-engineering
       - name: Platform checklist check (qa-automation)
         run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/qa-automation
+      - name: SLO guard
+        run: bash scripts/ci/slo_guard.sh || echo "::warning title=SLO guard::SLO documentation check failed"
 
   docker-images:
     name: Build & Publish Docker Images
