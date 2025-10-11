@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from common.contracts.models import ScribeAudio
+from common.otel import instrument_fastapi
 
 app = FastAPI(title="Scribe Service", version="0.1.0")
+instrument_fastapi(app)
 app.state.model_ready = True
 
 

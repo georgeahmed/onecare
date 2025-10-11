@@ -23,7 +23,7 @@ TEAM STATUS
 | team/ml/engineer-02.md | planned | 0% | 0/6 | 0 | 3 |
 | team/ml/engineer-03.md | planned | 0% | 0/6 | 0 | 2 |
 | team/ml/engineer-04.md | planned | 0% | 0/6 | 0 | 3 |
-| team/mlops/engineer-01.md | in-progress | 29% | 2/7 | 0 | 2 |
+| team/mlops/engineer-01.md | in-progress | 43% | 3/7 | 0 | 2 |
 | team/mlops/engineer-02.md | planned | 0% | 0/6 | 0 | 2 |
 | team/qa-automation/engineer-01.md | in-progress | 33% | 2/6 | 0 | 3 |
 | team/qa-automation/engineer-02.md | planned | 0% | 0/7 | 0 | 2 |

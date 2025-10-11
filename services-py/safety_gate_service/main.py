@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from common.contracts.models import PortalSubmission, SafetyDecision
+from common.otel import instrument_fastapi
 
 app = FastAPI(title="Safety Gate Service", version="0.1.0")
+instrument_fastapi(app)
 app.state.model_ready = True
 
 
