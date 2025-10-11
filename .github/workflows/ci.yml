@@ -137,6 +137,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build scribe image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services-py/scribe_service/Dockerfile
+          platforms: linux/amd64
+          push: ${{ steps.push.outputs.enabled == 'true' }}
+          tags: ${{ steps.tags.outputs.scribe }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   security-scans:
     name: Security Scans
     needs: build-and-test
@@ -161,14 +172,3 @@ jobs:
         with:
           args: detect --source . --redact
         continue-on-error: true
-
-      - name: Build scribe image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: services-py/scribe_service/Dockerfile
-          platforms: linux/amd64
-          push: ${{ steps.push.outputs.enabled == 'true' }}
-          tags: ${{ steps.tags.outputs.scribe }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

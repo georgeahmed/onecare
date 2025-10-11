@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { context, diag, DiagConsoleLogger, DiagLogLevel, trace, type Span, type SpanOptions } from '@opentelemetry/api';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { Resource } from '@opentelemetry/resources';
+import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 
 type CorrelationContext = { correlationId?: string };
@@ -50,27 +50,28 @@ export function initTracing(serviceName: string): Promise<void> {
     return sdkInitPromise;
   }
 
-  ensureDiagLogger();
+  sdkInitPromise = Promise.resolve().then(() => {
+    ensureDiagLogger();
 
-  const resource = new Resource({
-    [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
-    [SemanticResourceAttributes.SERVICE_NAMESPACE]: process.env.OTEL_SERVICE_NAMESPACE ?? 'onecare',
-    [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: process.env.NODE_ENV ?? 'development',
-    [SemanticResourceAttributes.SERVICE_INSTANCE_ID]: process.env.HOSTNAME ?? randomUUID(),
-  });
+    const baseResource = defaultResource();
+    const serviceResource = resourceFromAttributes({
+      [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
+      [SemanticResourceAttributes.SERVICE_NAMESPACE]: process.env.OTEL_SERVICE_NAMESPACE ?? 'onecare',
+      [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: process.env.NODE_ENV ?? 'development',
+      [SemanticResourceAttributes.SERVICE_INSTANCE_ID]: process.env.HOSTNAME ?? randomUUID(),
+    });
+    const resource = baseResource.merge(serviceResource);
 
-  const traceExporter = new OTLPTraceExporter();
-  sdkInstance = new NodeSDK({ resource, traceExporter });
-
-  sdkInitPromise = sdkInstance
-    .start()
-    .then(() => {
+    try {
+      const traceExporter = new OTLPTraceExporter();
+      sdkInstance = new NodeSDK({ resource, traceExporter });
+      sdkInstance.start();
       diag.info(`OpenTelemetry tracing initialized for ${serviceName}`);
-    })
-    .catch((err: unknown) => {
+    } catch (err) {
       tracingEnabled = false;
       console.error('Failed to start OpenTelemetry tracing', err);
-    });
+    }
+  });
 
   return sdkInitPromise;
 }

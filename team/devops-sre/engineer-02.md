@@ -14,7 +14,7 @@ Start Here
 - Observability: packages/observability/src/*
 
 Status: in-progress
-Progress: 43%
+Progress: 57%
 
 Dependencies
 - devops-sre/engineer-01 (Infra)
@@ -24,7 +24,7 @@ Tasks
 - [x] SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
 - [x] SRE-02.2 — Correlation IDs in logs + log format policy
 - [x] SRE-02.3 — Define SLOs (triage p95, scribe p95, uptime) docs + CI guard
-- [ ] SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
+- [x] SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
 - [ ] SRE-02.5 — Node OTEL init + correlation context
 - [ ] SEC-01.1 — Logging redaction utility
 - [ ] SEC-01.2 — AuthZ matrix documentation (scopes/actions)

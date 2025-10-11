@@ -294,7 +294,3 @@ export function getBusReadyForTest(): boolean {
 }
 
 export { server };
-void initTracing('orchestrator').catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  logger.warn('failed to initialize tracing', { message });
-});

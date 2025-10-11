@@ -7,7 +7,7 @@ This collector runs locally via docker-compose to fan in traces/metrics/logs emi
 1. Ensure `docker compose` services are down.
 2. Start the stack: `docker compose up -d otel-collector`.
 3. Point services at the collector:
-   - Node: set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`.
+   - Node: set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), and optionally `OTEL_ENABLED=1` to force-enable spans.
    - Python: set `OTEL_ENABLED=1` and `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`.
 4. Generate traffic (e.g., POST to `/safety-check`). The collector logs show received spans/metrics.
 
