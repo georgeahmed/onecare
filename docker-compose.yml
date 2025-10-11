@@ -23,7 +23,7 @@ services:
     volumes:
       - nats-data:/data/jetstream
     healthcheck:
-      test: ["CMD", "nats", "--server", "nats://onecare:onecare-secret@localhost:4222", "server", "check"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8222/healthz || exit 1"]
       interval: 5s
       timeout: 2s
       retries: 10
@@ -53,15 +53,15 @@ services:
 
   safety-gate:
     build:
-      context: services-py/safety_gate_service
-      dockerfile: Dockerfile
+      context: services-py
+      dockerfile: safety_gate_service/Dockerfile
     ports:
       - "8081:8081"
 
   scribe:
     build:
-      context: services-py/scribe_service
-      dockerfile: Dockerfile
+      context: services-py
+      dockerfile: scribe_service/Dockerfile
     ports:
       - "8082:8082"
 

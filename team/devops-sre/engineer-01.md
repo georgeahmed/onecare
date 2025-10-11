@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml; docker-compose.yml (NATS)
 
 Status: in-progress
-Progress: 14%
+Progress: 29%
 
 Dependencies
 - backend/engineer-02 (Bus impl)
@@ -22,7 +22,7 @@ Dependencies
 
 Tasks
 - [x] SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
-- [ ] SRE-01.2 — Secrets management baseline (templates, rotation policy), no secrets in git
+- [x] SRE-01.2 — Secrets management baseline (templates, rotation policy), no secrets in git
 - [ ] SRE-01.3 — CI caching for Node/Python deps; add codegen checks in CI
 - [ ] SRE-01.4 — Resource limits/requests; container health/restart policy; ulimits where needed
 - [ ] SRE-01.5 — Backup/restore stub scripts + runbook (bus streams, config)

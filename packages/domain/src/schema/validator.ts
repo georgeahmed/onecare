@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
-import type { AnyValidateFunction, ErrorObject } from 'ajv';
+import type { ErrorObject, ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 
 type JSONSchema = { $id?: string } & Record<string, unknown>;
@@ -16,7 +16,9 @@ export interface ValidationError {
 
 export type ValidationResult = { ok: true } | { ok: false; errors: ValidationError[] };
 
-const validatorCache = new Map<string, AnyValidateFunction>();
+type SchemaValidator = ValidateFunction<unknown>;
+
+const validatorCache = new Map<string, SchemaValidator>();
 const schemaCache = new Map<string, JSONSchema>();
 const aliasToCanonical = new Map<string, string>();
 
@@ -89,7 +91,7 @@ function loadSchema(schemaId: string): { schema: JSONSchema; canonicalId: string
   return { schema, canonicalId };
 }
 
-function ensureCompiledValidator(schemaId: string): AnyValidateFunction {
+function ensureCompiledValidator(schemaId: string): SchemaValidator {
   const cachedId = aliasToCanonical.get(schemaId);
   if (cachedId) {
     const cachedValidator = validatorCache.get(cachedId);
@@ -105,10 +107,10 @@ function ensureCompiledValidator(schemaId: string): AnyValidateFunction {
 
   const { schema, canonicalId } = loadSchema(schemaId);
 
-  let validator = ajv.getSchema(canonicalId);
+  let validator = ajv.getSchema(canonicalId) as SchemaValidator | undefined;
   if (!validator) {
     ajv.addSchema(schema, canonicalId);
-    validator = ajv.getSchema(canonicalId);
+    validator = ajv.getSchema(canonicalId) as SchemaValidator | undefined;
   }
   if (!validator) {
     throw new Error(`Failed to compile schema validator for ${canonicalId}`);
@@ -148,7 +150,7 @@ function mapError(error: ErrorObject): ValidationError {
   };
 }
 
-export function getValidator(schemaId: string): AnyValidateFunction {
+export function getValidator(schemaId: string): SchemaValidator {
   return ensureCompiledValidator(schemaId);
 }
 
@@ -160,8 +162,8 @@ export function validate(schemaId: string, payload: unknown): ValidationResult {
   }
 
   const errors = (validator.errors ?? [])
-    .map((err) => mapError(err))
-    .sort((a, b) => {
+    .map((err) => mapError(err as ErrorObject))
+    .sort((a: ValidationError, b: ValidationError) => {
       if (a.path === b.path) {
         return a.keyword.localeCompare(b.keyword);
       }

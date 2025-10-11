@@ -59,25 +59,30 @@ function scheduleReconnect(delayMs?: number) {
 function monitorNats(conn: NatsConnection) {
   (async () => {
     for await (const status of conn.status()) {
-      switch (status.type) {
-        case 'disconnect':
-        case 'reconnecting':
-        case 'error':
-          busReady = false;
-          logger.warn('NATS connection disrupted', { event: status.type });
-          break;
-        case 'reconnect':
-        case 'connect':
-          busReady = true;
-          logger.info('NATS connection restored', { event: status.type });
-          break;
-        case 'close':
-          busReady = false;
-          logger.error('NATS connection closed');
+      const event = status.type;
+      if (event === 'reconnect') {
+        busReady = true;
+        logger.info('NATS connection restored', { event });
+      } else if (
+        event === 'disconnect' ||
+        event === 'reconnecting' ||
+        event === 'staleConnection' ||
+        event === 'pingTimer' ||
+        event === 'ldm' ||
+        event === 'error'
+      ) {
+        busReady = false;
+        logger.warn('NATS connection disrupted', { event });
+        if (event === 'disconnect' || event === 'error') {
           scheduleReconnect();
-          return;
+        }
+      } else if (event === 'update') {
+        logger.info('NATS server list updated', { data: status.data });
       }
     }
+    busReady = false;
+    logger.warn('NATS status iterator completed unexpectedly');
+    scheduleReconnect();
   })().catch((err: unknown) => {
     logger.error('NATS status monitoring failed', { err: err instanceof Error ? err.message : err });
     busReady = false;
