@@ -59,6 +59,6 @@ fi
 echo "[loop] Marking task done and updating status"
 node scripts/team/update_task.js --engineer "$ENGINEER" --action done --task "$TASK_SUBSTR"
 node scripts/team/status.js engineer "$ENGINEER" --write >/dev/null
+make -s team-status-write >/dev/null 2>&1 || true
 
 echo "[loop] Completed engineer loop for $ENGINEER"
-

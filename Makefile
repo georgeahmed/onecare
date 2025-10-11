@@ -102,6 +102,12 @@ team-status:
 
 team-status-write:
 	node scripts/team/status.js --write
+	@# Auto-commit and push team status to dev branch
+	@which git >/dev/null 2>&1 && ( \
+	  git add -A && \
+	  git commit -m "chore(team): update team status [skip ci]" >/dev/null 2>&1 || true; \
+	  git push origin dev >/dev/null 2>&1 || true \
+	) || true
 
 team-status-json:
 	node scripts/team/status.js --json

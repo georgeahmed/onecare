@@ -27,14 +27,14 @@ Per‑Engineer Loop (Recommended)
   - TS: `npm run build && npm run typecheck && npm run test`
   - Py (if relevant): `pytest -q services-py/tests`
 - If runtime change: `docker-compose up --build` and smoke test.
-- Update status:
+- Update status (auto-push to `dev`):
   - `make engineer-done ENGINEER=<path> TASK='<substring>'`
-  - `make team-status-write`
+  - `make team-status-write` (auto-commits status changes and pushes to `dev`)
 - If blocked/bug: use `engineer-blocked` or `engineer-bug` and write status.
 
 One‑liner helper
 - `make engineer-loop ENGINEER=<path> TASK='<substring>' SCHEMAS=1 PY=1 RUNTIME=1 SMOKE=1`
-  - Runs codegen (TS), TS build/typecheck/lint/test, Python tests, brings up stack, smokes `/safety-check`, marks task done, writes status.
+  - Runs codegen (TS), TS build/typecheck/lint/test, Python tests, brings up stack, smokes `/safety-check`, marks task done, writes status, and pushes to `dev`.
 
 Pre‑commit Hook
 - Automatically runs local CI and syncs team status on commit.

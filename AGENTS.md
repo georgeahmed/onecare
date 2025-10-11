@@ -47,6 +47,7 @@ Documentation Practices
 - Update `docs/USAGE.md` with any new commands, scripts, or run modes. PRs that add scripts must update USAGE.
 - Use `docs/RELEASE_READINESS.md` (service-level) and `docs/SYSTEM_READINESS.md` (system-level) to track go/no-go gates.
 - Keep team status consistent: update `team/*/engineer-*.md` (Status/Progress/Tasks). Use `make team-status-write` to sync Progress.
+ - After marking a task done, run `make team-status-write` — it auto-commits status changes and pushes to the `dev` branch so progress stays in sync for agents.
 
 Testing Practices
 - Unit tests first: TS (Vitest under `packages/*/test` or `apps/*/test`), Python (Pytest under `services-py/tests`).
@@ -132,4 +133,5 @@ Agent Automation Checklist
 - Make minimal, typed changes in correct layers (application vs adapters).
 - Run `npm run typecheck && npm run test` locally; keep tests fast/deterministic.
 - Update team status checkboxes, and run `make team-status-write` to sync.
+ - `make team-status-write` will auto-commit and push to `dev`.
 - Review `docs/RELEASE_READINESS.md` before merging; ensure cross-team gates are tracked.
