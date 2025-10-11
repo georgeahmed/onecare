@@ -11,11 +11,11 @@ import { computePortalNotifyKey } from '../../apps/access-gate/src/util/idempote
 // Lazy load Ajv so the test suite still runs if Ajv isn't installed yet.
 async function loadAjv() {
   try {
-    const [{ default: Ajv }, { default: addFormats }] = await Promise.all([
-      import('ajv'),
+    const [{ default: Ajv2020 }, { default: addFormats }] = await Promise.all([
+      import('ajv/dist/2020'),
       import('ajv-formats'),
     ]);
-    const ajv = new Ajv({ allErrors: true, strict: false });
+    const ajv = new Ajv2020({ allErrors: true, strict: false });
     addFormats(ajv);
     return ajv;
   } catch (e) {
@@ -103,4 +103,3 @@ describe('Contract Matrix', () => {
     }
   });
 });
-

@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml
 - Code: apps/*, packages/*, services-py/*
 
-Status: planned
+Status: needs-fixes
 Progress: 0%
 
 Dependencies

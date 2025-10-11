@@ -22,8 +22,8 @@ Contracts & Validation
 - Envelope: standardize headers/correlation via `@onecare/events` envelope utilities.
 - ADR: docs/adr/2025-10-11-bus-injection.md
 
-Status: active
-Progress: 20%
+Status: in-progress
+Progress: 13%
 
 Dependencies
 - devops-sre/engineer-01 (Broker infra)

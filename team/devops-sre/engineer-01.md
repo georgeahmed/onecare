@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml; docker-compose.yml (NATS)
 
 Status: active
-Progress: 10%
+Progress: 0%
 
 Dependencies
 - backend/engineer-02 (Bus impl)

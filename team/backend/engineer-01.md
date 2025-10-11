@@ -31,8 +31,8 @@ Contracts & Validation
 - Ensure error envelopes follow `docs/ERRORS.md` and DLQ follows `schemas/common/dlq-event.json`.
 - Release: docs/RELEASE_READINESS.md
 
-Status: active
-Progress: 29%
+Status: in-progress
+Progress: 12%
 
 Dependencies
 - integrations/engineer-01 (FHIR repo, Object Store, Consent)

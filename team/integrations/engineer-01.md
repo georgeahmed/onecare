@@ -18,7 +18,7 @@ Start Here
 - Security: packages/security/src/index.ts (authorize/consent)
 
 Status: in-progress
-Progress: 40%
+Progress: 29%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)

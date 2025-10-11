@@ -15,7 +15,7 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (enhanced_access_windows)
 
 Status: active
-Progress: 10%
+Progress: 0%
 
 Dependencies
 - backend/engineer-04 (Booking service)
