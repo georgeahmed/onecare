@@ -32,7 +32,7 @@ Contracts & Validation
 - Release: docs/RELEASE_READINESS.md
 
 Status: in-progress
-Progress: 12%
+Progress: 15%
 
 Dependencies
 - integrations/engineer-01 (FHIR repo, Object Store, Consent)
@@ -53,7 +53,7 @@ Tasks
 - [x] BE-01.4 — Emit audit event on success/deny
 - [ ] BE-01.15 — Contract compliance & codegen (update schemas first; run TS/Py codegen; wire validators; CI gate: npm run typecheck && npm run test)
 - [ ] BE-01.9 — Orchestrator state machine skeleton (@onecare/statekit) with explicit states, time budgets, failure transitions, and decision/result objects; unit-tested
-- [ ] BE-01.5a — Error codes/types from schema + envelope helper
+- [x] BE-01.5a — Error codes/types from schema + envelope helper
 - [ ] BE-01.5b — Status mapping + HTTP handler wrapper
 - [ ] BE-01.5c — Logging redaction + error metrics
 - [ ] BE-01.5d — Tests + docs for error taxonomy

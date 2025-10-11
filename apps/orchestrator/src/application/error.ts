@@ -1,16 +1,6 @@
-export type ErrorCode =
-  | 'unauthorized'
-  | 'forbidden'
-  | 'invalid_input'
-  | 'unsupported_media_type'
-  | 'payload_too_large'
-  | 'conflict'
-  | 'upstream_timeout'
-  | 'upstream_unavailable'
-  | 'internal_error'
-  | 'too_many_requests'
-  | 'busy'
-  | 'invalid_fhir';
+import type { ErrorObject as ContractErrorObject } from '@onecare/events';
+
+export type ErrorCode = ContractErrorObject['code'] | 'unsupported_media_type' | 'payload_too_large';
 
 export interface ErrorEnvelope {
   error: {
@@ -27,7 +17,7 @@ export function errorEnvelope(
   details?: Record<string, unknown>,
   correlationId?: string
 ): ErrorEnvelope {
-  return {
+  const envelope: ErrorEnvelope = {
     error: {
       code,
       message,
@@ -35,6 +25,7 @@ export function errorEnvelope(
       ...(correlationId ? { correlationId } : {}),
     },
   };
+  return envelope;
 }
 
 export function mapErrorToStatus(code: ErrorCode): number {
@@ -85,4 +76,3 @@ export function redact(obj: Record<string, unknown>): Record<string, unknown> {
   }
   return out;
 }
-

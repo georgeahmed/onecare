@@ -7,3 +7,4 @@ export * from './scribe';
 export * from './safety';
 export * from './portal';
 export * from './audit-event';
+export * from './error-envelope';

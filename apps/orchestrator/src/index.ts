@@ -1,6 +1,6 @@
 import * as http from 'http';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
-import { errorEnvelope, mapErrorToStatus } from './application/error';
+import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard, CircuitBreaker } from './adapters/common/guardrails';
 import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected } from '@onecare/bus';
@@ -50,6 +50,16 @@ let reconnectTimer: NodeJS.Timeout | undefined;
 const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
 const AUDIT_SUCCESS_TYPE = 'orchestrator.access.success';
+
+class HttpError extends Error {
+  constructor(
+    public readonly code: ErrorCode,
+    message: string,
+    public readonly details?: Record<string, unknown>
+  ) {
+    super(message);
+  }
+}
 
 function parseServers(raw: string | undefined): string[] {
   if (!raw) return ['nats://localhost:4222'];
@@ -158,6 +168,141 @@ function cidFromHeaders(headers: http.IncomingHttpHeaders): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+type RequestOutcome = ErrorCode | 'ok';
+
+function respondJson(
+  res: http.ServerResponse,
+  statusCode: number,
+  body: unknown,
+  correlationId: string | undefined,
+  setOutcome: (value: RequestOutcome) => void,
+  outcome: RequestOutcome = 'ok'
+): void {
+  setOutcome(outcome);
+  res.statusCode = statusCode;
+  res.setHeader('content-type', 'application/json');
+  if (correlationId) res.setHeader('x-correlation-id', correlationId);
+  res.end(typeof body === 'string' ? body : JSON.stringify(body));
+}
+
+function respondError(
+  res: http.ServerResponse,
+  code: ErrorCode,
+  message: string,
+  correlationId: string | undefined,
+  setOutcome: (value: RequestOutcome) => void,
+  details?: Record<string, unknown>
+): void {
+  const envelope = errorEnvelope(code, message, details, correlationId);
+  respondJson(res, mapErrorToStatus(code), envelope, correlationId, setOutcome, code);
+}
+
+function recordHttpMetrics(route: string, outcome: RequestOutcome, durationMs: number): void {
+  logger.info('metric.http.request', {
+    route,
+    outcome,
+    durationMs: Number(durationMs.toFixed(2)),
+  });
+}
+
+function classifyError(err: unknown): { code: ErrorCode; message: string; details?: Record<string, unknown> } {
+  if (err instanceof HttpError) {
+    return { code: err.code, message: err.message, details: err.details };
+  }
+  const reason = err instanceof Error ? err.message : String(err);
+  if (reason && reason.toLowerCase().includes('timeout')) {
+    return { code: 'upstream_timeout', message: 'Upstream timeout' };
+  }
+  if (reason && reason.startsWith('circuit_open')) {
+    return { code: 'upstream_unavailable', message: 'Safety gate unavailable' };
+  }
+  return { code: 'internal_error', message: 'Unexpected error' };
+}
+
+type HttpHandler = (setOutcome: (value: RequestOutcome) => void) => Promise<void>;
+
+function handleHttp(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  route: string,
+  correlationId: string,
+  handler: HttpHandler
+): void {
+  const start = process.hrtime.bigint();
+  let outcome: RequestOutcome = 'ok';
+  const setOutcome = (value: RequestOutcome) => {
+    outcome = value;
+  };
+
+  const finalize = () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
+    recordHttpMetrics(route, outcome, durationMs);
+  };
+
+  handler(setOutcome)
+    .catch((err) => {
+      const { code, message, details } = classifyError(err);
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.error('request failure', {
+        route,
+        correlationId,
+        code,
+        reason,
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
+        headers: redact(req.headers as Record<string, unknown>),
+      });
+      if (!res.headersSent && !res.writableEnded) {
+        respondError(res, code, message, correlationId, setOutcome, details);
+      }
+    })
+    .finally(finalize)
+    .catch((err) => {
+      // finalization errors should never occur; log defensively
+      logger.error('request finalization failure', {
+        route,
+        correlationId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
+function readRequestBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let settled = false;
+
+    const abort = (err: HttpError) => {
+      if (settled) return;
+      settled = true;
+      req.destroy();
+      reject(err);
+    };
+
+    req.on('data', (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      received += buffer.length;
+      if (received > maxBytes) {
+        abort(new HttpError('payload_too_large', `Payload exceeds limit (${maxBytes} bytes)`));
+        return;
+      }
+      chunks.push(buffer);
+    });
+
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(new HttpError('internal_error', 'Failed to read request body', { reason: err.message }));
+    });
+  });
+}
+
 function getHeader(headers: http.IncomingHttpHeaders, name: string): string | undefined {
   const lower = name.toLowerCase();
   const raw = headers[lower] ?? headers[name];
@@ -254,184 +399,128 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === 'POST' && req.url === '/safety-check') {
-    if (!busReady) {
-      const env = errorEnvelope('upstream_unavailable', 'Event bus unavailable', undefined, corr);
-      res.statusCode = mapErrorToStatus(env.error.code);
-      res.setHeader('content-type', 'application/json');
-      res.setHeader('x-correlation-id', corr);
-      res.end(JSON.stringify(env));
-      return;
-    }
-    const bufs: Buffer[] = [];
-    const maxBytes = Number(process.env.MAX_BODY_BYTES || 256 * 1024);
-    let received = 0;
-    req.on('data', (c) => {
-      const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
-      received += b.length;
-      if (received > maxBytes) {
-        const env = errorEnvelope('payload_too_large', `Payload exceeds limit (${maxBytes} bytes)`, undefined, corr);
-        res.statusCode = mapErrorToStatus(env.error.code);
-        res.setHeader('content-type', 'application/json');
-        res.setHeader('x-correlation-id', corr);
-        res.end(JSON.stringify(env));
-        req.destroy();
+    const routeLabel = 'POST /safety-check';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      if (!busReady) {
+        req.resume();
+        respondError(res, 'upstream_unavailable', 'Event bus unavailable', corr, setOutcome);
         return;
       }
-      bufs.push(b);
-    });
-    req.on('end', async () => {
-      try {
-        // Content-Type allowlist
-        const ctype = (req.headers['content-type'] || '').toString().toLowerCase();
-        if (!ctype.includes('application/json')) {
-          const env = errorEnvelope('unsupported_media_type', 'Only application/json is supported', undefined, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-          return;
-        }
 
-        // Size limit
-        const rawBuf = Buffer.concat(bufs);
-        if (rawBuf.length > maxBytes) {
-          const env = errorEnvelope('payload_too_large', `Payload exceeds limit (${maxBytes} bytes)`, undefined, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-          return;
-        }
+      const maxBytes = Number(process.env.MAX_BODY_BYTES || 256 * 1024);
+      const rawBuf = await readRequestBody(req, maxBytes);
 
-        const raw = rawBuf.toString('utf8');
-        let submission: PortalSubmission;
-        try {
-          submission = JSON.parse(raw) as PortalSubmission;
-        } catch {
-          const env = errorEnvelope('invalid_input', 'Invalid JSON body', undefined, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-          return;
-        }
-
-        // Schema validation
-        const v = validatePortalSubmission(submission);
-        if (v.ok !== true) {
-          const env = errorEnvelope('invalid_input', 'Invalid request body', { errors: v.errors.slice(0, 5) }, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-          return;
-        }
-
-        const security = getSecurityServices();
-        const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
-        const authHeader = getHeader(req.headers, 'authorization');
-        const authContext = buildAuthContext(req.headers);
-        type DenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
-        const deny = async (reason: DenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
-          logger.warn('zero-trust gate denied request', {
-            reason,
-            correlationId: corr,
-            requestId,
-            actorType: authContext?.actor?.type,
-            actorId: authContext?.actor?.id,
-          });
-          const auditDetails = {
-            reason,
-            requestId,
-            patientId: submission.patient?.id,
-            scope: authContext?.scope,
-            ...extraDetails,
-          } satisfies Record<string, unknown>;
-          recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
-          await emitAuditEvent(
-            AUDIT_DENIED_TYPE,
-            corr,
-            authContext?.actor ?? null,
-            auditDetails
-          );
-          const env = errorEnvelope('forbidden', 'Access denied', undefined, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-        };
-
-        if (!(await security.verifySignatureAndReplayGuard(authHeader, requestId))) {
-          await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
-          return;
-        }
-
-        if (!authContext) {
-          await deny('actor_missing');
-          return;
-        }
-
-        const { actor, scope } = authContext;
-        const patientId = submission.patient.id;
-
-        if (!(await security.authorize(actor, 'submit', patientId, scope))) {
-          await deny('not_authorized');
-          return;
-        }
-
-        if (!(await security.checkConsent(patientId, 'care', Array.from(CONSENT_RESOURCES)))) {
-          await deny('consent_denied');
-          return;
-        }
-
-        // Idempotency guard (10 min TTL default)
-        const explicitKeyHeader = req.headers['x-idempotency-key'];
-        const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
-        const idemKey = deriveIdempotencyKey(submission, actor.id, explicitKey);
-        const idemResult = await reserveIdempotency(idemStore, idemKey, { ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SEC || 600) });
-        if (idemResult === 'exists') {
-          const env = errorEnvelope('conflict', 'Duplicate request', { idempotencyKey: idemKey }, corr);
-          res.statusCode = mapErrorToStatus(env.error.code);
-          res.setHeader('content-type', 'application/json');
-          res.setHeader('x-correlation-id', corr);
-          res.end(JSON.stringify(env));
-          return;
-        }
-        const decision = await callWithGuard(
-          'safety_gate',
-          () => analyzePortalSubmission(submission, undefined, corr),
-          { timeoutMs: safetyGateTimeoutMs, maxRetries: 1, baseDelayMs: 10 },
-          safetyBreaker
-        );
-        if (decision.outcome === 'SAFE_TO_CONTINUE') {
-          const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
-          const env = createEnvelope(Topics.triage.input, tri, corr);
-          await bus.publish(env.topic, env);
-          logger.info('published triage.input', { topic: env.topic, correlationId: corr });
-          const successAuditDetails = {
-            outcome: decision.outcome,
-            patientId: tri.patientId,
-            practiceId: practiceConfig.practiceId,
-            topic: env.topic,
-          } satisfies Record<string, unknown>;
-          recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
-          await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
-        } else {
-          logger.info('safety diverted submission', { correlationId: corr });
-        }
-        res.statusCode = 200;
-        res.setHeader('content-type', 'application/json');
-        res.setHeader('x-correlation-id', corr);
-        res.end(JSON.stringify(decision));
-      } catch (err: any) {
-        const code: ErrorCode = err?.message && String(err.message).startsWith('circuit_open')
-          ? 'upstream_unavailable' : 'internal_error';
-        const env = errorEnvelope(code, code === 'upstream_unavailable' ? 'Safety gate unavailable' : 'Unexpected error', undefined, corr);
-        res.statusCode = mapErrorToStatus(env.error.code);
-        res.setHeader('content-type', 'application/json');
-        res.setHeader('x-correlation-id', corr);
-        res.end(JSON.stringify(env));
+      const ctype = (req.headers['content-type'] || '').toString().toLowerCase();
+      if (!ctype.includes('application/json')) {
+        respondError(res, 'unsupported_media_type', 'Only application/json is supported', corr, setOutcome);
+        return;
       }
+
+      const raw = rawBuf.toString('utf8');
+      let submission: PortalSubmission;
+      try {
+        submission = JSON.parse(raw) as PortalSubmission;
+      } catch {
+        throw new HttpError('invalid_input', 'Invalid JSON body');
+      }
+
+      const validation = validatePortalSubmission(submission);
+      if (validation.ok !== true) {
+        respondError(
+          res,
+          'invalid_input',
+          'Invalid request body',
+          corr,
+          setOutcome,
+          { errors: validation.errors.slice(0, 5) }
+        );
+        return;
+      }
+
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
+      const authHeader = getHeader(req.headers, 'authorization');
+      const authContext = buildAuthContext(req.headers);
+      type DenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
+      const deny = async (reason: DenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
+        logger.warn('zero-trust gate denied request', {
+          reason,
+          correlationId: corr,
+          requestId,
+          actorType: authContext?.actor?.type,
+          actorId: authContext?.actor?.id,
+        });
+        const auditDetails = {
+          reason,
+          requestId,
+          patientId: submission.patient?.id,
+          scope: authContext?.scope,
+          ...extraDetails,
+        } satisfies Record<string, unknown>;
+        recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
+        await emitAuditEvent(AUDIT_DENIED_TYPE, corr, authContext?.actor ?? null, auditDetails);
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+      };
+
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, requestId))) {
+        await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
+        return;
+      }
+
+      if (!authContext) {
+        await deny('actor_missing');
+        return;
+      }
+
+      const { actor, scope } = authContext;
+      const patientId = submission.patient.id;
+
+      if (!(await security.authorize(actor, 'submit', patientId, scope))) {
+        await deny('not_authorized');
+        return;
+      }
+
+      if (!(await security.checkConsent(patientId, 'care', Array.from(CONSENT_RESOURCES)))) {
+        await deny('consent_denied');
+        return;
+      }
+
+      const explicitKeyHeader = req.headers['x-idempotency-key'];
+      const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
+      const idemKey = deriveIdempotencyKey(submission, actor.id, explicitKey);
+      const idemResult = await reserveIdempotency(idemStore, idemKey, {
+        ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SEC || 600),
+      });
+      if (idemResult === 'exists') {
+        respondError(res, 'conflict', 'Duplicate request', corr, setOutcome, { idempotencyKey: idemKey });
+        return;
+      }
+
+      const decision = await callWithGuard(
+        'safety_gate',
+        () => analyzePortalSubmission(submission, undefined, corr),
+        { timeoutMs: safetyGateTimeoutMs, maxRetries: 1, baseDelayMs: 10 },
+        safetyBreaker
+      );
+
+      if (decision.outcome === 'SAFE_TO_CONTINUE') {
+        const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
+        const envelope = createEnvelope(Topics.triage.input, tri, corr);
+        await bus.publish(envelope.topic, envelope);
+        logger.info('published triage.input', { topic: envelope.topic, correlationId: corr });
+        const successAuditDetails = {
+          outcome: decision.outcome,
+          patientId: tri.patientId,
+          practiceId: practiceConfig.practiceId,
+          topic: envelope.topic,
+        } satisfies Record<string, unknown>;
+        recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
+        await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
+      } else {
+        logger.info('safety diverted submission', { correlationId: corr });
+      }
+
+      respondJson(res, 200, decision, corr, setOutcome, 'ok');
     });
     return;
   }

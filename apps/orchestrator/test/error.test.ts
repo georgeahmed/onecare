@@ -10,6 +10,8 @@ describe('error envelope', () => {
     expect(mapErrorToStatus('too_many_requests')).toBe(429);
     expect(mapErrorToStatus('upstream_timeout')).toBe(504);
     expect(mapErrorToStatus('upstream_unavailable')).toBe(503);
+    expect(mapErrorToStatus('unauthorized')).toBe(401);
+    expect(mapErrorToStatus('conflict')).toBe(409);
     expect(mapErrorToStatus('internal_error')).toBe(500);
   });
 
@@ -25,4 +27,3 @@ describe('error envelope', () => {
     });
   });
 });
-
