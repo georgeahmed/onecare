@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml; Dockerfiles under services-py/*
 
 Status: in-progress
-Progress: 57%
+Progress: 71%
 
 Dependencies
 - ml team (services)
@@ -25,7 +25,7 @@ Tasks
 - [x] MO-01.2 — Containerize safety_gate_service and scribe_service with resource limits
 - [x] MO-01.3 — Add OpenTelemetry middleware/hooks (trace + metrics) to both services
 - [x] MO-01.4 — CI step to build and push Docker images (tags: git sha, semver)
-- [ ] MO-01.5 — Runtime env + secrets layout (keys, endpoints) documentation
+- [x] MO-01.5 — Runtime env + secrets layout (keys, endpoints) documentation
 - [ ] MO-01.6 — Base dashboards for latency (p50/p95), error rate, throughput
 - [ ] MO-01.7 — Vulnerability & secrets scanning in CI
  - [ ] MO-01.8 — Rollout strategies: blue/green, canary, and shadow (traffic splitting + rollback)
