@@ -13,11 +13,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+      - name: Cache npm artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cache pip artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('services-py/pyproject.toml', 'services-py/pdm.lock', 'services-py/poetry.lock', 'services-py/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
       - name: Install
         run: npm ci
       - name: Codegen check (no write)
         run: npm run codegen:check
+      - name: Verify schema contracts in sync
+        if: github.event_name == 'pull_request'
+        run: bash scripts/ci/check_contracts_sync.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests

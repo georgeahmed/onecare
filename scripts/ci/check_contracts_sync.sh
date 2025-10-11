@@ -25,15 +25,24 @@ fi
 
 echo "Schema changes detected; verifying generated contracts updated..."
 
-TS_CONTRACTS_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^packages/events/src/contracts/' || true)
+TS_CONTRACTS_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^packages/.+/src/contracts/' || true)
 PY_CONTRACTS_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^services-py/common/contracts/models.py$' || true)
 
-if [[ -z "$TS_CONTRACTS_CHANGED" || -z "$PY_CONTRACTS_CHANGED" ]]; then
-  echo "ERROR: Changes under schemas/ require regenerating TS and Python contracts." >&2
-  echo "Missing updates in: packages/events/src/contracts and/or services-py/common/contracts/models.py" >&2
+MISSING_OUTPUTS=()
+
+if [[ -z "$TS_CONTRACTS_CHANGED" ]]; then
+  MISSING_OUTPUTS+=('packages/*/src/contracts (TypeScript)')
+fi
+
+if [[ -z "$PY_CONTRACTS_CHANGED" ]]; then
+  MISSING_OUTPUTS+=('services-py/common/contracts/models.py (Python)')
+fi
+
+if [[ ${#MISSING_OUTPUTS[@]} -gt 0 ]]; then
+  echo "ERROR: Changes under schemas/ require regenerating generated contracts." >&2
+  printf 'Missing updates in: %s\n' "${MISSING_OUTPUTS[@]}" >&2
   exit 1
 fi
 
 echo "Contracts appear updated alongside schema changes."
 exit 0
-
