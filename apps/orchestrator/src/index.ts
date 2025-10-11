@@ -15,6 +15,7 @@ import { getSecurityServices } from './adapters/security';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import type { IdempotencyStore } from '@onecare/ports';
+import { normalizeToFhir, validateProfiles } from './application/normalize';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
@@ -540,6 +541,16 @@ const server = http.createServer((req, res) => {
       );
 
       if (decision.outcome === 'SAFE_TO_CONTINUE') {
+        const bundle = normalizeToFhir(submission);
+        try {
+          await validateProfiles(bundle);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          recordAudit('orchestrator.validation.failure', corr, { reason });
+          respondError(res, 'invalid_fhir', 'FHIR validation failed', corr, setOutcome);
+          return;
+        }
+        logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
         const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
         const envelope = createEnvelope(Topics.triage.input, tri, corr);
         await bus.publish(envelope.topic, envelope);

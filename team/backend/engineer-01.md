@@ -32,7 +32,7 @@ Contracts & Validation
 - Release: docs/RELEASE_READINESS.md
 
 Status: in-progress
-Progress: 18%
+Progress: 21%
 
 Dependencies
 - integrations/engineer-01 (FHIR repo, Object Store, Consent)
@@ -61,7 +61,7 @@ Tasks
 - [ ] BE-01.6b — Key/header derivation + TTL config
 - [ ] BE-01.6c — 409 path + metrics/logs (race-safe)
 - [ ] BE-01.6d — Concurrency tests (sequential + parallel)
-- [ ] BE-01.7a — normalizeToFhir + fixtures (pure)
+- [x] BE-01.7a — normalizeToFhir + fixtures (pure)
 - [ ] BE-01.7b — HTTP edge schema validation
 - [ ] BE-01.7c — Profile validation hook + error mapping
 - [ ] BE-01.7d — Wire upsert + audit + unit tests
