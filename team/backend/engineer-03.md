@@ -23,8 +23,8 @@ Contracts & Validation
 - Keep schemas current; run `npm run codegen` to refresh TS/Py models.
 - Validate triage.input, tasks.created/updated payloads with Ajv (QA-01.1 harness pattern).
 
-Status: planned
-Progress: 0%
+Status: in-progress
+Progress: 5%
 
 Dependencies
 - ml/engineer-02 (Acuity model)
@@ -42,7 +42,7 @@ Platform Checklist (pre-flight)
 Tasks
 - [ ] BE-03.6 — Contract-first triage models and validators (schemas update, codegen TS/Py, compiled validators, contract tests)
 - [ ] BE-03.7 — Event-driven ingress (consume triage.input via bus; idempotency keys; bounded retries + DLQ)
-- [ ] BE-03.1a — Feature extraction + normalization (pure; unit-tested)
+- [x] BE-03.1a — Feature extraction + normalization (pure; unit-tested)
 - [ ] BE-03.1b — Deterministic scoring with config weights; calibration + priority thresholds
 - [ ] BE-03.1c — Score bounding, tie-breakers, and stability across inputs
 - [ ] BE-03.2a — Text normalizer (lowercase, stopwords, stemming) + fixtures
