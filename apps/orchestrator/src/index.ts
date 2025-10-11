@@ -5,14 +5,34 @@ import { callWithGuard, CircuitBreaker } from './adapters/common/guardrails';
 import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
-import { createEnvelope, PortalSubmission, Topics, TriageInput } from '@onecare/events';
+import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
 import { initTracing, logger, setCorrelationId } from '@onecare/observability';
 import { deriveIdempotencyKey, reserveIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
+import type { AuthContext } from '@onecare/security';
+import { getSecurityServices } from './adapters/security';
+import { loadConfig, type ResolvedConfig } from '@onecare/config';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
+const practiceId = process.env.PRACTICE_ID?.trim() || 'demo';
+const practiceConfig: ResolvedConfig = loadConfig(practiceId);
+const safetyGateSettings = practiceConfig.safety_gate ?? {};
+const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
+const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
+
+logger.info('practice config applied', {
+  practiceId: practiceConfig.practiceId,
+  safetyGate: {
+    timeoutMs: safetyGateTimeoutMs,
+    fallback: safetyGateFallbackMode,
+    redFlagThreshold: safetyGateSettings.red_flag_threshold,
+    emergencyConfidence: safetyGateSettings.emergency_confidence,
+  },
+  fairnessFloors: practiceConfig.fairness_floors,
+  holdBackFraction: practiceConfig.hold_back_fraction,
+});
 
 void initTracing('orchestrator').catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -26,6 +46,8 @@ const idemStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
 let natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
+const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
+const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
 
 function parseServers(raw: string | undefined): string[] {
   if (!raw) return ['nats://localhost:4222'];
@@ -134,6 +156,65 @@ function cidFromHeaders(headers: http.IncomingHttpHeaders): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function getHeader(headers: http.IncomingHttpHeaders, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const raw = headers[lower] ?? headers[name];
+  if (Array.isArray(raw)) return raw[0];
+  if (typeof raw === 'string') return raw;
+  return undefined;
+}
+
+function normalizeActorType(raw: string | undefined): AuthContext['actor']['type'] | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower === 'patient' || lower === 'practitioner' || lower === 'system') {
+    return lower;
+  }
+  return null;
+}
+
+function buildAuthContext(headers: http.IncomingHttpHeaders): AuthContext | null {
+  const actorId = getHeader(headers, 'x-actor-id');
+  const actorType = normalizeActorType(getHeader(headers, 'x-actor-type'));
+  if (!actorId || !actorType) return null;
+  const scopeHeader = getHeader(headers, 'x-auth-scope');
+  const scope = scopeHeader
+    ? scopeHeader
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : undefined;
+  return {
+    actor: { type: actorType, id: actorId },
+    scope,
+  };
+}
+
+async function emitAuditEvent(
+  type: string,
+  correlationId: string | undefined,
+  actor: AuthContext['actor'] | null | undefined,
+  details: Record<string, unknown>
+): Promise<void> {
+  const event: AuditEvent = {
+    type,
+    timestamp: new Date().toISOString(),
+    correlationId,
+    actor: actor ? `${actor.type}:${actor.id}` : null,
+    details,
+  };
+  try {
+    const env = createEnvelope(Topics.audit.event, event, correlationId);
+    await bus.publish(env.topic, env);
+  } catch (err) {
+    logger.warn('failed to publish audit event', {
+      type,
+      correlationId,
+      err: err instanceof Error ? err.message : err,
+    });
+  }
+}
+
 const server = http.createServer((req, res) => {
   if (!req.url) {
     res.statusCode = 400;
@@ -231,10 +312,65 @@ const server = http.createServer((req, res) => {
           return;
         }
 
+        const security = getSecurityServices();
+        const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
+        const authHeader = getHeader(req.headers, 'authorization');
+        const authContext = buildAuthContext(req.headers);
+        type DenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
+        const deny = async (reason: DenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
+          logger.warn('zero-trust gate denied request', {
+            reason,
+            correlationId: corr,
+            requestId,
+            actorType: authContext?.actor?.type,
+            actorId: authContext?.actor?.id,
+          });
+          await emitAuditEvent(
+            AUDIT_DENIED_TYPE,
+            corr,
+            authContext?.actor ?? null,
+            {
+              reason,
+              requestId,
+              patientId: submission.patient?.id,
+              scope: authContext?.scope,
+              ...extraDetails,
+            }
+          );
+          const env = errorEnvelope('forbidden', 'Access denied', undefined, corr);
+          res.statusCode = mapErrorToStatus(env.error.code);
+          res.setHeader('content-type', 'application/json');
+          res.setHeader('x-correlation-id', corr);
+          res.end(JSON.stringify(env));
+        };
+
+        if (!(await security.verifySignatureAndReplayGuard(authHeader, requestId))) {
+          await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
+          return;
+        }
+
+        if (!authContext) {
+          await deny('actor_missing');
+          return;
+        }
+
+        const { actor, scope } = authContext;
+        const patientId = submission.patient.id;
+
+        if (!(await security.authorize(actor, 'submit', patientId, scope))) {
+          await deny('not_authorized');
+          return;
+        }
+
+        if (!(await security.checkConsent(patientId, 'care', Array.from(CONSENT_RESOURCES)))) {
+          await deny('consent_denied');
+          return;
+        }
+
         // Idempotency guard (10 min TTL default)
         const explicitKeyHeader = req.headers['x-idempotency-key'];
         const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
-        const idemKey = deriveIdempotencyKey(submission, submission.patient?.id, explicitKey);
+        const idemKey = deriveIdempotencyKey(submission, actor.id, explicitKey);
         const idemResult = await reserveIdempotency(idemStore, idemKey, { ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SEC || 600) });
         if (idemResult === 'exists') {
           const env = errorEnvelope('conflict', 'Duplicate request', { idempotencyKey: idemKey }, corr);
@@ -247,7 +383,7 @@ const server = http.createServer((req, res) => {
         const decision = await callWithGuard(
           'safety_gate',
           () => analyzePortalSubmission(submission, undefined, corr),
-          { timeoutMs: 800, maxRetries: 1, baseDelayMs: 10 },
+          { timeoutMs: safetyGateTimeoutMs, maxRetries: 1, baseDelayMs: 10 },
           safetyBreaker
         );
         if (decision.outcome === 'SAFE_TO_CONTINUE') {
@@ -291,6 +427,18 @@ export function setBusReadyForTest(ready: boolean): void {
 
 export function getBusReadyForTest(): boolean {
   return busReady;
+}
+
+export function getMessageBusForTest(): MessageBus {
+  return bus;
+}
+
+export function getPracticeConfig(): ResolvedConfig {
+  return practiceConfig;
+}
+
+export function getSafetyGateSettings(): { timeoutMs: number; fallback: 'rules' | 'none' } {
+  return { timeoutMs: safetyGateTimeoutMs, fallback: safetyGateFallbackMode };
 }
 
 export { server };

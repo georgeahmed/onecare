@@ -48,6 +48,11 @@ demo-docker:
 	@echo "[demo] Calling orchestrator /safety-check"
 	@curl -s -X POST http://localhost:3001/safety-check \
 	  -H 'content-type: application/json' \
+	  -H 'authorization: Bearer dev-token' \
+	  -H 'x-actor-type: patient' \
+	  -H 'x-actor-id: demo-patient' \
+	  -H 'x-request-id: demo-docker-req' \
+	  -H 'x-auth-scope: submit triage:submit' \
 	  -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"I have chest pain","channel":"web"}' | tee /dev/stderr
 	@echo "\n[demo] Done. Stop stack with: make docker-down"
 
@@ -63,6 +68,11 @@ demo-local:
 	@echo "[demo] Calling orchestrator /safety-check"
 	@curl -s -X POST http://localhost:3001/safety-check \
 	  -H 'content-type: application/json' \
+	  -H 'authorization: Bearer dev-token' \
+	  -H 'x-actor-type: patient' \
+	  -H 'x-actor-id: demo-patient' \
+	  -H 'x-request-id: demo-local-req' \
+	  -H 'x-auth-scope: submit triage:submit' \
 	  -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}' | tee /dev/stderr
 	@echo "\n[demo] Cleaning up..."
 	-@bash -c 'kill $$(cat .pid_orch 2>/dev/null) 2>/dev/null || true; rm -f .pid_orch'
@@ -86,7 +96,14 @@ stack-up:
 
 stack-smoke:
 	@echo "[smoke] /safety-check"
-	curl -s -X POST http://localhost:3001/safety-check -H 'content-type: application/json' -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}' || true
+	curl -s -X POST http://localhost:3001/safety-check \
+	  -H 'content-type: application/json' \
+	  -H 'authorization: Bearer dev-token' \
+	  -H 'x-actor-type: patient' \
+	  -H 'x-actor-id: demo-patient' \
+	  -H 'x-request-id: stack-smoke-req' \
+	  -H 'x-auth-scope: submit triage:submit' \
+	  -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}' || true
 
 engineer-loop:
 	@[ -n "$(ENGINEER)" ] || (echo "Usage: make engineer-loop ENGINEER=backend/engineer-01 TASK='substring' [SCHEMAS=1] [PY=1] [RUNTIME=1] [SMOKE=1]" && exit 1)

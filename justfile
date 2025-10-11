@@ -44,7 +44,14 @@ demo-docker:
     docker-compose up -d --build
     bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
     bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
-    curl -s -X POST http://localhost:3001/safety-check -H 'content-type: application/json' -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"I have chest pain","channel":"web"}'
+    curl -s -X POST http://localhost:3001/safety-check \
+      -H 'content-type: application/json' \
+      -H 'authorization: Bearer dev-token' \
+      -H 'x-actor-type: patient' \
+      -H 'x-actor-id: demo-patient' \
+      -H 'x-request-id: just-demo-docker' \
+      -H 'x-auth-scope: submit triage:submit' \
+      -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"I have chest pain","channel":"web"}'
 
 demo-local:
     npm -w @onecare/app-orchestrator run build --silent
@@ -52,6 +59,13 @@ demo-local:
     bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
     bash -c 'PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
     bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
-    curl -s -X POST http://localhost:3001/safety-check -H 'content-type: application/json' -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}'
+    curl -s -X POST http://localhost:3001/safety-check \
+      -H 'content-type: application/json' \
+      -H 'authorization: Bearer dev-token' \
+      -H 'x-actor-type: patient' \
+      -H 'x-actor-id: demo-patient' \
+      -H 'x-request-id: just-demo-local' \
+      -H 'x-auth-scope: submit triage:submit' \
+      -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}'
     bash -c 'kill $$(cat .pid_orch 2>/dev/null) 2>/dev/null || true; rm -f .pid_orch'
     bash -c 'kill $$(cat .pid_safety 2>/dev/null) 2>/dev/null || true; rm -f .pid_safety'

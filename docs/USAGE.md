@@ -120,6 +120,7 @@ HTTP Endpoints (Dev)
   - POST /safety-check → forwards to Safety Gate /analyze
     - Request (PortalSubmission): { "practiceId": "p1", "patient": { "id": "abc" }, "narrative": "...", "channel": "web" }
     - Response (SafetyDecision): { "outcome": "SAFE_TO_CONTINUE" | "DIVERTED", "reason"?: string }
+    - Required headers: `Authorization: Bearer <token>`, `X-Actor-Type`, `X-Actor-Id`, `X-Request-Id`; optional `X-Auth-Scope` (space-delimited). Correlation ID header remains optional.
     - Side-effect (dev): on SAFE_TO_CONTINUE, publishes triage.input event using EventEnvelope on in-memory bus
 
 - Safety Gate (FastAPI)
@@ -140,7 +141,7 @@ Schemas and Contracts
 Dev Bus Demo
 - Build orchestrator and triage: npm -w @onecare/app-orchestrator run build && npm -w @onecare/app-triage run build
 - Start triage dev worker: node apps/triage/dist/dev/worker.js (or npm -w @onecare/app-triage run dev:worker)
-- POST to /safety-check and observe triage worker log the triage.input receipt
+- POST to /safety-check with the zero-trust headers and observe triage worker log the triage.input receipt
 
 CI (GitHub Actions)
 - codegen job: generates TS + Python contracts and auto-commits changes on PRs from same repo

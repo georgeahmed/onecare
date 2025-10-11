@@ -36,9 +36,14 @@ Development
   - Tests: in `services-py`, install dev deps (see `pyproject.toml`) and run `pytest`
 - Docker
   - Local stack: docker-compose up --build
-  - Try Safety Gate via orchestrator:
+- Try Safety Gate via orchestrator:
     curl -s -X POST http://localhost:3001/safety-check \
       -H 'content-type: application/json' \
+      -H 'authorization: Bearer dev-token' \
+      -H 'x-actor-type: patient' \
+      -H 'x-actor-id: abc' \
+      -H 'x-request-id: demo-request-1' \
+      -H 'x-auth-scope: submit triage:submit' \
       -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}'
 
 Quick Demo

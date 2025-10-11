@@ -6,3 +6,4 @@ export * from './pharmacy';
 export * from './scribe';
 export * from './safety';
 export * from './portal';
+export * from './audit-event';

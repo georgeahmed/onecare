@@ -52,6 +52,11 @@ if [[ $DO_RUNTIME -eq 1 ]]; then
     echo "[loop] Smoke: POST /safety-check"
     curl -s -X POST http://localhost:3001/safety-check \
       -H 'content-type: application/json' \
+      -H 'authorization: Bearer loop-token' \
+      -H 'x-actor-type: system' \
+      -H 'x-actor-id: engineer-loop' \
+      -H "x-request-id: loop-${RANDOM}" \
+      -H 'x-auth-scope: submit triage:submit' \
       -d '{"practiceId":"p1","patient":{"id":"abc"},"narrative":"mild headache","channel":"web"}' || true
   fi
 fi
