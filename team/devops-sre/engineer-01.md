@@ -13,15 +13,15 @@ Start Here
 - Algorithm.md: 12) Security, Privacy, Audit & Observability
 - CI: .github/workflows/ci.yml; docker-compose.yml (NATS)
 
-Status: active
-Progress: 0%
+Status: in-progress
+Progress: 14%
 
 Dependencies
 - backend/engineer-02 (Bus impl)
 - integrations team (FHIR/GP Connect endpoints)
 
 Tasks
-- [ ] SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
+- [x] SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
 - [ ] SRE-01.2 — Secrets management baseline (templates, rotation policy), no secrets in git
 - [ ] SRE-01.3 — CI caching for Node/Python deps; add codegen checks in CI
 - [ ] SRE-01.4 — Resource limits/requests; container health/restart policy; ulimits where needed

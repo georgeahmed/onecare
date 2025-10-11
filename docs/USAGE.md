@@ -15,6 +15,12 @@ Environment Variables
 - PY_SAFETY_GATE_URL — Safety Gate base URL (default: http://localhost:8081)
 - PY_SCRIBE_URL — Scribe base URL (default: http://localhost:8082)
 - LOG_LEVEL — logging level (default: info)
+- BUS_IMPL — message bus implementation (`memory` for local dev, `nats` in docker)
+- NATS_URL — NATS connection URL(s) (comma-separated, e.g. nats://onecare:onecare-secret@nats:4222)
+- NATS_USER / NATS_PASS — credentials for protected NATS servers
+- NATS_CONNECT_TIMEOUT_MS — connect timeout (default: 2000ms)
+- NATS_MAX_RECONNECT_ATTEMPTS — reconnect attempts before marking not ready (default: 10)
+- NATS_RECONNECT_DELAY_MS — delay before retrying manual reconnects (default: 1500ms)
 
 Example: copy .env.example to .env and adjust as needed.
 
@@ -73,11 +79,13 @@ Run Locally (Without Docker)
 
 Health checks
 - Orchestrator: curl http://localhost:3001/health
+- Orchestrator readiness: curl http://localhost:3001/ready (503 when bus disconnected)
 - Safety Gate docs: curl http://localhost:8081/docs
 
 Run with Docker Compose
 - Start: docker-compose up --build
 - Stop: docker-compose down -v
+- Services: orchestrator waits for NATS to become healthy; readiness at /ready only turns green after the bus connects
 
 Exposed ports
 - Orchestrator: localhost:3001
@@ -104,6 +112,7 @@ Operator Runbooks
 HTTP Endpoints (Dev)
 - Orchestrator
   - GET /health → ok
+  - GET /ready → { status: 'ready' | 'not_ready', bus: 'connected' | 'disconnected' }
   - POST /safety-check → forwards to Safety Gate /analyze
     - Request (PortalSubmission): { "practiceId": "p1", "patient": { "id": "abc" }, "narrative": "...", "channel": "web" }
     - Response (SafetyDecision): { "outcome": "SAFE_TO_CONTINUE" | "DIVERTED", "reason"?: string }

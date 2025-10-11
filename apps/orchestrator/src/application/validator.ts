@@ -1,11 +1,11 @@
-import Ajv, { ErrorObject } from 'ajv';
+import Ajv2020, { type ErrorObject } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 // Import JSON Schema directly (tsconfig resolves JSON modules)
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import portalSubmissionSchema from '../../../../schemas/ingest/portal-submission.json';
 
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
 
 const validate = ajv.compile(portalSubmissionSchema);
@@ -19,4 +19,3 @@ export function validatePortalSubmission(obj: unknown): { ok: true } | { ok: fal
   })) || [];
   return { ok: false, errors: errs } as const;
 }
-

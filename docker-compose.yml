@@ -2,12 +2,28 @@ version: '3.9'
 services:
   nats:
     image: nats:2.10-alpine
-    command: ["-js"]
+    command:
+      [
+        "-js",
+        "-sd",
+        "/data/jetstream",
+        "-m",
+        "8222",
+        "-user",
+        "onecare",
+        "-pass",
+        "onecare-secret"
+      ]
+    environment:
+      - NATS_USER=onecare
+      - NATS_PASSWORD=onecare-secret
     ports:
       - "4222:4222"
       - "8222:8222"
+    volumes:
+      - nats-data:/data/jetstream
     healthcheck:
-      test: ["CMD", "nats", "--server", "nats://localhost:4222", "server", "check"]
+      test: ["CMD", "nats", "--server", "nats://onecare:onecare-secret@localhost:4222", "server", "check"]
       interval: 5s
       timeout: 2s
       retries: 10
@@ -19,12 +35,21 @@ services:
       - PORT=3001
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
       - PY_SCRIBE_URL=http://scribe:8082
+      - BUS_IMPL=nats
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+      - NATS_CONNECT_TIMEOUT_MS=2000
+      - NATS_MAX_RECONNECT_ATTEMPTS=10
     ports:
       - "3001:3001"
     depends_on:
-      - safety-gate
-      - scribe
-      - nats
+      safety-gate:
+        condition: service_started
+      scribe:
+        condition: service_started
+      nats:
+        condition: service_healthy
 
   safety-gate:
     build:
@@ -39,3 +64,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8082:8082"
+
+volumes:
+  nats-data:

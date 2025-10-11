@@ -4,16 +4,113 @@ import { errorEnvelope, mapErrorToStatus } from './application/error';
 import { callWithGuard, CircuitBreaker } from './adapters/common/guardrails';
 import { validatePortalSubmission } from './application/validator';
 import { createBusFromEnv } from '@onecare/bus';
+import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput } from '@onecare/events';
 import { logger, setCorrelationId } from '@onecare/observability';
 import { deriveIdempotencyKey, reserveIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
+import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 
-const bus = createBusFromEnv();
+let bus: MessageBus = createBusFromEnv();
 const safetyBreaker = new CircuitBreaker('safety_gate');
 const idemStore = new InMemoryIdempotencyStore();
+let busReady = process.env.BUS_IMPL !== 'nats';
+let natsConn: NatsConnection | null = null;
+let reconnectTimer: NodeJS.Timeout | undefined;
+
+function parseServers(raw: string | undefined): string[] {
+  if (!raw) return ['nats://localhost:4222'];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function buildConnectionOptions(): ConnectionOptions {
+  const servers = parseServers(process.env.NATS_URL);
+  const options: ConnectionOptions = { servers };
+  const user = process.env.NATS_USER;
+  const pass = process.env.NATS_PASS;
+  const token = process.env.NATS_TOKEN;
+  if (user) options.user = user;
+  if (pass) options.pass = pass;
+  if (token) options.token = token;
+  const timeoutMs = Number(process.env.NATS_CONNECT_TIMEOUT_MS ?? '');
+  if (!Number.isNaN(timeoutMs) && timeoutMs > 0) options.timeout = timeoutMs;
+  const maxReconnect = Number(process.env.NATS_MAX_RECONNECT_ATTEMPTS ?? '');
+  if (!Number.isNaN(maxReconnect) && maxReconnect >= 0) options.maxReconnectAttempts = maxReconnect;
+  const reconnectWait = Number(process.env.NATS_RECONNECT_TIME_WAIT_MS ?? '');
+  if (!Number.isNaN(reconnectWait) && reconnectWait > 0) options.reconnectTimeWait = reconnectWait;
+  return options;
+}
+
+function scheduleReconnect(delayMs?: number) {
+  if (reconnectTimer) return;
+  const fallbackDelay = Number(process.env.NATS_RECONNECT_DELAY_MS ?? '1500');
+  const delay = typeof delayMs === 'number' && delayMs > 0 ? delayMs : (!Number.isNaN(fallbackDelay) && fallbackDelay > 0 ? fallbackDelay : 1500);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    void establishBusConnection();
+  }, delay);
+}
+
+function monitorNats(conn: NatsConnection) {
+  (async () => {
+    for await (const status of conn.status()) {
+      switch (status.type) {
+        case 'disconnect':
+        case 'reconnecting':
+        case 'error':
+          busReady = false;
+          logger.warn('NATS connection disrupted', { event: status.type });
+          break;
+        case 'reconnect':
+        case 'connect':
+          busReady = true;
+          logger.info('NATS connection restored', { event: status.type });
+          break;
+        case 'close':
+          busReady = false;
+          logger.error('NATS connection closed');
+          scheduleReconnect();
+          return;
+      }
+    }
+  })().catch((err: unknown) => {
+    logger.error('NATS status monitoring failed', { err: err instanceof Error ? err.message : err });
+    busReady = false;
+    scheduleReconnect();
+  });
+}
+
+async function establishBusConnection(): Promise<void> {
+  if (process.env.BUS_IMPL !== 'nats') {
+    busReady = true;
+    return;
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+  try {
+    const options = buildConnectionOptions();
+    logger.info('Connecting to NATS', { servers: options.servers });
+    const conn = await connect(options);
+    natsConn = conn;
+    bus = createBusFromEnv({ nats: conn });
+    busReady = true;
+    monitorNats(conn);
+    logger.info('Connected to NATS', { servers: options.servers });
+  } catch (err: unknown) {
+    busReady = false;
+    logger.error('Failed to connect to NATS', { err: err instanceof Error ? err.message : err });
+    scheduleReconnect();
+  }
+}
+
+void establishBusConnection();
 
 function cidFromHeaders(headers: http.IncomingHttpHeaders): string {
   const h = headers['x-correlation-id'] || headers['X-Correlation-ID'];
@@ -35,7 +132,25 @@ const server = http.createServer((req, res) => {
     res.end('ok');
     return;
   }
+  if (req.url === '/ready') {
+    const body = {
+      status: busReady ? 'ready' : 'not_ready',
+      bus: busReady ? 'connected' : 'disconnected',
+    };
+    res.statusCode = busReady ? 200 : 503;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(body));
+    return;
+  }
   if (req.method === 'POST' && req.url === '/safety-check') {
+    if (!busReady) {
+      const env = errorEnvelope('upstream_unavailable', 'Event bus unavailable', undefined, corr);
+      res.statusCode = mapErrorToStatus(env.error.code);
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('x-correlation-id', corr);
+      res.end(JSON.stringify(env));
+      return;
+    }
     const bufs: Buffer[] = [];
     const maxBytes = Number(process.env.MAX_BODY_BYTES || 256 * 1024);
     let received = 0;
@@ -148,7 +263,19 @@ const server = http.createServer((req, res) => {
   res.end('orchestrator skeleton');
 });
 
-server.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`orchestrator listening on :${port}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`orchestrator listening on :${port}`);
+  });
+}
+
+export function setBusReadyForTest(ready: boolean): void {
+  busReady = ready;
+}
+
+export function getBusReadyForTest(): boolean {
+  return busReady;
+}
+
+export { server };
