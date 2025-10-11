@@ -20,3 +20,6 @@ Dev Endpoint (example)
       "channel": "web"
     }
   - On `SAFE_TO_CONTINUE`, publishes `triage.input` event via in-memory bus with `EventEnvelope`.
+
+Logging
+- Use `logger.info|warn|error` from `@onecare/observability`; it emits structured JSON with automatic `correlationId`. See `docs/observability/LOGGING_POLICY.md` for required fields and redaction rules.
