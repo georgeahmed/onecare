@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml (test stages)
 
 Status: in-progress
-Progress: 17%
+Progress: 33%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)
@@ -29,7 +29,7 @@ Platform Checklist (pre-flight)
 
 Tasks
 - [x] QA-01.1 — Schema validation harness for TS events (Ajv or similar)
-- [ ] QA-01.2 — Contract tests for triage.input, tasks.created, appointment.created
+- [x] QA-01.2 — Contract tests for triage.input, tasks.created, appointment.created
 - [ ] QA-01.3 — E2E test: portal submission → orchestrator → triage Task
 - [ ] QA-01.4 — E2E test: booking search/create write-back
 - [ ] QA-01.5 — OpenAPI validation for Python endpoints (expand CI script)

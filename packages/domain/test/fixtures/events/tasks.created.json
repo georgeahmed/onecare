@@ -1,0 +1,29 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-task-minimal",
+      "topic": "tasks.created",
+      "timestamp": "2025-01-03T08:00:00.000Z",
+      "correlationId": "corr-task-min",
+      "payload": {
+        "taskId": "task-001",
+        "patientId": "patient-001",
+        "priority": "STAT"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-task-maximal",
+      "topic": "tasks.created",
+      "timestamp": "2025-01-04T09:45:10.456Z",
+      "correlationId": "corr-task-max",
+      "payload": {
+        "taskId": "task-999",
+        "patientId": "patient-999",
+        "priority": "ROUTINE",
+        "owner": "care-team"
+      }
+    }
+  }
+}
