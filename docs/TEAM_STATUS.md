@@ -16,7 +16,7 @@ TEAM STATUS
 | team/frontend/engineer-01.md | planned | 0% | 0/7 | 0 | 2 |
 | team/frontend/engineer-02.md | planned | 0% | 0/5 | 0 | 2 |
 | team/frontend/engineer-03.md | planned | 0% | 0/5 | 0 | 2 |
-| team/integrations/engineer-01.md | in-progress | 43% | 3/7 | 0 | 3 |
+| team/integrations/engineer-01.md | in-progress | 57% | 4/7 | 0 | 3 |
 | team/integrations/engineer-02.md | active | 0% | 0/19 | 0 | 2 |
 | team/integrations/engineer-03.md | planned | 0% | 0/16 | 0 | 3 |
 | team/ml/engineer-01.md | planned | 0% | 0/8 | 0 | 3 |

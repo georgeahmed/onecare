@@ -18,7 +18,7 @@ Start Here
 - Security: packages/security/src/index.ts (authorize/consent)
 
 Status: in-progress
-Progress: 43%
+Progress: 57%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)
@@ -32,7 +32,7 @@ Tasks
 - [ ] IN-01.4 — Object Store linking for Binary/DocumentReference
 - [ ] IN-01.5 — OIDC (NHS Login) client + consent check stub API
 - [x] IN-01.6 — YAML config loader merge + floors/ceilings
-- [ ] IN-01.7 — FHIR profile validate() stub
+- [x] IN-01.7 — FHIR profile validate() stub
  - [ ] IN-01.8 — SSRF guardrails & TLS enforcement (FHIR/Object Store)
  - [ ] IN-01.9 — Circuit breaker + backoff policy (idempotent-safe retries)
  - [ ] IN-01.10 — Idempotent FHIR ops (ETag/If-Match, 409/412 handling)
