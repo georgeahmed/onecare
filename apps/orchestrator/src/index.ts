@@ -6,13 +6,18 @@ import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput } from '@onecare/events';
-import { logger, setCorrelationId } from '@onecare/observability';
+import { initTracing, logger, setCorrelationId } from '@onecare/observability';
 import { deriveIdempotencyKey, reserveIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
+
+void initTracing('orchestrator').catch((err: unknown) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.warn('failed to initialize tracing', { message });
+});
 
 let bus: MessageBus = getBus();
 markNatsBusConnected(bus, !wantsNats);
@@ -289,3 +294,7 @@ export function getBusReadyForTest(): boolean {
 }
 
 export { server };
+void initTracing('orchestrator').catch((err: unknown) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.warn('failed to initialize tracing', { message });
+});

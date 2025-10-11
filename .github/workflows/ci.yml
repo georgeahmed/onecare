@@ -137,6 +137,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  security-scans:
+    name: Security Scans
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Trivy filesystem scan (informational)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          format: table
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+        continue-on-error: true
+
+      - name: gitleaks secrets scan (informational)
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source . --redact
+        continue-on-error: true
+
       - name: Build scribe image
         uses: docker/build-push-action@v5
         with:

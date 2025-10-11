@@ -16,8 +16,8 @@ Start Here
 - docs/SECURITY.md, docs/SECURITY_AUTHZ.md (to be created/updated)
 - packages/observability/src/logger.ts (redaction)
 
-Status: in-progress
-Progress: 50%
+Status: stable
+Progress: 100%
 
 Dependencies
 - devops-sre/engineer-01..02 (CI, observability backends, secrets/TLS)
@@ -29,6 +29,6 @@ Platform Checklist (pre-flight)
 - AuthZ matrix documented and referenced by services; deny-by-default posture enforced.
 
 Tasks
-- [ ] SEC-01.1 — Logging redaction utility
+- [x] SEC-01.1 — Logging redaction utility
 - [x] SEC-01.2 — AuthZ matrix documentation (scopes/actions)
 
