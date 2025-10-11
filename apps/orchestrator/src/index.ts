@@ -3,7 +3,7 @@ import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus } from './application/error';
 import { callWithGuard, CircuitBreaker } from './adapters/common/guardrails';
 import { validatePortalSubmission } from './application/validator';
-import { createBusFromEnv } from '@onecare/bus';
+import { getBus } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput } from '@onecare/events';
 import { logger, setCorrelationId } from '@onecare/observability';
@@ -12,11 +12,12 @@ import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
+const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
 
-let bus: MessageBus = createBusFromEnv();
+let bus: MessageBus = getBus();
 const safetyBreaker = new CircuitBreaker('safety_gate');
 const idemStore = new InMemoryIdempotencyStore();
-let busReady = process.env.BUS_IMPL !== 'nats';
+let busReady = !wantsNats;
 let natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 
@@ -91,7 +92,7 @@ function monitorNats(conn: NatsConnection) {
 }
 
 async function establishBusConnection(): Promise<void> {
-  if (process.env.BUS_IMPL !== 'nats') {
+  if (!wantsNats) {
     busReady = true;
     return;
   }
@@ -104,7 +105,7 @@ async function establishBusConnection(): Promise<void> {
     logger.info('Connecting to NATS', { servers: options.servers });
     const conn = await connect(options);
     natsConn = conn;
-    bus = createBusFromEnv({ nats: conn });
+    bus = getBus();
     busReady = true;
     monitorNats(conn);
     logger.info('Connected to NATS', { servers: options.servers });

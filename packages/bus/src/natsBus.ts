@@ -3,8 +3,6 @@ import { MemoryBus } from './memoryBus';
 
 export interface NatsBusOptions {
   url?: string;
-  /** @deprecated placeholder for future connection injection */
-  nats?: unknown;
 }
 
 /**
@@ -32,9 +30,10 @@ export class NatsBus implements MessageBus {
   }
 }
 
-export function createBusFromEnv(opts?: NatsBusOptions): MessageBus {
-  if ((process.env.BUS_IMPL ?? '').toLowerCase() === 'nats') {
-    return new NatsBus(opts);
+export function getBus(): MessageBus {
+  const rawUrl = process.env.NATS_URL;
+  if (rawUrl && rawUrl.trim().length > 0) {
+    return new NatsBus({ url: rawUrl.trim() });
   }
   return new MemoryBus();
 }
