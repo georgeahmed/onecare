@@ -78,6 +78,7 @@ services:
       context: services-py
       dockerfile: safety_gate_service/Dockerfile
     restart: unless-stopped
+    # Resource budget tuned for FastAPI + lightweight model stub; adjust per docs/RUNBOOKS.md.
     ports:
       - "8081:8081"
     deploy:
@@ -94,6 +95,7 @@ services:
       context: services-py
       dockerfile: scribe_service/Dockerfile
     restart: unless-stopped
+    # Resource budget tuned for transcription stub workload.
     ports:
       - "8082:8082"
     deploy:
