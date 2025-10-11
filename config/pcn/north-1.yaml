@@ -1,0 +1,15 @@
+__meta:
+  ics: "north"
+  arrayMerge:
+    enhanced_access_windows: additive
+    red_flag_set: additive
+
+enhanced_access_windows:
+  - pcn_extended_hours
+red_flag_set:
+  - "difficulty speaking"
+fairness_floors:
+  telephone_min_fraction: 0.2
+safety_gate:
+  red_flag_threshold: 0.58
+  emergency_confidence: 0.7
