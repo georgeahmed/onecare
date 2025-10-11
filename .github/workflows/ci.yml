@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install
+        run: npm ci
+      - name: Codegen check (no write)
+        run: npm run codegen:check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test --silent
+      - name: Platform checklist check (backend)
+        run: bash scripts/ci/check_platform_checklists.sh
+      - name: Platform checklist check (integrations)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/integrations
+      - name: Platform checklist check (devops-sre)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/devops-sre
+      - name: Platform checklist check (ml)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/ml
+      - name: Platform checklist check (frontend)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/frontend
+      - name: Platform checklist check (data-engineering)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/data-engineering
+      - name: Platform checklist check (qa-automation)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/qa-automation

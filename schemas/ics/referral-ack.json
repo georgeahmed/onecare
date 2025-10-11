@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/ics/referral-ack.json",
+  "title": "IcsReferralAck",
+  "type": "object",
+  "properties": {
+    "referralId": { "type": "string" },
+    "accepted": { "type": "boolean" },
+    "note": { "type": ["string", "null"] }
+  },
+  "required": ["referralId", "accepted"],
+  "additionalProperties": false
+}
+

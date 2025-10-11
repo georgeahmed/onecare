@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/telephony/call-transcribed.json",
+  "title": "CallTranscribed",
+  "type": "object",
+  "properties": {
+    "callId": { "type": "string" },
+    "patientId": { "type": ["string", "null"] },
+    "transcript": { "type": "string" },
+    "lang": { "type": ["string", "null"] }
+  },
+  "required": ["callId", "transcript"],
+  "additionalProperties": false
+}
+

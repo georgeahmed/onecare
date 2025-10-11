@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/booking/booking-search-request.json",
+  "title": "BookingSearchRequest",
+  "type": "object",
+  "properties": {
+    "serviceType": { "type": "string" },
+    "windowStart": { "type": "string", "format": "date-time" },
+    "windowEnd": { "type": "string", "format": "date-time" },
+    "location": { "type": "string" }
+  },
+  "required": ["serviceType", "windowStart", "windowEnd"],
+  "additionalProperties": false
+}
+

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/safety/safety-decision.json",
+  "title": "SafetyDecision",
+  "type": "object",
+  "properties": {
+    "outcome": { "type": "string", "enum": ["DIVERTED", "SAFE_TO_CONTINUE"] },
+    "reason": { "type": ["string", "null"] }
+  },
+  "required": ["outcome"],
+  "additionalProperties": false
+}
+

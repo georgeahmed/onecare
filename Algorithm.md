@@ -433,12 +433,12 @@ SafeguardGate(doc, patient):
 
   high_risk_symptom_flag := false
   for s in symptom_list:
-    if SymptomLexicon.isRedFlag(s):
+    if SymptomLexicon.isRedFlag(s) && Confidence(nlp_results, s) >= Config.safety_gate.red_flag_threshold:
        high_risk_symptom_flag := true
        break
 
   # Optional redundancy: whole‑text emergency classifier
-  if TransformerModel.classify_emergency(doc) == true:
+  if TransformerModel.classify_emergency(doc) >= Config.safety_gate.emergency_confidence:
      high_risk_symptom_flag := true
 
   # 2) Patient context integration (demographics + history)
@@ -451,13 +451,24 @@ SafeguardGate(doc, patient):
   features["patient_age"]        := age
   features["patient_comorbid"]   := PatientVector.encode(comorbid)
   severity_prediction := AcuityModel.predict(features)              # "Emergency" | "Urgent" | "Routine"
+  # Optionally threshold on emergency probability if available
+  emer_prob := AcuityModel.predict_proba(features).emergency?
 
   # 4) Safety gate decision and diversion
-  if high_risk_symptom_flag || severity_prediction == "Emergency":
+  if high_risk_symptom_flag || severity_prediction == "Emergency" || (emer_prob && emer_prob >= Config.safety_gate.acuity_threshold_emergency):
      ShowUrgentAdvice(patient.locale)                               # localized 999/A&E or 111 guidance
      CreateSafetyAlert(doc, patient)
      EmitAudit("urgent_diversion", {doc, patient})
      return DIVERTED
+  # Enforce timeout/fallback behaviour
+  # If processing exceeded Config.safety_gate.timeout_ms and Config.safety_gate.fallback == "rules",
+  # apply a rules-based check using RED_FLAG_SET as a last resort.
+  if TimedOut():
+     if Config.safety_gate.fallback == "rules" && ContainsAny(doc.text, Config.red_flag_set):
+        ShowUrgentAdvice(patient.locale)
+        CreateSafetyAlert(doc, patient)
+        EmitAudit("urgent_diversion_fallback", {doc, patient})
+        return DIVERTED
   return SAFE_TO_CONTINUE
 ```
 
@@ -498,8 +509,8 @@ HandleCall(call):
 
   Publish("triage.input", doc)
   p := tentativePriorityFromEarlySignals(doc)
-  OfferCallbackWindowsFromConfig(patient, p, CALLBACK_WINDOWS_BY_PRIORITY)
-  if p == STAT and IntegrationAllowsEmergencyTransfer():
+  OfferCallbackWindowsFromConfig(patient, p, Config.callback_windows_by_priority)
+  if p == STAT and Config.telephony.emergency_transfer_enabled:
      OfferImmediateTransfer(to = LocalEmergencyNumber(patient.locale))
   return END
 ```
@@ -556,7 +567,7 @@ Triage(doc):
      EmitAudit("life_threat_override", doc)
      priorityLabel := "stat"
   else:
-     priorityLabel := MapPriority(score, PRIORITY_THRESHOLDS)   # STAT / URGENT / SOON / ROUTINE
+     priorityLabel := MapPriority(score, Config.priority_thresholds)   # STAT / URGENT / SOON / ROUTINE
 
   # Assign to best-suited clinician (skill match, continuity, workload balance)
   owner := SelectBestProvider(availableTeam, doc.patient, requiredSkills, priorityLabel)
@@ -604,7 +615,7 @@ AgeOpenTasks():
     acu := AcuityModel(t.doc, t.doc.patient)
     cpx := ComplexityModel(t.doc.patient)
     score' := w.acuity*acu + w.risk*wf + w.complexity*cpx + w.time*td - w.capacity*capGap
-    newLabel := MapPriority(score', PRIORITY_THRESHOLDS)
+    newLabel := MapPriority(score', Config.priority_thresholds)
     if Higher(newLabel, t.priority):
        UpdateTaskPriority(t, newLabel)
        NotifyOwnerQueue(t.owner, t, reason="SLA aging")
@@ -864,10 +875,12 @@ AmbientScribe(encounter):
 
   if clinician_action == "reject":
     # 5) Fallback: if LLM draft is declined or unavailable, use transcript or template‑based note
-    if draft_note == null or LLM_model.failed:
+    if Config.ambient_scribe.fallback_mode == "transcript" || draft_note == null || LLM_model.failed:
        draft_note := FormatUtils.transcriptToNote(transcript)
-    else:
+    else if Config.ambient_scribe.fallback_mode == "template":
        draft_note := TemplateUtils.blankSOAPNote(transcript)
+    else:
+       draft_note := FormatUtils.transcriptToNote(transcript)
     docRef.content := draft_note
     UI.displayDraftNote(draft_note, linkedTranscript=transcript)
     clinician_action := "approve"                               # assume manual completion

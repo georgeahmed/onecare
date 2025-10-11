@@ -1,0 +1,41 @@
+version: '3.9'
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "nats", "--server", "nats://localhost:4222", "server", "check"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+  orchestrator:
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+    environment:
+      - PORT=3001
+      - PY_SAFETY_GATE_URL=http://safety-gate:8081
+      - PY_SCRIBE_URL=http://scribe:8082
+    ports:
+      - "3001:3001"
+    depends_on:
+      - safety-gate
+      - scribe
+      - nats
+
+  safety-gate:
+    build:
+      context: services-py/safety_gate_service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+
+  scribe:
+    build:
+      context: services-py/scribe_service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"

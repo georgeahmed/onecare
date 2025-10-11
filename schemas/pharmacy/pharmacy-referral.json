@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/pharmacy/pharmacy-referral.json",
+  "title": "PharmacyReferral",
+  "type": "object",
+  "properties": {
+    "patientId": { "type": "string" },
+    "condition": { "type": "string" },
+    "pharmacyOrg": { "type": "string" },
+    "slot": {
+      "type": ["object", "null"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      },
+      "required": ["start", "end"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["patientId", "condition", "pharmacyOrg"],
+  "additionalProperties": false
+}
+

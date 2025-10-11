@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/config/orchestrator.json",
+  "title": "OrchestratorConfig",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "practiceId": { "type": "string" },
+    "safetyGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 50, "maximum": 10000, "default": 2000 },
+        "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5, "default": 2 },
+        "fallback": { "type": "string", "enum": ["rules", "none"], "default": "rules" },
+        "circuitBreaker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "failureThreshold": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+            "openMs": { "type": "integer", "minimum": 1000, "maximum": 600000, "default": 30000 }
+          },
+          "required": ["failureThreshold", "openMs"]
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bodyLimitBytes": { "type": "integer", "minimum": 1024, "maximum": 10485760, "default": 262144 },
+        "rateLimit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "perIpRps": { "type": "number", "minimum": 0, "maximum": 1000, "default": 5 },
+            "perIpBurst": { "type": "integer", "minimum": 0, "maximum": 500, "default": 20 },
+            "perTenantRps": { "type": "number", "minimum": 0, "maximum": 1000, "default": 5 },
+            "perTenantBurst": { "type": "integer", "minimum": 0, "maximum": 500, "default": 20 }
+          }
+        }
+      }
+    },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ttlSeconds": { "type": "integer", "minimum": 10, "maximum": 86400, "default": 600 }
+      }
+    },
+    "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "globalMax": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 200 },
+        "perState": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 10000 }
+        }
+      }
+    },
+    "outbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowlistHosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "redaction": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fields": { "type": "array", "items": { "type": "string" }, "default": [] }
+          }
+        }
+      }
+    }
+  },
+  "required": ["practiceId"]
+}
+

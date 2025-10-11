@@ -1,0 +1,22 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/statekit" },
+    { "path": "packages/events" },
+    { "path": "packages/domain" },
+    { "path": "packages/config" },
+    { "path": "packages/ports" },
+    { "path": "packages/bus" },
+    { "path": "packages/security" },
+    { "path": "packages/observability" },
+    { "path": "apps/orchestrator" },
+    { "path": "apps/triage" },
+    { "path": "apps/booking" },
+    { "path": "apps/pharmacy-router" },
+    { "path": "apps/capacity" },
+    { "path": "apps/access-gate" },
+    { "path": "apps/telephony" },
+    { "path": "apps/ics-hub" },
+    { "path": "apps/scribe" }
+  ]
+}

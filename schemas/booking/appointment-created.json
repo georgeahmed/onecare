@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/booking/appointment-created.json",
+  "title": "AppointmentCreated",
+  "type": "object",
+  "properties": {
+    "appointmentId": { "type": "string" },
+    "patientId": { "type": "string" },
+    "start": { "type": "string", "format": "date-time" },
+    "end": { "type": "string", "format": "date-time" },
+    "location": { "type": ["string", "null"] }
+  },
+  "required": ["appointmentId", "patientId", "start", "end"],
+  "additionalProperties": false
+}
+

@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Husky pre-commit hook: run local CI and sync team status
+
+echo "[husky] Running local CI checks"
+make -s ci-local || exit 1
+
+echo "[husky] Syncing team status"
+node scripts/team/status.js --write || true
+

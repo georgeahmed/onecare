@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/portal/notify.json",
+  "title": "PortalNotify",
+  "description": "Notification of portal state change for a practice",
+  "type": "object",
+  "properties": {
+    "practiceId": { "type": "string" },
+    "state": { "type": "string", "enum": ["UP", "DOWN", "OOH"] },
+    "reasonCode": { "type": "string", "description": "Machine-readable reason (e.g., CORE_HOURS, MAINTENANCE, MANUAL_OVERRIDE)" },
+    "at": { "type": "string", "format": "date-time" },
+    "message": { "type": "string", "description": "Optional human-readable message" }
+  },
+  "required": ["practiceId", "state", "at"],
+  "additionalProperties": false
+}
+

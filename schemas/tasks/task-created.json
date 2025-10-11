@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/tasks/task-created.json",
+  "title": "TaskCreated",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string" },
+    "patientId": { "type": "string" },
+    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "owner": { "type": "string" }
+  },
+  "required": ["taskId", "patientId", "priority"],
+  "additionalProperties": false
+}
+

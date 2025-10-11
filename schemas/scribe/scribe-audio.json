@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/scribe/scribe-audio.json",
+  "title": "ScribeAudio",
+  "type": "object",
+  "properties": {
+    "encounterId": { "type": "string" },
+    "audioUrl": { "type": "string" },
+    "contentType": { "type": "string" },
+    "diarization": { "type": "boolean" }
+  },
+  "required": ["encounterId", "audioUrl", "contentType"],
+  "additionalProperties": false
+}
+

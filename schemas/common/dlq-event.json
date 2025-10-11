@@ -1,0 +1,20 @@
+{
+  "$id": "https://onecare.example/schemas/common/dlq-event.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DlqEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "originalTopic": { "type": "string" },
+    "correlationId": { "type": "string" },
+    "errorCode": { "type": "string" },
+    "errorMessage": { "type": "string" },
+    "payloadRef": {
+      "description": "Opaque reference or small safe context; avoid PHI.",
+      "type": ["object", "string" ]
+    },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "required": ["originalTopic", "ts" ]
+}
+
