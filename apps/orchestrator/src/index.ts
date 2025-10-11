@@ -107,7 +107,7 @@ async function establishBusConnection(): Promise<void> {
     logger.info('Connecting to NATS', { servers: options.servers });
     const conn = await connect(options);
     natsConn = conn;
-    bus = getBus();
+    bus = getBus({ connection: conn });
     markNatsBusConnected(bus, true);
     busReady = true;
     monitorNats(conn);

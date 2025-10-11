@@ -23,7 +23,7 @@ Contracts & Validation
 - ADR: docs/adr/2025-10-11-bus-injection.md
 
 Status: in-progress
-Progress: 13%
+Progress: 17%
 
 Dependencies
 - devops-sre/engineer-01 (Broker infra)
@@ -42,7 +42,7 @@ Tasks
 - [x] BE-02.1 — Define NATS adapter skeleton
 - [x] BE-02.2 — Adapter factory + injection in orchestrator
 - [x] BE-02.3 — Basic healthcheck/metrics hooks
-- [ ] BE-02.4a — NATS connection + durable subs + ack deadlines
+- [x] BE-02.4a — NATS connection + durable subs + ack deadlines
 - [ ] BE-02.4b — Basic DLQ subject + schema (DlqEvent)
 - [ ] BE-02.5a — Connection resilience (reconnect jitter, backoff, status events)
 - [ ] BE-02.5b — Metrics for reconnects, drops, and lag
