@@ -13,15 +13,15 @@ Start Here
 - Algorithm.md: 13) MLOps & Governance
 - CI: .github/workflows/ci.yml; Dockerfiles under services-py/*
 
-Status: planned
-Progress: 0%
+Status: in-progress
+Progress: 14%
 
 Dependencies
 - ml team (services)
 - devops-sre team (infra)
 
 Tasks
-- [ ] MO-01.1 — Add health/readiness endpoints to Python services (FastAPI /health, /ready)
+- [x] MO-01.1 — Add health/readiness endpoints to Python services (FastAPI /health, /ready)
 - [ ] MO-01.2 — Containerize safety_gate_service and scribe_service with resource limits
 - [ ] MO-01.3 — Add OpenTelemetry middleware/hooks (trace + metrics) to both services
 - [ ] MO-01.4 — CI step to build and push Docker images (tags: git sha, semver)
