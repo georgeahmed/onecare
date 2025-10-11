@@ -3,6 +3,8 @@ import type { AddressInfo } from 'node:net';
 import type { TypedEnvelope, TriageInput, SafetyDecision } from '@onecare/events';
 import { Topics } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
+import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
+import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -26,6 +28,17 @@ const submission = {
 let server: import('http').Server;
 let setBusReadyForTest: (ready: boolean) => void;
 let bus: MessageBus;
+let auditEvents: LedgerAuditEvent[];
+
+function installAuditStub(): void {
+  auditEvents = [];
+  const stub: AuditLedger = {
+    async write(event) {
+      auditEvents.push(event);
+    },
+  };
+  setAuditLedger(stub);
+}
 
 function baseUrl(): string {
   const address = server.address();
@@ -62,10 +75,12 @@ describe('triage input publishing', () => {
 
   beforeEach(() => {
     setBusReadyForTest(true);
+    installAuditStub();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetAuditLedger();
   });
 
   it('publishes triage.input when safety gate outcome is SAFE_TO_CONTINUE', async () => {
@@ -99,5 +114,10 @@ describe('triage input publishing', () => {
     expect(envelope.payload.patientId).toBe(submission.patient.id);
     expect(envelope.payload.narrative).toBe(submission.narrative);
     expect(envelope.correlationId).toBeDefined();
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]?.type).toBe('orchestrator.access.success');
+    const payload = auditEvents[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.patientId).toBe(submission.patient.id);
+    expect(payload?.outcome).toBe('SAFE_TO_CONTINUE');
   });
 });

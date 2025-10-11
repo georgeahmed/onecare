@@ -13,6 +13,7 @@ import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
 import { getSecurityServices } from './adapters/security';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
+import { createAuditEvent, getAuditLedger } from './adapters/audit';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
@@ -48,6 +49,7 @@ let natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
+const AUDIT_SUCCESS_TYPE = 'orchestrator.access.success';
 
 function parseServers(raw: string | undefined): string[] {
   if (!raw) return ['nats://localhost:4222'];
@@ -215,6 +217,19 @@ async function emitAuditEvent(
   }
 }
 
+function recordAudit(type: string, correlationId: string | undefined, payload?: Record<string, unknown>): void {
+  const ledgerEvent = createAuditEvent(type, { correlationId, payload });
+  void getAuditLedger()
+    .write(ledgerEvent)
+    .catch((err) => {
+      logger.warn('audit ledger write failed', {
+        type,
+        correlationId,
+        err: err instanceof Error ? err.message : err,
+      });
+    });
+}
+
 const server = http.createServer((req, res) => {
   if (!req.url) {
     res.statusCode = 400;
@@ -325,17 +340,19 @@ const server = http.createServer((req, res) => {
             actorType: authContext?.actor?.type,
             actorId: authContext?.actor?.id,
           });
+          const auditDetails = {
+            reason,
+            requestId,
+            patientId: submission.patient?.id,
+            scope: authContext?.scope,
+            ...extraDetails,
+          } satisfies Record<string, unknown>;
+          recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
           await emitAuditEvent(
             AUDIT_DENIED_TYPE,
             corr,
             authContext?.actor ?? null,
-            {
-              reason,
-              requestId,
-              patientId: submission.patient?.id,
-              scope: authContext?.scope,
-              ...extraDetails,
-            }
+            auditDetails
           );
           const env = errorEnvelope('forbidden', 'Access denied', undefined, corr);
           res.statusCode = mapErrorToStatus(env.error.code);
@@ -391,6 +408,14 @@ const server = http.createServer((req, res) => {
           const env = createEnvelope(Topics.triage.input, tri, corr);
           await bus.publish(env.topic, env);
           logger.info('published triage.input', { topic: env.topic, correlationId: corr });
+          const successAuditDetails = {
+            outcome: decision.outcome,
+            patientId: tri.patientId,
+            practiceId: practiceConfig.practiceId,
+            topic: env.topic,
+          } satisfies Record<string, unknown>;
+          recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
+          await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
         } else {
           logger.info('safety diverted submission', { correlationId: corr });
         }

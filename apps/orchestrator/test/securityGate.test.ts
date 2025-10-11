@@ -3,7 +3,9 @@ import type { AddressInfo } from 'node:net';
 import { Topics, type AuditEvent, type TypedEnvelope } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import type { SecurityServices } from '@onecare/security';
+import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
 import { resetSecurityServices, setSecurityServices } from '../src/adapters/security';
+import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
 
 const submission = {
   practiceId: 'p1',
@@ -15,6 +17,17 @@ const submission = {
 let server: import('http').Server;
 let setBusReadyForTest: (ready: boolean) => void;
 let bus: MessageBus;
+let auditEvents: LedgerAuditEvent[];
+
+function installAuditStub(): void {
+  auditEvents = [];
+  const stub: AuditLedger = {
+    async write(event) {
+      auditEvents.push(event);
+    },
+  };
+  setAuditLedger(stub);
+}
 
 function baseUrl(): string {
   const address = server.address();
@@ -52,10 +65,12 @@ describe('zero-trust gate', () => {
   beforeEach(() => {
     setBusReadyForTest(true);
     resetSecurityServices();
+    installAuditStub();
   });
 
   afterEach(() => {
     resetSecurityServices();
+    resetAuditLedger();
     vi.restoreAllMocks();
   });
 
@@ -83,6 +98,9 @@ describe('zero-trust gate', () => {
     expect(json?.error?.code).toBe('forbidden');
     expect(events).toHaveLength(1);
     expect(events[0]?.payload?.details?.reason).toBe('signature_invalid');
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]?.type).toBe('orchestrator.access.denied');
+    expect((auditEvents[0]?.payload as Record<string, unknown>)?.reason).toBe('signature_invalid');
   });
 
   it('denies when authorization check fails', async () => {
@@ -115,6 +133,9 @@ describe('zero-trust gate', () => {
     expect(body?.error?.code).toBe('forbidden');
     expect(events).toHaveLength(1);
     expect(events[0]?.payload?.details?.reason).toBe('not_authorized');
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]?.type).toBe('orchestrator.access.denied');
+    expect((auditEvents[0]?.payload as Record<string, unknown>)?.reason).toBe('not_authorized');
   });
 
   it('denies when consent is not present', async () => {
@@ -147,5 +168,8 @@ describe('zero-trust gate', () => {
     expect(body?.error?.code).toBe('forbidden');
     expect(events).toHaveLength(1);
     expect(events[0]?.payload?.details?.reason).toBe('consent_denied');
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]?.type).toBe('orchestrator.access.denied');
+    expect((auditEvents[0]?.payload as Record<string, unknown>)?.reason).toBe('consent_denied');
   });
 });
