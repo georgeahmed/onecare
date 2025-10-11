@@ -31,9 +31,8 @@ describe('RedisIdempotencyStore', () => {
     const key = 'abc';
     const ok1 = await store.reserve(key, 60);
     const ok2 = await store.reserve(key, 60);
-    expect(ok1).toBe(true);
-    expect(ok2).toBe(false);
+    expect(ok1).toBe('reserved');
+    expect(ok2).toBe('exists');
     expect(await store.exists(key)).toBe(true);
   });
 });
-

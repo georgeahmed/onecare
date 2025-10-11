@@ -20,10 +20,9 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     await this.client.set(this.k(key), '1', 'EX', 'EX', ttlSeconds);
   }
 
-  async reserve(key: string, ttlSeconds: number): Promise<boolean> {
+  async reserve(key: string, ttlSeconds: number): Promise<'reserved' | 'exists'> {
     // Atomic reserve using SET NX EX ttl
     const res = await this.client.set(this.k(key), '1', 'NX', 'EX', ttlSeconds);
-    return res === 'OK';
+    return res === 'OK' ? 'reserved' : 'exists';
   }
 }
-

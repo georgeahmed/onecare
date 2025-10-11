@@ -32,7 +32,7 @@ Contracts & Validation
 - Release: docs/RELEASE_READINESS.md
 
 Status: in-progress
-Progress: 15%
+Progress: 18%
 
 Dependencies
 - integrations/engineer-01 (FHIR repo, Object Store, Consent)
@@ -57,7 +57,7 @@ Tasks
 - [ ] BE-01.5b — Status mapping + HTTP handler wrapper
 - [ ] BE-01.5c — Logging redaction + error metrics
 - [ ] BE-01.5d — Tests + docs for error taxonomy
-- [ ] BE-01.6a — IdempotencyStore interface (reserve/commit/release)
+- [x] BE-01.6a — IdempotencyStore interface (reserve/commit/release)
 - [ ] BE-01.6b — Key/header derivation + TTL config
 - [ ] BE-01.6c — 409 path + metrics/logs (race-safe)
 - [ ] BE-01.6d — Concurrency tests (sequential + parallel)

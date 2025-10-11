@@ -11,7 +11,8 @@ export function deriveIdempotencyKey(
   const safe = {
     practiceId: submission.practiceId,
     patientId: submission.patient?.id,
-    narrative: submission.narrative?.slice(0, 64), // avoid PHI-heavy keys
+    narrativeLength: submission.narrative?.length ?? 0,
+    attachmentsCount: Array.isArray(submission.attachments) ? submission.attachments.length : 0,
     channel: submission.channel,
   };
   const h = createHash('sha256');
@@ -31,10 +32,8 @@ export async function reserveIdempotency(
   opts: ReserveOptions
 ): Promise<'reserved' | 'exists'> {
   // Prefer atomic reserve if supported by the store implementation
-  const anyStore = store as IdempotencyStore & { reserve?: (k: string, ttl: number) => Promise<boolean> };
-  if (typeof anyStore.reserve === 'function') {
-    const ok = await anyStore.reserve(key, opts.ttlSeconds);
-    return ok ? 'reserved' : 'exists';
+  if (typeof store.reserve === 'function') {
+    return store.reserve(key, opts.ttlSeconds);
   }
   // Otherwise, use single-flight lock to reduce race window
   if (await store.exists(key)) return 'exists';
@@ -67,6 +66,12 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
   async put(key: string, ttlSeconds: number): Promise<void> {
     const exp = Date.now() + ttlSeconds * 1000;
     this.map.set(key, exp);
+  }
+  async reserve(key: string, ttlSeconds: number): Promise<'reserved' | 'exists'> {
+    this.gc();
+    if (this.map.has(key)) return 'exists';
+    this.map.set(key, Date.now() + ttlSeconds * 1000);
+    return 'reserved';
   }
   private gc() {
     const now = Date.now();

@@ -10,10 +10,15 @@ export interface SafetyGateConfig {
   fallback?: 'rules' | 'none';
 }
 
+export interface IdempotencyConfig {
+  ttlSeconds: number;
+}
+
 export interface ResolvedConfig {
   practiceId: string;
   core_hours?: CoreHours;
   safety_gate?: SafetyGateConfig;
+  idempotency?: IdempotencyConfig;
   [key: string]: unknown;
 }
 
@@ -39,6 +44,10 @@ const SAFETY_GATE_EMERGENCY_DEFAULT = 0.7;
 const SAFETY_GATE_EMERGENCY_MIN = 0.6;
 const SAFETY_GATE_EMERGENCY_MAX = 0.95;
 const SAFETY_GATE_FALLBACK_DEFAULT: SafetyGateConfig['fallback'] = 'rules';
+
+const IDEMPOTENCY_TTL_DEFAULT = 600;
+const IDEMPOTENCY_TTL_MIN = 30;
+const IDEMPOTENCY_TTL_MAX = 86_400;
 
 export function mergeConfig<T extends Record<string, unknown>>(base: T, override: Partial<T>): T {
   const out: Record<string, unknown> = { ...base };
@@ -104,6 +113,24 @@ function applySafetyGatePolicies(raw?: SafetyGateConfig): SafetyGateConfig {
   return working;
 }
 
+function parseTtl(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const num = Number(value.trim());
+    if (Number.isFinite(num)) return num;
+  }
+  return undefined;
+}
+
+function applyIdempotencyConfig(raw: unknown): IdempotencyConfig {
+  const envOverride = parseTtl(process.env.IDEMPOTENCY_TTL_SECONDS ?? process.env.IDEMPOTENCY_TTL_SEC);
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined;
+  const configValue = source ? parseTtl(source.ttlSeconds ?? source.ttl_seconds) : undefined;
+  let ttl = envOverride ?? configValue ?? IDEMPOTENCY_TTL_DEFAULT;
+  ttl = clamp(ttl, IDEMPOTENCY_TTL_MIN, IDEMPOTENCY_TTL_MAX);
+  return { ttlSeconds: ttl };
+}
+
 export function loadConfig(practiceId: string, options?: LoadConfigOptions): ResolvedConfig {
   const configRoot = resolveConfigRoot(options?.configRoot);
   const defaultsPath = join(configRoot, DEFAULT_CONFIG_FILENAME);
@@ -113,5 +140,6 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   const resolved: ResolvedConfig = mergeConfig({ practiceId }, merged as Partial<ResolvedConfig>);
   resolved.practiceId = practiceId;
   resolved.safety_gate = applySafetyGatePolicies(resolved.safety_gate);
+  resolved.idempotency = applyIdempotencyConfig((merged as Record<string, unknown>).idempotency ?? resolved.idempotency);
   return resolved;
 }

@@ -113,3 +113,6 @@ observability:
     fairness_monitor:
       telephone_fraction_floor: 0.15
       check_window: "P1D"
+
+idempotency:
+  ttl_seconds: 600

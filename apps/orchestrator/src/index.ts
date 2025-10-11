@@ -14,6 +14,7 @@ import type { AuthContext } from '@onecare/security';
 import { getSecurityServices } from './adapters/security';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
+import type { IdempotencyStore } from '@onecare/ports';
 
 const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
@@ -22,6 +23,8 @@ const practiceConfig: ResolvedConfig = loadConfig(practiceId);
 const safetyGateSettings = practiceConfig.safety_gate ?? {};
 const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
 const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
+const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
+const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
 
 logger.info('practice config applied', {
   practiceId: practiceConfig.practiceId,
@@ -33,6 +36,9 @@ logger.info('practice config applied', {
   },
   fairnessFloors: practiceConfig.fairness_floors,
   holdBackFraction: practiceConfig.hold_back_fraction,
+  idempotency: {
+    ttlSeconds: idempotencyTtlSeconds,
+  },
 });
 
 void initTracing('orchestrator').catch((err: unknown) => {
@@ -43,7 +49,7 @@ void initTracing('orchestrator').catch((err: unknown) => {
 let bus: MessageBus = getBus();
 markNatsBusConnected(bus, !wantsNats);
 const safetyBreaker = new CircuitBreaker('safety_gate');
-const idemStore = new InMemoryIdempotencyStore();
+let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
 let natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
@@ -197,11 +203,12 @@ function respondError(
   respondJson(res, mapErrorToStatus(code), envelope, correlationId, setOutcome, code);
 }
 
-function recordHttpMetrics(route: string, outcome: RequestOutcome, durationMs: number): void {
+function recordHttpMetrics(route: string, outcome: RequestOutcome, durationMs: number, correlationId: string | undefined): void {
   logger.info('metric.http.request', {
     route,
     outcome,
     durationMs: Number(durationMs.toFixed(2)),
+    correlationId,
   });
 }
 
@@ -236,7 +243,7 @@ function handleHttp(
 
   const finalize = () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-    recordHttpMetrics(route, outcome, durationMs);
+    recordHttpMetrics(route, outcome, durationMs, correlationId);
   };
 
   handler(setOutcome)
@@ -375,6 +382,27 @@ function recordAudit(type: string, correlationId: string | undefined, payload?: 
     });
 }
 
+function recordIdempotencyHit(key: string, correlationId: string | undefined): void {
+  logger.info('metric.idempotency.hit', {
+    key,
+    correlationId,
+  });
+}
+
+function recordIdempotencyMiss(key: string, correlationId: string | undefined): void {
+  logger.info('metric.idempotency.miss', {
+    key,
+    correlationId,
+  });
+}
+
+function recordIdempotencyTtl(ttlSeconds: number, correlationId: string | undefined): void {
+  logger.info('metric.idempotency.ttl', {
+    ttlSeconds,
+    correlationId,
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (!req.url) {
     res.statusCode = 400;
@@ -488,13 +516,21 @@ const server = http.createServer((req, res) => {
       const explicitKeyHeader = req.headers['x-idempotency-key'];
       const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
       const idemKey = deriveIdempotencyKey(submission, actor.id, explicitKey);
-      const idemResult = await reserveIdempotency(idemStore, idemKey, {
-        ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SEC || 600),
+      res.setHeader('x-idempotency-key', idemKey);
+      logger.info('idempotency.key.derived', { key: idemKey, correlationId: corr });
+
+      const idemResult = await reserveIdempotency(idempotencyStore, idemKey, {
+        ttlSeconds: idempotencyTtlSeconds,
       });
       if (idemResult === 'exists') {
+        recordIdempotencyHit(idemKey, corr);
+        logger.info('idempotency.hit', { key: idemKey, correlationId: corr });
         respondError(res, 'conflict', 'Duplicate request', corr, setOutcome, { idempotencyKey: idemKey });
         return;
       }
+      recordIdempotencyMiss(idemKey, corr);
+      recordIdempotencyTtl(idempotencyTtlSeconds, corr);
+      logger.info('idempotency.reserved', { key: idemKey, correlationId: corr, ttlSeconds: idempotencyTtlSeconds });
 
       const decision = await callWithGuard(
         'safety_gate',
@@ -553,6 +589,14 @@ export function getPracticeConfig(): ResolvedConfig {
 
 export function getSafetyGateSettings(): { timeoutMs: number; fallback: 'rules' | 'none' } {
   return { timeoutMs: safetyGateTimeoutMs, fallback: safetyGateFallbackMode };
+}
+
+export function setIdempotencyStoreForTest(store: IdempotencyStore): void {
+  idempotencyStore = store;
+}
+
+export function resetIdempotencyStoreForTest(): void {
+  idempotencyStore = new InMemoryIdempotencyStore();
 }
 
 export { server };
