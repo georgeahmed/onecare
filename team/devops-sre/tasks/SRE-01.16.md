@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.15.md) | [Next](SRE-01.17.md)
+
 Task: SRE-01.16 — Kubernetes baseline (manifests/Helm: resources, probes, HPA, NetworkPolicies)
 
 Context

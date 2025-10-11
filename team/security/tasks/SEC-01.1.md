@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | Prev: — | [Next](SEC-01.2.md)
+
 Task: SEC-01.1 — Logging redaction utility
 
 Context
@@ -18,5 +20,4 @@ Validate
 - npm run test
 
 Status Update
-- make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SEC-01.1' && make team-status-write
-
+- make engineer-done ENGINEER=security/engineer-01 TASK='SEC-01.1' && make team-status-write

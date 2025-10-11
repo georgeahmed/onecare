@@ -48,3 +48,5 @@ Tasks
  - [ ] QA-01.18 — Contract drift monitor (schema/codegen diff gates; snapshots)
  - [ ] QA-01.19 — Accessibility checks in E2E (axe) for critical flows
  - [ ] QA-01.20 — QA runbooks and coverage matrix (systems under test, scenarios)
+ - [ ] QA-01.21 — DLQ reprocessing E2E (replay → success; idempotency; correlation)
+ - [ ] QA-01.22 — System chaos drills (bus down, FHIR 5xx, CB open) with SLO checks

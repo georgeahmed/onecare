@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.16.md) | [Next](SRE-01.2.md)
+
 Task: SRE-01.17 — CI/CD pipeline (build→test→codegen:check→SBOM→scan→docker push→staging canary→prod promote/rollback)
 
 Context

@@ -61,6 +61,8 @@ SRE (01–02)
 - [ ] Log format policy; correlation IDs; redaction utility (SRE‑02.2, SEC‑01.1)
 - [ ] SLOs defined and alert templates in place (SRE‑02.3, SRE‑02.4)
 - [ ] Node OTel init + correlation context (SRE‑02.5)
+ - [ ] Supply chain: SBOM + vulnerability scans in CI with policy (SRE‑01.8)
+ - [ ] Data retention/minimization policies; purge tooling for DLQ/logs (SRE‑01.9)
 
 QA Automation (01–02)
 - [ ] Schema harness (Ajv) with compiled validators; positive/negative sets (QA‑01.1)
@@ -68,9 +70,10 @@ QA Automation (01–02)
 - [ ] E2E: portal → orchestrator → triage task with correlation (QA‑01.3)
 - [ ] OpenAPI validation for Python services (QA‑01.5)
 - [ ] Additional suites (pharmacy, ICS) (QA‑01.6)
+ - [ ] DLQ reprocessing E2E: replay → success w/ idempotency and correlation (QA‑01.21)
+ - [ ] System chaos drills: bus down, FHIR 5xx, CB open; SLO checks (QA‑01.22)
 
 Decision & Sign‑Off
 - [ ] All owner sections green
 - [ ] System demo performed (success + induced failure cases)
 - [ ] Rollback plan validated and rehearsed
-

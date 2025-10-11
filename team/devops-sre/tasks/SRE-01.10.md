@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.1.md) | [Next](SRE-01.11.md)
+
 Task: SRE-01.10 — Observability stack: OTEL, Prometheus/Grafana, logs (correlationId)
 
 Context

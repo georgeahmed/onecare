@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.11.md) | [Next](SRE-01.13.md)
+
 Task: SRE-01.12 — Secrets manager integration (Vault/KMS), sealed‑secrets, rotation runbook
 
 Context

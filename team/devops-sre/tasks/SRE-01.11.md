@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.10.md) | [Next](SRE-01.12.md)
+
 Task: SRE-01.11 — SLOs & alerting (latency p95, error rates, DLQ growth, readiness flaps)
 
 Context

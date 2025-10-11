@@ -1,23 +1,24 @@
-Task: SRE-01.8 — Kubernetes baseline (manifests/Helm: resources, probes, HPA, NetworkPolicies)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.7.md) | [Next](SRE-01.9.md)
+
+Task: SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI
 
 Context
-- Provide k8s manifests or a Helm chart with resource requests/limits, liveness/readiness probes, HPAs, and NetworkPolicies for services.
+- Generate Software Bills of Materials (SBOM) and perform vulnerability scans in CI with enforceable thresholds and exceptions policy.
 
 Files
-- infra/k8s/* or charts/onecare/* (new)
-- docs/USAGE.md (k8s deploy notes)
+- .github/workflows/ci.yml
+- docs/SECURITY.md (update with policy and exception process)
 
 Steps
-1) Author Deployment/Service/ConfigMap manifests for orchestrator, triage, booking, pharmacy, and OTEL collector with resource requests/limits and probes.
-2) Add HorizontalPodAutoscaler for CPU and optional custom metrics; configure min/max replicas.
-3) Define NetworkPolicies to restrict egress (allowlist) and ingress between namespaces; block default public egress except allowlisted endpoints.
-4) Provide values for TLS secrets and external endpoints; document apply steps.
+1) Add SBOM generation (e.g., Syft/CycloneDX) for Node and Python dependencies; archive as CI artifacts.
+2) Add vulnerability scanning (e.g., Grype, npm audit, pip-audit) with severity thresholds; fail PRs on criticals unless approved exceptions exist.
+3) Document exception request/approval process and timelines in docs/SECURITY.md; ensure scans redact secrets and avoid PHI.
 
 Acceptance Criteria
-- Baseline manifests compile; deploy to a local k8s (kind/minikube) succeeds; pods become Ready; policies applied.
+- CI produces SBOM artifacts per build; vulnerability scan step enforces thresholds; exceptions documented.
 
 Validate
-- kubectl apply on kind; kubectl get pods; curl readiness endpoints.
+- Open a PR with a known vulnerable dependency; observe CI failure; add a justified exception and observe pass (if policy allows).
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.8' && make team-status-write

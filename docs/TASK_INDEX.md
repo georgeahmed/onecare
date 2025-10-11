@@ -31,14 +31,6 @@ Backend
   - [BE-01.20](../team/backend/tasks/BE-01.20.md)
   - [BE-01.21](../team/backend/tasks/BE-01.21.md)
   - [BE-01.22](../team/backend/tasks/BE-01.22.md)
-  - [BE-01.15](../team/backend/tasks/BE-01.15.md)
-  - [BE-01.16](../team/backend/tasks/BE-01.16.md)
-  - [BE-01.17](../team/backend/tasks/BE-01.17.md)
-  - [BE-01.18](../team/backend/tasks/BE-01.18.md)
-  - [BE-01.19](../team/backend/tasks/BE-01.19.md)
-  - [BE-01.20](../team/backend/tasks/BE-01.20.md)
-  - [BE-01.21](../team/backend/tasks/BE-01.21.md)
-  - [BE-01.22](../team/backend/tasks/BE-01.22.md)
 - Bus
   - [BE-02.1](../team/backend/tasks/BE-02.1.md)
   - [BE-02.2](../team/backend/tasks/BE-02.2.md)
@@ -80,17 +72,6 @@ Backend
   - [BE-04.1](../team/backend/tasks/BE-04.1.md)
   - [BE-04.2](../team/backend/tasks/BE-04.2.md)
   - [BE-04.3](../team/backend/tasks/BE-04.3.md)
-  - [BE-04.4](../team/backend/tasks/BE-04.4.md)
-  - [BE-04.5](../team/backend/tasks/BE-04.5.md)
-  - [BE-04.6](../team/backend/tasks/BE-04.6.md)
-  - [BE-04.7](../team/backend/tasks/BE-04.7.md)
-  - [BE-04.8](../team/backend/tasks/BE-04.8.md)
-  - [BE-04.9](../team/backend/tasks/BE-04.9.md)
-  - [BE-04.10](../team/backend/tasks/BE-04.10.md)
-  - [BE-04.11](../team/backend/tasks/BE-04.11.md)
-  - [BE-04.12](../team/backend/tasks/BE-04.12.md)
-  - [BE-04.13](../team/backend/tasks/BE-04.13.md)
-  - [BE-04.14](../team/backend/tasks/BE-04.14.md)
   - [BE-04.4](../team/backend/tasks/BE-04.4.md)
   - [BE-04.5](../team/backend/tasks/BE-04.5.md)
   - [BE-04.6](../team/backend/tasks/BE-04.6.md)
@@ -215,5 +196,27 @@ QA Automation
 - [QA-02.1](../team/qa-automation/tasks/QA-02.1.md) · [QA-02.2](../team/qa-automation/tasks/QA-02.2.md) · [QA-02.3](../team/qa-automation/tasks/QA-02.3.md) · [QA-02.4](../team/qa-automation/tasks/QA-02.4.md) · [QA-02.5](../team/qa-automation/tasks/QA-02.5.md) · [QA-02.6](../team/qa-automation/tasks/QA-02.6.md)
 
 Frontend
-- [FE-01.7](../team/frontend/tasks/FE-01.7.md)
-- [FE-03.5](../team/frontend/tasks/FE-03.5.md)
+- Intake
+  - [FE-01.1](../team/frontend/tasks/FE-01.1.md) · [FE-01.2](../team/frontend/tasks/FE-01.2.md) · [FE-01.3](../team/frontend/tasks/FE-01.3.md) · [FE-01.4](../team/frontend/tasks/FE-01.4.md) · [FE-01.5](../team/frontend/tasks/FE-01.5.md) · [FE-01.6](../team/frontend/tasks/FE-01.6.md)
+
+DevOps/SRE
+- SRE — [SRE-01.1](../team/devops-sre/tasks/SRE-01.1.md) · [SRE-01.2](../team/devops-sre/tasks/SRE-01.2.md) · [SRE-01.3](../team/devops-sre/tasks/SRE-01.3.md) · [SRE-01.4](../team/devops-sre/tasks/SRE-01.4.md) · [SRE-01.5](../team/devops-sre/tasks/SRE-01.5.md) · [SRE-01.6](../team/devops-sre/tasks/SRE-01.6.md) · [SRE-01.7](../team/devops-sre/tasks/SRE-01.7.md) · [SRE-01.8](../team/devops-sre/tasks/SRE-01.8.md) · [SRE-01.9](../team/devops-sre/tasks/SRE-01.9.md) · [SRE-01.10](../team/devops-sre/tasks/SRE-01.10.md) · [SRE-01.11](../team/devops-sre/tasks/SRE-01.11.md) · [SRE-01.12](../team/devops-sre/tasks/SRE-01.12.md) · [SRE-01.13](../team/devops-sre/tasks/SRE-01.13.md) · [SRE-01.14](../team/devops-sre/tasks/SRE-01.14.md) · [SRE-01.15](../team/devops-sre/tasks/SRE-01.15.md) · [SRE-01.16](../team/devops-sre/tasks/SRE-01.16.md) · [SRE-01.17](../team/devops-sre/tasks/SRE-01.17.md)
+- SRE (Observability) — [SRE-02.1](../team/devops-sre/tasks/SRE-02.1.md) · [SRE-02.2](../team/devops-sre/tasks/SRE-02.2.md) · [SRE-02.3](../team/devops-sre/tasks/SRE-02.3.md) · [SRE-02.4](../team/devops-sre/tasks/SRE-02.4.md) · [SRE-02.5](../team/devops-sre/tasks/SRE-02.5.md) · [SRE-02.6](../team/devops-sre/tasks/SRE-02.6.md) · [SRE-02.7](../team/devops-sre/tasks/SRE-02.7.md) · [SRE-02.8](../team/devops-sre/tasks/SRE-02.8.md) · [SRE-02.9](../team/devops-sre/tasks/SRE-02.9.md)
+
+Security
+- SEC — [SEC-01.1](../team/security/tasks/SEC-01.1.md) · [SEC-01.2](../team/security/tasks/SEC-01.2.md) · [SEC-02.1](../team/security/tasks/SEC-02.1.md) · [SEC-02.2](../team/security/tasks/SEC-02.2.md) · [SEC-02.3](../team/security/tasks/SEC-02.3.md) · [SEC-02.4](../team/security/tasks/SEC-02.4.md) · [SEC-02.5](../team/security/tasks/SEC-02.5.md) · [SEC-02.6](../team/security/tasks/SEC-02.6.md) · [SEC-02.7](../team/security/tasks/SEC-02.7.md) · [SEC-02.8](../team/security/tasks/SEC-02.8.md) · [SEC-02.9](../team/security/tasks/SEC-02.9.md) · [SEC-02.10](../team/security/tasks/SEC-02.10.md) · [SEC-02.11](../team/security/tasks/SEC-02.11.md) · [SEC-02.12](../team/security/tasks/SEC-02.12.md) · [SEC-02.13](../team/security/tasks/SEC-02.13.md) · [SEC-02.14](../team/security/tasks/SEC-02.14.md) · [SEC-02.15](../team/security/tasks/SEC-02.15.md) · [SEC-02.16](../team/security/tasks/SEC-02.16.md) · [SEC-02.17](../team/security/tasks/SEC-02.17.md)
+  - [FE-01.7](../team/frontend/tasks/FE-01.7.md) · [FE-01.8](../team/frontend/tasks/FE-01.8.md) · [FE-01.9](../team/frontend/tasks/FE-01.9.md) · [FE-01.10](../team/frontend/tasks/FE-01.10.md) · [FE-01.11](../team/frontend/tasks/FE-01.11.md) · [FE-01.12](../team/frontend/tasks/FE-01.12.md)
+  - [FE-01.13](../team/frontend/tasks/FE-01.13.md) · [FE-01.14](../team/frontend/tasks/FE-01.14.md) · [FE-01.15](../team/frontend/tasks/FE-01.15.md) · [FE-01.16](../team/frontend/tasks/FE-01.16.md) · [FE-01.17](../team/frontend/tasks/FE-01.17.md) · [FE-01.18](../team/frontend/tasks/FE-01.18.md)
+  - [FE-01.19](../team/frontend/tasks/FE-01.19.md) · [FE-01.20](../team/frontend/tasks/FE-01.20.md) · [FE-01.21](../team/frontend/tasks/FE-01.21.md) · [FE-01.22](../team/frontend/tasks/FE-01.22.md) · [FE-01.23](../team/frontend/tasks/FE-01.23.md)
+- Booking
+  - [FE-02.1](../team/frontend/tasks/FE-02.1.md) · [FE-02.2](../team/frontend/tasks/FE-02.2.md) · [FE-02.3](../team/frontend/tasks/FE-02.3.md) · [FE-02.4](../team/frontend/tasks/FE-02.4.md) · [FE-02.5](../team/frontend/tasks/FE-02.5.md) · [FE-02.6](../team/frontend/tasks/FE-02.6.md)
+  - [FE-02.7](../team/frontend/tasks/FE-02.7.md) · [FE-02.8](../team/frontend/tasks/FE-02.8.md) · [FE-02.9](../team/frontend/tasks/FE-02.9.md) · [FE-02.10](../team/frontend/tasks/FE-02.10.md) · [FE-02.11](../team/frontend/tasks/FE-02.11.md) · [FE-02.12](../team/frontend/tasks/FE-02.12.md)
+  - [FE-02.13](../team/frontend/tasks/FE-02.13.md) · [FE-02.14](../team/frontend/tasks/FE-02.14.md) · [FE-02.15](../team/frontend/tasks/FE-02.15.md) · [FE-02.16](../team/frontend/tasks/FE-02.16.md) · [FE-02.17](../team/frontend/tasks/FE-02.17.md)
+- Accessibility & i18n
+  - [FE-03.1](../team/frontend/tasks/FE-03.1.md) · [FE-03.2](../team/frontend/tasks/FE-03.2.md) · [FE-03.3](../team/frontend/tasks/FE-03.3.md) · [FE-03.4](../team/frontend/tasks/FE-03.4.md) · [FE-03.5](../team/frontend/tasks/FE-03.5.md) · [FE-03.6](../team/frontend/tasks/FE-03.6.md)
+  - [FE-03.7](../team/frontend/tasks/FE-03.7.md) · [FE-03.8](../team/frontend/tasks/FE-03.8.md) · [FE-03.9](../team/frontend/tasks/FE-03.9.md) · [FE-03.10](../team/frontend/tasks/FE-03.10.md) · [FE-03.11](../team/frontend/tasks/FE-03.11.md) · [FE-03.12](../team/frontend/tasks/FE-03.12.md)
+  - [FE-03.13](../team/frontend/tasks/FE-03.13.md) · [FE-03.14](../team/frontend/tasks/FE-03.14.md) · [FE-03.15](../team/frontend/tasks/FE-03.15.md) · [FE-03.16](../team/frontend/tasks/FE-03.16.md) · [FE-03.17](../team/frontend/tasks/FE-03.17.md) · [FE-03.18](../team/frontend/tasks/FE-03.18.md)
+  - [FE-03.19](../team/frontend/tasks/FE-03.19.md) · [FE-03.20](../team/frontend/tasks/FE-03.20.md)
+
+Security
+- [SEC-01.1](../team/security/tasks/SEC-01.1.md) · [SEC-01.2](../team/security/tasks/SEC-01.2.md)

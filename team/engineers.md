@@ -33,3 +33,6 @@ DevOps / SRE (IaC / CI / CD) — 2 engineers
 
 QA Automation Engineers — 2 engineers
 - Engineers: qa-automation/engineer-01.md, qa-automation/engineer-02.md
+
+Security — 1 engineer
+- Engineers: security/engineer-01.md

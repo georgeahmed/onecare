@@ -1,4 +1,4 @@
-.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke
+.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav
 
 install:
 	npm ci
@@ -92,6 +92,9 @@ engineer-loop:
 	@[ -n "$(ENGINEER)" ] || (echo "Usage: make engineer-loop ENGINEER=backend/engineer-01 TASK='substring' [SCHEMAS=1] [PY=1] [RUNTIME=1] [SMOKE=1]" && exit 1)
 	bash scripts/team/engineer_loop.sh --engineer $(ENGINEER) --task "$(TASK)" $(if $(SCHEMAS),--schemas,) $(if $(PY),--py,) $(if $(RUNTIME),--runtime,) $(if $(SMOKE),--smoke,)
 
+docs-nav:
+	node scripts/docs/add_nav.js
+
 .PHONY: agent-closeout
 agent-closeout:
 	@echo "[agent] Codegen → typecheck → test → team status write"
@@ -114,6 +117,10 @@ team-status-json:
 
 team-issues:
 	node scripts/team/generate_issues.js
+
+.PHONY: check-task-cards
+check-task-cards:
+	node scripts/ci/check_task_cards.js
 
 engineer-done:
 	@[ -n "$(ENGINEER)" ] || (echo "Usage: make ENGINEER=backend/engineer-01 TASK='substring' engineer-done" && exit 1)

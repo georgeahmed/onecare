@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.6.md) | [Next](SRE-01.8.md)
+
 Task: SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
 
 Context

@@ -1,24 +1,25 @@
-Task: SRE-01.9 — CI/CD pipeline: build→test→codegen:check→SBOM→scan→docker push→staging canary→prod promote/rollback
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.8.md) | [Next](SRE-02.1.md)
+
+Task: SRE-01.9 — Data retention/minimization: log/event retention policies + purge tooling
 
 Context
-- Implement a robust GitHub Actions pipeline that builds/tests, checks codegen drift, generates SBOM, scans images, pushes to registry, and deploys with canary and rollback.
+- Enforce retention and minimization policies for logs and DLQ messages; provide operator tooling to purge data safely.
 
 Files
-- .github/workflows/ci.yml
-- .github/workflows/cd.yml (new)
-- docs/USAGE.md (CI/CD overview)
+- docs/SECURITY.md (retention policy)
+- scripts/ops/purge-dlq.sh (new)
+- scripts/ops/purge-logs.sh (new)
 
 Steps
-1) CI: add jobs for typecheck/test/lint/codegen:check (TS + Py), and cache npm/pip. Generate SBOM (CycloneDX) and upload as artifact.
-2) Security: run `trivy` or similar to scan built images; run `npm audit`/`pip-audit`; soft‑fail initially with report artifacts.
-3) CD: on main merges, build and push images; deploy to staging with a canary percentage; run smoke tests; allow manual promotion to prod.
-4) Rollback: implement automatic rollback on health/readiness failures; keep previous image tags.
+1) Document retention periods for logs and DLQ artifacts (e.g., 14/30 days) and data minimization rules.
+2) Add purge scripts that safely archive and delete items older than retention, with dry-run mode.
+3) Ensure DLQ reprocessing notes include guidance to purge post-successful replay.
 
 Acceptance Criteria
-- Pipelines green on current code; SBOM and scan reports present; deployment gates in place; rollback verified in staging.
+- Retention policy documented; purge scripts exist with dry-run; operators can purge DLQ/logs safely.
 
 Validate
-- Dry‑run CI locally if possible; review workflow syntax; simulate a staging deploy.
+- Create mock DLQ/log artifacts and run purge scripts in dry-run and real modes; verify behavior.
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.9' && make team-status-write

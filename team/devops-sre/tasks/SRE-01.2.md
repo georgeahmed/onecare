@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.17.md) | [Next](SRE-01.3.md)
+
 Task: SRE-01.2 — Secrets management baseline (templates, rotation policy)
 
 Context

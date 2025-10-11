@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.14.md) | [Next](SRE-01.16.md)
+
 Task: SRE-01.15 — Supply chain security (image signing/provenance, vuln/license scans)
 
 Context

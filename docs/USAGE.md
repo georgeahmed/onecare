@@ -44,6 +44,7 @@ Makefile Shortcuts
 - make typecheck — TS project references typecheck
 - make lint / make format / make test
 - make codegen / make codegen-check
+- make check-task-cards — verify required sections in team/*/tasks/*.md
 - make py-test — run Python tests
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082

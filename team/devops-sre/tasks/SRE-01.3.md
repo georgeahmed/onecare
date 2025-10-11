@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.2.md) | [Next](SRE-01.4.md)
+
 Task: SRE-01.3 — CI caching + codegen checks
 
 Context

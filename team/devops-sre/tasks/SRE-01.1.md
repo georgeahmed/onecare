@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SEC-01.7.md) | [Next](SRE-01.10.md)
+
 Task: SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
 
 Context

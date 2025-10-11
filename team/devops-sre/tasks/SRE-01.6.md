@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.5.md) | [Next](SRE-01.7.md)
+
 Task: SRE-01.6 — OTEL collector in compose; export to stdout/OTLP (dev)
 
 Context

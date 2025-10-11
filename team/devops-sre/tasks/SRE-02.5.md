@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.4.md) | [Next](SRE-02.6.md)
+
 Task: SRE-02.5 — Node OTEL init + correlation context
 
 Context

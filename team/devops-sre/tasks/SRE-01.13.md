@@ -1,3 +1,5 @@
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.12.md) | [Next](SRE-01.14.md)
+
 Task: SRE-01.13 — Network security (cert‑manager, mTLS, Ingress, egress allowlist, NetworkPolicies)
 
 Context
