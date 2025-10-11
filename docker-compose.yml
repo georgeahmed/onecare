@@ -40,6 +40,31 @@ services:
       interval: 5s
       timeout: 2s
       retries: 10
+  otel-collector:
+    image: otel/opentelemetry-collector:0.97.0
+    restart: unless-stopped
+    command: ["--config", "/etc/otel-collector.yaml"]
+    volumes:
+      - ./infra/otel/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+        reservations:
+          cpus: "0.25"
+          memory: 192M
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:13133/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    environment:
+      # These environment variables allow overriding exporters without editing the config.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
   orchestrator:
     build:
       context: .

@@ -13,15 +13,15 @@ Start Here
 - Algorithm.md: 12) Observability; SLOs and alerts
 - Observability: packages/observability/src/*
 
-Status: planned
-Progress: 0%
+Status: in-progress
+Progress: 14%
 
 Dependencies
 - devops-sre/engineer-01 (Infra)
 - data-engineering/engineer-01 (Metrics sink)
 
 Tasks
-- [ ] SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
+- [x] SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
 - [ ] SRE-02.2 — Correlation IDs in logs + log format policy
 - [ ] SRE-02.3 — Define SLOs (triage p95, scribe p95, uptime) docs + CI guard
 - [ ] SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
