@@ -91,3 +91,43 @@ export async function createDocumentReferenceResource(
   ensureValid(document, options);
   return repository.createDocumentReference(document);
 }
+
+export interface FhirValidationProfileMap {
+  Task?: string;
+  Appointment?: string;
+  DocumentReference?: string;
+  default?: string;
+  [resourceType: string]: string | undefined;
+}
+
+export interface FhirValidationWrapperOptions {
+  profiles?: FhirValidationProfileMap;
+}
+
+function pickProfile(profiles: FhirValidationProfileMap | undefined, resourceType: string): string | undefined {
+  if (!profiles) return undefined;
+  if (typeof profiles[resourceType] === 'string') {
+    return profiles[resourceType];
+  }
+  if (typeof profiles.default === 'string') {
+    return profiles.default;
+  }
+  return undefined;
+}
+
+export function withFhirValidation(repository: FhirRepository, options?: FhirValidationWrapperOptions): FhirRepository {
+  const profiles = options?.profiles;
+
+  return {
+    upsertBundle: async (bundle) => repository.upsertBundle(bundle),
+
+    createTask: async (task) =>
+      createTaskResource(repository, task, { profile: pickProfile(profiles, 'Task') }),
+
+    createAppointment: async (appointment) =>
+      createAppointmentResource(repository, appointment, { profile: pickProfile(profiles, 'Appointment') }),
+
+    createDocumentReference: async (document) =>
+      createDocumentReferenceResource(repository, document, { profile: pickProfile(profiles, 'DocumentReference') }),
+  };
+}

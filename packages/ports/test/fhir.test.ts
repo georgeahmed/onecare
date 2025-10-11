@@ -5,6 +5,7 @@ import {
   createTaskResource,
   createAppointmentResource,
   createDocumentReferenceResource,
+  withFhirValidation,
 } from '../src/fhir';
 
 function buildRepository() {
@@ -59,5 +60,25 @@ describe('resource helpers', () => {
     await createDocumentReferenceResource(repo, resource, { profile: 'http://hl7.org/fhir/StructureDefinition/DocumentReference' });
 
     expect(repo.createDocumentReference).toHaveBeenCalledWith(resource);
+  });
+});
+
+describe('withFhirValidation', () => {
+  it('wraps repository calls with validation and profile defaults', async () => {
+    const repo = buildRepository();
+    const wrapped = withFhirValidation(repo, { profiles: { default: 'http://example.org/BaseProfile' } });
+    const resource = { resourceType: 'Task' };
+
+    await wrapped.createTask(resource);
+
+    expect(repo.createTask).toHaveBeenCalledWith(resource);
+  });
+
+  it('prevents invalid resources from reaching the repository', async () => {
+    const repo = buildRepository();
+    const wrapped = withFhirValidation(repo);
+
+    await expect(wrapped.createDocumentReference({})).rejects.toThrowError(/invalid_fhir/);
+    expect(repo.createDocumentReference).not.toHaveBeenCalled();
   });
 });
