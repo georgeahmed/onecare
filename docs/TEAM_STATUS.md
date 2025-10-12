@@ -4,7 +4,7 @@ TEAM STATUS
 |---|---|---|---:|---:|---:|
 | team/backend/engineer-01.md | in-progress | 24% | 8/34 | 0 | 4 |
 | team/backend/engineer-02.md | in-progress | 17% | 4/23 | 0 | 3 |
-| team/backend/engineer-03.md | in-progress | 10% | 2/21 | 0 | 4 |
+| team/backend/engineer-03.md | in-progress | 14% | 3/21 | 0 | 4 |
 | team/backend/engineer-04.md | planned | 0% | 0/14 | 0 | 3 |
 | team/backend/engineer-05.md | planned | 0% | 0/15 | 0 | 3 |
 | team/backend/engineer-06.md | planned | 0% | 0/13 | 0 | 3 |

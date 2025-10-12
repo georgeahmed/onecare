@@ -1,6 +1,11 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
+import { logger } from '@onecare/observability';
+import type { FhirRepository, FhirResourceRef } from '@onecare/ports';
+import { createTaskResource } from '@onecare/ports';
+import type { MessageBus } from '@onecare/bus';
+import { Topics, createEnvelope } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
 
 export interface TriageContext extends MachineContext {
@@ -11,16 +16,53 @@ export interface TriageContext extends MachineContext {
   now?: number;
   score?: number;
   isDuplicate?: boolean;
+  duplicateDetectedAt?: number;
+  duplicateWindowMs?: number;
+  duplicateSimilarity?: number;
+  duplicateReference?: DedupEntry;
+  handleDuplicate?: DuplicateHandler;
+  duplicateHandled?: boolean;
+  correlationId?: string;
+  fhirRepository?: FhirRepository;
+  bus?: MessageBus;
+  priority?: PriorityCode;
+  taskOwner?: string;
+  taskReference?: FhirResourceRef;
+  taskId?: string;
+  taskCreatedAt?: string;
+  taskEventPublished?: boolean;
+  taskDescription?: string;
 }
 
 export interface TriageEvent extends MachineEvent {
   type: 'triage.evaluate' | string;
 }
 
+type PriorityCode = 'STAT' | 'URGENT' | 'SOON' | 'ROUTINE';
+
+interface TaskCreatedEvent {
+  taskId: string;
+  patientId: string;
+  priority: PriorityCode;
+  owner?: string;
+}
+
 interface DedupEntry {
   narrative: string;
   timestamp: number;
 }
+
+export interface DuplicateDetails {
+  patientId?: string;
+  narrative?: string;
+  duplicateNarrative?: string;
+  similarity?: number;
+  windowMs?: number;
+  detectedAt: number;
+  correlationId?: string;
+}
+
+export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | void;
 
 const dedupCache = new Map<string, DedupEntry[]>();
 
@@ -100,20 +142,34 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
     const narrative = ctx.narrative?.trim();
     const now = getNow(ctx);
 
+    let duplicateSimilarity: number | undefined;
     if (windowMs > 0 && threshold > 0 && patientId && narrative) {
       const entries = dedupCache.get(patientId) ?? [];
       const freshEntries = entries.filter((entry) => now - entry.timestamp <= windowMs);
-      const duplicateEntry = freshEntries.find(
-        (entry) => similarity(entry.narrative, narrative) >= threshold,
-      );
+      const duplicateEntry = freshEntries.find((entry) => {
+        const score = similarity(entry.narrative, narrative);
+        if (score >= threshold) {
+          duplicateSimilarity = score;
+          return true;
+        }
+        return false;
+      });
 
       if (duplicateEntry) {
         ctx.isDuplicate = true;
+        ctx.duplicateDetectedAt = now;
+        ctx.duplicateWindowMs = windowMs;
+        ctx.duplicateSimilarity = duplicateSimilarity;
+        ctx.duplicateReference = duplicateEntry;
       } else {
         freshEntries.push({ narrative, timestamp: now });
       }
 
       dedupCache.set(patientId, freshEntries);
+    }
+
+    if (ctx.isDuplicate) {
+      return 'Duplicate';
     }
 
     ctx.score = computeTriageScore(ctx.config, ctx.features ?? {});
@@ -126,7 +182,9 @@ export class ScoredState extends BaseState<TriageContext, TriageEvent> {
     super('Scored');
   }
 
-  async handle(_ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+  async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+    const score = typeof ctx.score === 'number' ? ctx.score : 0;
+    ctx.priority = determinePriority(ctx.config, score);
     return 'TaskCreated';
   }
 }
@@ -136,7 +194,40 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     super('TaskCreated');
   }
 
-  async handle(_ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+  async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+    if (!ctx.fhirRepository) {
+      throw new Error('fhir_repository_missing');
+    }
+    if (!ctx.bus) {
+      throw new Error('bus_missing');
+    }
+    if (!ctx.patientId) {
+      throw new Error('patient_id_missing');
+    }
+
+    const score = typeof ctx.score === 'number' ? ctx.score : 0;
+    const priority = ctx.priority ?? determinePriority(ctx.config, score);
+    ctx.priority = priority;
+
+    const timestamp = new Date().toISOString();
+    const taskResource = buildTaskResource(ctx, priority, timestamp);
+    const reference = await createTaskResource(ctx.fhirRepository, taskResource);
+
+    ctx.taskReference = reference;
+    ctx.taskId = reference.id;
+    ctx.taskCreatedAt = timestamp;
+
+    const payload: TaskCreatedEvent = {
+      taskId: reference.id,
+      patientId: ctx.patientId,
+      priority,
+      owner: ctx.taskOwner,
+    };
+    const envelope = createEnvelope(Topics.tasks.created, payload, ctx.correlationId);
+    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
+    await ctx.bus.publish(Topics.tasks.created, envelope, headers);
+    ctx.taskEventPublished = true;
+
     return 'Notified';
   }
 }
@@ -159,4 +250,114 @@ export class CompletedState extends BaseState<TriageContext, TriageEvent> {
   async handle(_ctx: TriageContext, _evt: TriageEvent): Promise<string> {
     return 'Completed';
   }
+}
+
+export class DuplicateState extends BaseState<TriageContext, TriageEvent> {
+  constructor() {
+    super('Duplicate');
+  }
+
+  async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+    const details: DuplicateDetails = {
+      patientId: ctx.patientId,
+      narrative: ctx.narrative,
+      duplicateNarrative: ctx.duplicateReference?.narrative,
+      similarity: ctx.duplicateSimilarity,
+      windowMs: ctx.duplicateWindowMs,
+      detectedAt: ctx.duplicateDetectedAt ?? getNow(ctx),
+      correlationId: ctx.correlationId,
+    };
+
+    if (ctx.handleDuplicate) {
+      await ctx.handleDuplicate(details);
+    } else {
+      logger.info('triage duplicate detected', {
+        hasPatientId: Boolean(details.patientId),
+        windowMs: details.windowMs,
+        similarity: details.similarity,
+        detectedAt: details.detectedAt,
+        correlationId: details.correlationId,
+        narrativeLength: details.narrative?.length ?? 0,
+        duplicateNarrativeLength: details.duplicateNarrative?.length ?? 0,
+      });
+    }
+
+    ctx.duplicateHandled = true;
+    return 'Completed';
+  }
+}
+
+function sanitizeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+export function determinePriority(config: ResolvedConfig, score: number): PriorityCode {
+  const raw = (config.priority_thresholds as Record<string, unknown> | undefined) ?? {};
+  const thresholds = {
+    STAT: sanitizeNumber(raw.stat, 0.9),
+    URGENT: sanitizeNumber(raw.urgent, 0.7),
+    SOON: sanitizeNumber(raw.soon, 0.4),
+    ROUTINE: sanitizeNumber(raw.routine, 0),
+  };
+
+  if (score >= thresholds.STAT) return 'STAT';
+  if (score >= thresholds.URGENT) return 'URGENT';
+  if (score >= thresholds.SOON) return 'SOON';
+  return 'ROUTINE';
+}
+
+function mapPriorityToFhirCode(priority: PriorityCode): 'stat' | 'urgent' | 'asap' | 'routine' {
+  switch (priority) {
+    case 'STAT':
+      return 'stat';
+    case 'URGENT':
+      return 'urgent';
+    case 'SOON':
+      return 'asap';
+    case 'ROUTINE':
+    default:
+      return 'routine';
+  }
+}
+
+function buildTaskResource(ctx: TriageContext, priority: PriorityCode, timestamp: string): Record<string, unknown> {
+  const resource: Record<string, unknown> = {
+    resourceType: 'Task',
+    status: 'requested',
+    intent: 'order',
+    authoredOn: timestamp,
+    lastModified: timestamp,
+    priority: mapPriorityToFhirCode(priority),
+    for: { reference: `Patient/${ctx.patientId}` },
+    description: ctx.taskDescription ?? 'Follow-up from triage scoring',
+  };
+
+  if (ctx.taskOwner) {
+    resource.owner = { reference: ctx.taskOwner };
+  }
+
+  const inputs: Array<Record<string, unknown>> = [];
+  if (typeof ctx.score === 'number') {
+    inputs.push({
+      type: { text: 'triage-score' },
+      valueDecimal: ctx.score,
+    });
+  }
+  if (ctx.priority) {
+    inputs.push({
+      type: { text: 'triage-priority' },
+      valueString: ctx.priority,
+    });
+  }
+
+  if (inputs.length > 0) {
+    resource.input = inputs;
+  }
+
+  return resource;
 }

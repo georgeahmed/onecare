@@ -1,6 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { ResolvedConfig } from '@onecare/config';
-import { IntakeState, resetDedupCache, type TriageContext } from '../src/application/triage.state';
+import type { MessageBus } from '@onecare/bus';
+import type { FhirRepository } from '@onecare/ports';
+import { Topics } from '@onecare/events';
+import {
+  IntakeState,
+  ScoredState,
+  TaskCreatedState,
+  DuplicateState,
+  resetDedupCache,
+  type TriageContext,
+  type DuplicateDetails,
+} from '../src/application/triage.state';
 
 function buildContext(scoreWeights: Partial<Record<string, number>>, features: Record<string, number>): TriageContext {
   const config: ResolvedConfig = {
@@ -68,8 +79,14 @@ describe('IntakeState', () => {
     await state.handle(firstCtx, { type: 'triage.evaluate' });
     const next = await state.handle(secondCtx, { type: 'triage.evaluate' });
 
-    expect(next).toBe('Scored');
+    expect(next).toBe('Duplicate');
     expect(secondCtx.isDuplicate).toBe(true);
+    expect(secondCtx.score).toBeUndefined();
+
+    const duplicateState = new DuplicateState();
+    await duplicateState.handle(secondCtx, { type: 'triage.evaluate' });
+
+    expect(secondCtx.duplicateHandled).toBe(true);
   });
 
   it('does not flag submissions outside the dedup window or below similarity threshold', async () => {
@@ -116,5 +133,170 @@ describe('IntakeState', () => {
 
     expect(dissimilarCtx.isDuplicate).not.toBe(true);
     expect(lateCtx.isDuplicate).not.toBe(true);
+    expect(dissimilarCtx.score).toBeCloseTo(0.5, 6);
+    expect(lateCtx.score).toBeCloseTo(0.6, 6);
+  });
+});
+
+describe('DuplicateState', () => {
+  beforeEach(() => {
+    resetDedupCache();
+  });
+
+  it('invokes provided duplicate handler with full details', async () => {
+    const intake = new IntakeState();
+    const duplicateState = new DuplicateState();
+    const captured: DuplicateDetails[] = [];
+
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        dedup_window: 'PT1H',
+        sim_threshold: 0.2,
+      },
+    };
+
+    const ctx: TriageContext = {
+      id: 'triage-dup',
+      config,
+      features: { acuity: 1 },
+      patientId: 'patient-dup',
+      narrative: 'Severe headache and nausea',
+      now: 0,
+    };
+
+    await intake.handle(ctx, { type: 'triage.evaluate' });
+
+    const duplicateCtx: TriageContext = {
+      ...ctx,
+      id: 'triage-dup-2',
+      narrative: 'Nausea with severe headache persists',
+      now: 10 * 60 * 1_000,
+      handleDuplicate: (details) => {
+        captured.push(details);
+      },
+    };
+
+    const outcome = await intake.handle(duplicateCtx, { type: 'triage.evaluate' });
+    expect(outcome).toBe('Duplicate');
+
+    const finalState = await duplicateState.handle(duplicateCtx, { type: 'triage.evaluate' });
+
+    expect(finalState).toBe('Completed');
+    expect(duplicateCtx.duplicateHandled).toBe(true);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].patientId).toBe('patient-dup');
+    expect(captured[0].narrative).toContain('Nausea with severe headache');
+    expect(captured[0].duplicateNarrative).toContain('Severe headache and nausea');
+    expect(captured[0].windowMs).toBe(60 * 60 * 1_000);
+    expect(captured[0].similarity).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('ScoredState', () => {
+  it('derives priority from score and config thresholds', async () => {
+    const scored = new ScoredState();
+    const ctx: TriageContext = {
+      id: 'priority-test',
+      config: {
+        practiceId: 'demo',
+        triage: { score_weights: { acuity: 1 } },
+        priority_thresholds: {
+          stat: 0.95,
+          urgent: 0.75,
+          soon: 0.3,
+          routine: 0,
+        },
+      },
+      features: { acuity: 1 },
+      score: 0.8,
+    };
+
+    const next = await scored.handle(ctx, { type: 'triage.evaluate' });
+
+    expect(next).toBe('TaskCreated');
+    expect(ctx.priority).toBe('URGENT');
+  });
+});
+
+describe('TaskCreatedState', () => {
+  beforeEach(() => {
+    resetDedupCache();
+  });
+
+  it('creates a FHIR Task and publishes tasks.created event', async () => {
+    const createTask = vi.fn().mockResolvedValue({ id: 'task-123', resourceType: 'Task' });
+    const fhirRepository: FhirRepository = {
+      upsertBundle: vi.fn(),
+      createTask,
+      createAppointment: vi.fn(),
+      createDocumentReference: vi.fn(),
+    };
+
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const bus: MessageBus = {
+      publish,
+      subscribe: vi.fn(),
+    };
+
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: { score_weights: { acuity: 1 } },
+      priority_thresholds: {
+        stat: 0.9,
+        urgent: 0.7,
+        soon: 0.4,
+        routine: 0,
+      },
+    };
+
+    const ctx: TriageContext = {
+      id: 'task-created',
+      config,
+      features: { acuity: 0.75 },
+      patientId: 'patient-001',
+      taskOwner: 'Organization/demo-triage',
+      correlationId: 'corr-abc',
+      fhirRepository,
+      bus,
+      now: 0,
+    };
+
+    const intake = new IntakeState();
+    await intake.handle(ctx, { type: 'triage.evaluate' });
+
+    const scored = new ScoredState();
+    await scored.handle(ctx, { type: 'triage.evaluate' });
+
+    const state = new TaskCreatedState();
+    const next = await state.handle(ctx, { type: 'triage.evaluate' });
+
+    expect(next).toBe('Notified');
+    expect(createTask).toHaveBeenCalledTimes(1);
+    const taskPayload = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(taskPayload.resourceType).toBe('Task');
+    expect(taskPayload.priority).toBe('urgent');
+    expect(taskPayload.for).toEqual({ reference: 'Patient/patient-001' });
+    expect(taskPayload.owner).toEqual({ reference: 'Organization/demo-triage' });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      Topics.tasks.created,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          taskId: 'task-123',
+          patientId: 'patient-001',
+          priority: 'URGENT',
+          owner: 'Organization/demo-triage',
+        }),
+        correlationId: 'corr-abc',
+      }),
+      { 'x-correlation-id': 'corr-abc' },
+    );
+
+    expect(ctx.taskId).toBe('task-123');
+    expect(ctx.taskEventPublished).toBe(true);
+    expect(ctx.priority).toBe('URGENT');
   });
 });

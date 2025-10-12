@@ -24,7 +24,7 @@ Contracts & Validation
 - Validate triage.input, tasks.created/updated payloads with Ajv (QA-01.1 harness pattern).
 
 Status: in-progress
-Progress: 10%
+Progress: 14%
 
 Dependencies
 - ml/engineer-02 (Acuity model)
@@ -48,7 +48,7 @@ Tasks
 - [x] BE-03.2a — Text normalizer (lowercase, stopwords, stemming) + fixtures
 - [ ] BE-03.2b — Similarity (shingles/MinHash or cosine) with configurable window/threshold + eviction policy
 - [ ] BE-03.2c — Dedup decision function (recent window) + metrics/logs
-- [ ] BE-03.3a — FHIR Task create idempotently (stable IDs; retries/backoff; guardrails)
+- [x] BE-03.3a — FHIR Task create idempotently (stable IDs; retries/backoff; guardrails)
 - [ ] BE-03.3b — Emit tasks.created; contract tests and validators
 - [ ] BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [ ] BE-03.4b — Tie-breakers and backpressure-aware assignment
