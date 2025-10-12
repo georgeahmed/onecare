@@ -1,10 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
+import { createHistogram, createCounter, startSpan, getCorrelationId, logger } from '@onecare/observability';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 export interface GpConnectClientOptions {
   baseUrl: string;
   apiKey: string;
   timeoutMs?: number;
   appointmentExecutor?: AppointmentExecutor;
+  practiceId?: string;
 }
 
 export interface SearchSlotsParams {
@@ -55,17 +59,27 @@ export class GpConnectClientError extends Error {
   }
 }
 
+const searchLatencyHistogram = createHistogram('gp_connect_search_latency_ms');
+const createLatencyHistogram = createHistogram('gp_connect_create_latency_ms');
+const searchSuccessCounter = createCounter('gp_connect_search_success_total');
+const searchErrorCounter = createCounter('gp_connect_search_error_total');
+const createSuccessCounter = createCounter('gp_connect_create_success_total');
+const createErrorCounter = createCounter('gp_connect_create_error_total');
+const createConflictCounter = createCounter('gp_connect_create_conflict_total');
+
 export class GpConnectClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
   private readonly appointmentExecutor?: AppointmentExecutor;
+  private readonly practiceId?: string;
 
   constructor(options: GpConnectClientOptions) {
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 5_000;
     this.appointmentExecutor = options.appointmentExecutor;
+    this.practiceId = options.practiceId;
   }
 
   static fromEnv(): GpConnectClient {
@@ -82,36 +96,117 @@ export class GpConnectClient {
   }
 
   async searchSlots(params: SearchSlotsParams): Promise<SlotSummary[]> {
-    await delay(5);
-    return [
-      {
-        slotId: 'demo-slot-1',
-        start: new Date().toISOString(),
-        end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
-        organisationId: params.organisationId,
-        serviceType: params.serviceType,
+    const attributes = buildMetricAttributes('search', this.practiceId, params.organisationId);
+    const span = startSpan('gpconnect.search', {
+      attributes: {
+        'gpconnect.operation': 'search_slots',
+        'gpconnect.base_url': this.baseUrl,
+        'gpconnect.organisation_id': params.organisationId ?? 'unknown',
+        'gpconnect.practice_id': this.practiceId ?? 'unknown',
       },
-    ];
+    });
+    const start = performance.now();
+    try {
+      await delay(5);
+      const result = [
+        {
+          slotId: 'demo-slot-1',
+          start: new Date().toISOString(),
+          end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
+          organisationId: params.organisationId,
+          serviceType: params.serviceType,
+        },
+      ];
+      recordLatency(searchLatencyHistogram, start, attributes);
+      searchSuccessCounter.add(1, attributes);
+      span.setStatus({ code: SpanStatusCode.OK });
+      span.end();
+      logger.info('gpconnect.search.success', {
+        durationMs: performance.now() - start,
+        organisationId: params.organisationId,
+        practiceId: this.practiceId,
+        correlationId: getCorrelationId(),
+      });
+      return result;
+    } catch (error) {
+      recordLatency(searchLatencyHistogram, start, attributes);
+      searchErrorCounter.add(1, attributes);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+      span.end();
+      logger.error('gpconnect.search.error', {
+        reason: (error as Error).message,
+        organisationId: params.organisationId,
+        practiceId: this.practiceId,
+        correlationId: getCorrelationId(),
+      });
+      throw error;
+    }
   }
 
   async createAppointment(request: AppointmentRequest): Promise<AppointmentConfirmation> {
     const executor = this.appointmentExecutor ?? defaultAppointmentExecutor;
     let attempt = 0;
     let lastError: unknown;
+    const attributes = buildMetricAttributes('create', this.practiceId, request.performerId ?? request.slotId);
 
     while (attempt < 2) {
+      const span = startSpan('gpconnect.create_appointment', {
+        attributes: {
+          'gpconnect.operation': 'create_appointment',
+          'gpconnect.base_url': this.baseUrl,
+          'gpconnect.slot_id': request.slotId,
+          'gpconnect.practice_id': this.practiceId ?? 'unknown',
+        },
+      });
+      const start = performance.now();
       try {
-        return await executor(request);
+        const response = await executor(request);
+        recordLatency(createLatencyHistogram, start, attributes);
+        createSuccessCounter.add(1, attributes);
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.end();
+        logger.info('gpconnect.create.success', {
+          slotId: request.slotId,
+          appointmentId: response.appointmentId,
+          practiceId: this.practiceId,
+          correlationId: getCorrelationId(),
+          durationMs: performance.now() - start,
+        });
+        return response;
       } catch (error) {
         lastError = error;
         const conflict = isConflictError(error);
+        recordLatency(createLatencyHistogram, start, attributes);
+        if (conflict) {
+          createConflictCounter.add(1, attributes);
+          logger.warn('gpconnect.create.conflict', {
+            slotId: request.slotId,
+            attempt,
+            practiceId: this.practiceId,
+            correlationId: getCorrelationId(),
+          });
+        } else {
+          createErrorCounter.add(1, attributes);
+          logger.error('gpconnect.create.error', {
+            slotId: request.slotId,
+            reason: (error as Error).message,
+            practiceId: this.practiceId,
+            correlationId: getCorrelationId(),
+          });
+        }
+
         if (conflict && attempt === 0) {
           const backoffMs = Math.min(200, Math.max(50, this.timeoutMs * 0.05));
           await delay(backoffMs + Math.random() * 25);
           attempt += 1;
+          span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+          span.end();
           continue;
         }
-        throw mapToClientError(error);
+        const mapped = mapToClientError(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: mapped.message });
+        span.end();
+        throw mapped;
       }
     }
 
@@ -177,4 +272,16 @@ function mapToClientError(error: unknown): GpConnectClientError {
     }
   }
   return new GpConnectClientError('unknown', 'GP Connect request failed', error);
+}
+
+function recordLatency(histogram: ReturnType<typeof createHistogram>, start: number, attributes: Record<string, unknown>): void {
+  histogram.record(performance.now() - start, attributes);
+}
+
+function buildMetricAttributes(operation: 'search' | 'create', practiceId?: string, identifier?: string): Record<string, unknown> {
+  return {
+    operation,
+    practiceId: practiceId ?? 'unknown',
+    target: identifier ?? 'unknown',
+  };
 }
