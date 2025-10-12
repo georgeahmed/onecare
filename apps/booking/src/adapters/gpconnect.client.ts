@@ -18,6 +18,7 @@ export interface SlotSummary {
   start: string;
   end: string;
   organisationId: string;
+  serviceType?: string;
 }
 
 export interface AppointmentRequest {
@@ -32,6 +33,14 @@ export interface AppointmentConfirmation {
   slotId: string;
   start: string;
   end: string;
+}
+
+export interface SlotView {
+  id: string;
+  start: string;
+  end: string;
+  organisationId: string;
+  serviceType?: string;
 }
 
 export class GpConnectClient {
@@ -66,6 +75,7 @@ export class GpConnectClient {
         start: new Date().toISOString(),
         end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
         organisationId: params.organisationId,
+        serviceType: params.serviceType,
       },
     ];
   }
@@ -91,4 +101,15 @@ export class GpConnectClient {
   getApiKey(): string {
     return this.apiKey;
   }
+}
+
+export function mapSlotsToView(slots: SlotSummary[]): SlotView[] {
+  if (!Array.isArray(slots) || slots.length === 0) return [];
+  return slots.map((slot) => ({
+    id: slot.slotId,
+    start: slot.start,
+    end: slot.end,
+    organisationId: slot.organisationId,
+    serviceType: slot.serviceType,
+  }));
 }

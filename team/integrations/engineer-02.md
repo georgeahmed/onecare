@@ -15,7 +15,7 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (enhanced_access_windows)
 
 Status: in-progress
-Progress: 5%
+Progress: 11%
 
 Dependencies
 - backend/engineer-04 (Booking service)
@@ -25,7 +25,7 @@ Tasks
 - [x] IN-02.1a — GP Connect client foundation (HTTPS, mTLS/OAuth, env/config)
 - [ ] IN-02.1b — Resilience: timeout/retry/jitter, connection pooling, circuit breaker
 - [ ] IN-02.1c — Security: TLS verification, optional cert pinning, SSRF allowlist
-- [ ] IN-02.2a — Slot search mapping (paging, filters, TZ-safe windows)
+- [x] IN-02.2a — Slot search mapping (paging, filters, TZ-safe windows)
 - [ ] IN-02.2b — Contract validators (search request/response schemas; codegen + compiled validators)
 - [ ] IN-02.3a — Appointment create idempotency + conflict handling (natural key; exactly-once write)
 - [ ] IN-02.3b — Conflict policies + fallback (reselect/backoff; safe retry)
