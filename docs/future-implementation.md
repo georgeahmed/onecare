@@ -9,7 +9,7 @@ Short-term follow-ups discovered while wiring early triage functionality:
 - **Feature extraction into Intake state**  
   - Provide the real feature vector (acuity, risk, complexity, time, capacity) before entering `IntakeState`; today the context expects `ctx.features` but nothing populates it.
 
-- **Task creation & event publishing**  
-  - Wire `ScoredState` → `TaskCreatedState` to call the FHIR repository, persist/publish `tasks.created`, and include scoring metadata so downstream consumers receive a complete payload.
+- **Task enrichment & notifications**  
+  - Extend the triage Task creation flow with richer payload (category, owner assignment provenance, attachments) and downstream notifications once provider assignment logic lands.
 
 Document owners: backend triage team. Update or prune these items as the surrounding work lands.
