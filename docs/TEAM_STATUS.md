@@ -10,7 +10,7 @@ TEAM STATUS
 | team/backend/engineer-06.md | planned | 0% | 0/13 | 0 | 3 |
 | team/backend/engineer-07.md | planned | 0% | 0/17 | 0 | 3 |
 | team/data-engineering/engineer-01.md | stable | 100% | 6/6 | 0 | 2 |
-| team/data-engineering/engineer-02.md | in-progress | 20% | 1/5 | 0 | 2 |
+| team/data-engineering/engineer-02.md | in-progress | 40% | 2/5 | 0 | 2 |
 | team/devops-sre/engineer-01.md | in-progress | 71% | 5/7 | 0 | 2 |
 | team/devops-sre/engineer-02.md | in-progress | 57% | 4/7 | 0 | 2 |
 | team/frontend/engineer-01.md | planned | 0% | 0/7 | 0 | 2 |

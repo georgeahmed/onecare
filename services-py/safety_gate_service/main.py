@@ -6,11 +6,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import FastAPI, HTTPException
 from common.contracts.models import PortalSubmission, SafetyDecision
 from common.otel import instrument_fastapi
+from .acuity import AcuityModel
 from .classifier import EmergencyClassifier
 from .decision import DecisionResult, DEFAULT_RED_FLAG_SET, decide
 from .ner import SafetyNER
@@ -19,8 +20,10 @@ from .ner import SafetyNER
 LOGGER = logging.getLogger("safety_gate_service.main")
 _CLASSIFIER: Optional[EmergencyClassifier] = None
 _NER: Optional[SafetyNER] = None
+_ACUITY_MODEL: Optional[AcuityModel] = None
 _CLASSIFIER_LOCK = Lock()
 _NER_LOCK = Lock()
+_ACUITY_LOCK = Lock()
 _DECISION_CONFIG: Optional[dict[str, Any]] = None
 _DECISION_CONFIG_LOCK = Lock()
 
@@ -57,6 +60,23 @@ def get_ner(force_reload: bool = False) -> SafetyNER:
                 LOGGER.debug("Initializing SafetyNER instance")
                 _NER = SafetyNER()
     return _NER
+
+
+def get_acuity_model(force_reload: bool = False) -> AcuityModel:
+    global _ACUITY_MODEL
+
+    if force_reload:
+        with _ACUITY_LOCK:
+            LOGGER.debug("Reloading AcuityModel instance (force_reload=True)")
+            _ACUITY_MODEL = AcuityModel()
+            return _ACUITY_MODEL
+
+    if _ACUITY_MODEL is None:
+        with _ACUITY_LOCK:
+            if _ACUITY_MODEL is None:
+                LOGGER.debug("Initializing AcuityModel instance")
+                _ACUITY_MODEL = AcuityModel()
+    return _ACUITY_MODEL
 
 
 def get_decision_config(force_reload: bool = False) -> dict[str, Any]:
@@ -128,11 +148,14 @@ def reset_models_for_testing() -> None:
 
     global _CLASSIFIER
     global _NER
+    global _ACUITY_MODEL
     global _DECISION_CONFIG
     with _CLASSIFIER_LOCK:
         _CLASSIFIER = None
     with _NER_LOCK:
         _NER = None
+    with _ACUITY_LOCK:
+        _ACUITY_MODEL = None
     with _DECISION_CONFIG_LOCK:
         _DECISION_CONFIG = None
 
@@ -143,6 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         app.state.classifier = get_classifier()
         app.state.ner = get_ner()
+        app.state.acuity_model = get_acuity_model()
         app.state.decision_config = get_decision_config()
     except Exception as exc:  # pragma: no cover - startup failure path
         LOGGER.exception("Failed to initialize EmergencyClassifier: %s", exc)
@@ -154,6 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.model_ready = False
         app.state.classifier = None
         app.state.ner = None
+        app.state.acuity_model = None
         app.state.decision_config = None
 
 

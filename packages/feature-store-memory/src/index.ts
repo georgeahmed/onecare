@@ -1,4 +1,3 @@
-import { structuredClone as nodeStructuredClone } from 'node:util';
 import type { FeatureStore } from '@onecare/ports';
 
 export interface InMemoryFeatureStoreOptions {
@@ -23,10 +22,7 @@ const clone = <T>(value: T): T => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return globalThis.structuredClone(value);
   }
-  if (typeof nodeStructuredClone === 'function') {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-    return nodeStructuredClone(value);
-  }
+  // Last resort for environments without structuredClone support.
   return JSON.parse(JSON.stringify(value)) as T;
 };
 

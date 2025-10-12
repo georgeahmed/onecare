@@ -14,7 +14,7 @@ Start Here
 - Ports: packages/ports/src/feature-store.ts
 
 Status: in-progress
-Progress: 20%
+Progress: 40%
 
 Dependencies
 - mlops/engineer-02 (Feature monitoring)
@@ -27,7 +27,7 @@ Platform Checklist (pre-flight)
 
 Tasks
 - [x] DE-02.1 — Define feature schemas (JSON) + docs
-- [ ] DE-02.2 — Implement FeatureStore.put/get TS impl + tests
+- [x] DE-02.2 — Implement FeatureStore.put/get TS impl + tests
 - [ ] DE-02.3 — Backfill job script from historical events (if any)
 - [ ] DE-02.4 — Retention + compaction job (config-driven)
 - [ ] DE-02.5 — Sample queries/reports for ML teams
