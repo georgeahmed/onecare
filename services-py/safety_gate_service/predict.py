@@ -13,9 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from common.calibration import TemperatureCalibrator
 from common.features.encode_features import EMBEDDING_SIZE, encode_features
+from common.model_io import load_model_artifact
 
 _MODEL_PATH_ENV = "SAFETY_GATE_ACUITY_MODEL_PATH"
 _META_PATH_ENV = "SAFETY_GATE_ACUITY_META_PATH"
+_MODEL_VERSION_ENV = "SAFETY_GATE_ACUITY_MODEL_VERSION"
+_MODELS_DIR_ENV = "SAFETY_GATE_MODELS_DIR"
 _DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 _LABEL_NAMES = {0: "routine", 1: "urgent", 2: "emergency"}
 
@@ -98,17 +101,62 @@ def _resolve_model_paths(
     return model_candidate, meta_candidate
 
 
+def _load_artifact_payload(
+    model_path: Optional[str],
+    meta_path: Optional[str],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    explicit_model = model_path or os.getenv(_MODEL_PATH_ENV)
+    if explicit_model:
+        model_file = Path(explicit_model)
+        if not model_file.exists():
+            raise FileNotFoundError(f"Acuity model artifact not found at {model_file}")
+        with model_file.open("rb") as handle:
+            artifact = pickle.load(handle)
+
+        metadata: Mapping[str, Any] = {}
+        explicit_meta = meta_path or os.getenv(_META_PATH_ENV)
+        if explicit_meta:
+            meta_file = Path(explicit_meta)
+            if meta_file.exists():
+                metadata = json.loads(meta_file.read_text(encoding="utf-8"))
+        else:
+            fallback_meta = model_file.with_suffix(".meta.json")
+            if fallback_meta.exists():
+                metadata = json.loads(fallback_meta.read_text(encoding="utf-8"))
+        return artifact, metadata
+
+    models_dir_env = os.getenv(_MODELS_DIR_ENV)
+    version_override = os.getenv(_MODEL_VERSION_ENV)
+    try:
+        bundle = load_model_artifact(
+            "acuity",
+            version=version_override if version_override else None,
+            models_dir=models_dir_env if models_dir_env else None,
+        )
+        metadata = dict(bundle.metadata)
+        metadata.setdefault("modelVersion", bundle.version)
+        return bundle.artifact, metadata
+    except FileNotFoundError:
+        model_file, legacy_meta = _resolve_model_paths(model_path, meta_path)
+        if not model_file.exists():
+            raise
+        with model_file.open("rb") as handle:
+            artifact = pickle.load(handle)
+        metadata: Mapping[str, Any] = {}
+        if legacy_meta.exists():
+            metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
+        metadata = dict(metadata)
+        metadata.setdefault("modelVersion", metadata.get("modelVersion", "legacy"))
+        return artifact, metadata
+
+
 @lru_cache(maxsize=1)
 def load_model_bundle(model_path: Optional[str] = None, meta_path: Optional[str] = None) -> _ModelBundle:
-    model_file, meta_file = _resolve_model_paths(model_path, meta_path)
+    artifact_payload, metadata = _load_artifact_payload(model_path, meta_path)
+    metadata = dict(metadata)
+    metadata.setdefault("modelVersion", str(metadata.get("modelVersion", "unknown")))
 
-    if not model_file.exists():
-        raise FileNotFoundError(f"Acuity model artifact not found at {model_file}")
-
-    with model_file.open("rb") as handle:
-        artifact = pickle.load(handle)
-
-    prototypes_raw = artifact.get("prototypes")
+    prototypes_raw = artifact_payload.get("prototypes")
     if not isinstance(prototypes_raw, Mapping):
         raise RuntimeError("Acuity model artifact is missing prototypes mapping")
 
@@ -116,10 +164,6 @@ def load_model_bundle(model_path: Optional[str] = None, meta_path: Optional[str]
     for label, vector in prototypes_raw.items():
         if isinstance(vector, Iterable):
             prototypes[int(label)] = [float(value) for value in vector]
-
-    metadata: Mapping[str, Any] = {}
-    if meta_file.exists():
-        metadata = json.loads(meta_file.read_text(encoding="utf-8"))
 
     calibration = metadata.get("calibration", {})
     temperature = float(calibration.get("temperature", 1.0))

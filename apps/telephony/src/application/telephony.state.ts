@@ -6,6 +6,7 @@ import type { TriageInput } from '@onecare/events';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
 import { queuePromptForCall } from '../adapters/ivr.prompts';
+import { executeEmergencyHandoff } from '../adapters/emergency.handoff';
 import type {
   TelephonyContext,
   TelephonyEvent,
@@ -15,6 +16,7 @@ import type {
   CallbackPriority,
   CallbackWindowOptions,
   LanguagePromptSelection,
+  EmergencyHandoffDetails,
 } from './types';
 
 const DEFAULT_LANGUAGE_CODE = 'en';
@@ -444,6 +446,41 @@ async function queuePrompt(ctx: TelephonyContext, prompt: string): Promise<void>
       callId: ctx.callId,
       correlationId: ctx.correlationId,
       reason: (error as Error).message,
+    });
+  }
+}
+
+async function triggerEmergencyHandoff(
+  ctx: TelephonyContext,
+  reason: string,
+  triggeredAt: number,
+): Promise<void> {
+  const handler = ctx.emergencyHandoff ?? executeEmergencyHandoff;
+  const details: EmergencyHandoffDetails = {
+    callId: ctx.callId,
+    reason,
+    triggeredAt,
+    correlationId: ctx.correlationId,
+    practiceId: ctx.metadata?.practiceId,
+    patientId: ctx.patientId ?? null,
+    metadata: ctx.metadata?.attributes,
+  };
+  try {
+    await Promise.resolve(handler(details));
+    ctx.emergencyHandoffAt = triggeredAt;
+    logger.warn('telephony.emergency.handoff.triggered', {
+      callId: ctx.callId,
+      correlationId: ctx.correlationId,
+      practiceId: ctx.metadata?.practiceId,
+      reason,
+    });
+  } catch (error) {
+    logger.error('telephony.emergency.handoff.failed', {
+      callId: ctx.callId,
+      correlationId: ctx.correlationId,
+      practiceId: ctx.metadata?.practiceId,
+      reason,
+      failure: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -914,7 +951,12 @@ export class EmergencyTransferState extends BaseState<TelephonyContext, Telephon
 
   async handle(ctx: TelephonyContext): Promise<string> {
     const nowFn = ctx.now ?? Date.now;
-    ctx.emergencyTransferAt = nowFn();
+    const triggeredAt = ctx.emergencyTransferAt ?? nowFn();
+    ctx.emergencyTransferAt = triggeredAt;
+    if (!ctx.emergencyHandoffAt) {
+      const reason = ctx.intentRouteReason ?? 'emergency_transfer';
+      await triggerEmergencyHandoff(ctx, reason, triggeredAt);
+    }
     const prompt = 'Connecting you to emergency services. Please stay on the line.';
     await queuePrompt(ctx, prompt);
     logger.warn('telephony.ivr.prompt.emergency_transfer', {

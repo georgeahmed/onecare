@@ -27,3 +27,8 @@ export interface ErrorEnvelope {
   };
   correlationId?: string;
 }
+
+export interface SafetyDecision {
+  outcome: 'SAFE_TO_CONTINUE' | 'DIVERTED';
+  reason?: string | null;
+}

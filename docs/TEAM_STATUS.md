@@ -30,4 +30,4 @@ TEAM STATUS
 | team/security/engineer-01.md | stable | 100% | 2/2 | 0 | 2 |
 | team/security/engineer-02.md | needs-fixes | 0% | 0/18 | 2 | 2 |
 | team/telephony-voice/engineer-01.md | planned | 0% | 0/4 | 0 | 3 |
-| team/telephony-voice/engineer-02.md | in-progress | 20% | 1/5 | 0 | 3 |
+| team/telephony-voice/engineer-02.md | in-progress | 40% | 2/5 | 0 | 3 |

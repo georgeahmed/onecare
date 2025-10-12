@@ -1,6 +1,7 @@
 import type { TelephonyContext } from './types';
 import type { IntentClassifier } from '../adapters/intent.classifier';
 import { IntentServiceClassifier } from '../adapters/intent.client';
+import { executeEmergencyHandoff } from '../adapters/emergency.handoff';
 
 let singleton: IntentClassifier | undefined;
 let factoryOverride: (() => IntentClassifier) | undefined;
@@ -46,6 +47,7 @@ export function applyTelephonyDependencies<T extends TelephonyContext>(ctx: T): 
   }
   ctx.ivrPrompts = ctx.ivrPrompts ?? [];
   ctx.enqueuePrompt = ctx.enqueuePrompt ?? (() => undefined);
+  ctx.emergencyHandoff = ctx.emergencyHandoff ?? executeEmergencyHandoff;
   ctx.emergencyTransferEnabled = resolveEmergencyTransferEnabled(ctx.emergencyTransferEnabled);
   return ctx;
 }

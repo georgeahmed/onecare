@@ -362,6 +362,7 @@ describe('Telephony state machine', () => {
         text: 'need help',
       }));
 
+      const emergencyHandoffSpy = vi.fn(async () => {});
       const ctx: TelephonyContext = applyTelephonyDependencies({
         id: 'call-007',
         callId: 'call-007',
@@ -372,6 +373,7 @@ describe('Telephony state machine', () => {
         bus,
         intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.8,
+        emergencyHandoff: emergencyHandoffSpy,
       } as TelephonyContext);
 
       const transcribedState = new TranscribedState();
@@ -395,6 +397,15 @@ describe('Telephony state machine', () => {
       expect(afterEmergency).toBe('Routed');
       expect(ctx.ivrPrompts?.at(-1)).toMatch(/emergency services/i);
       expect(ctx.emergencyTransferAt).toBeDefined();
+      expect(ctx.emergencyHandoffAt).toBeDefined();
+      expect(emergencyHandoffSpy).toHaveBeenCalledTimes(1);
+      expect(emergencyHandoffSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callId: 'call-007',
+          reason: 'emergency_transfer',
+          correlationId: 'corr-low',
+        }),
+      );
 
       const routedState = new RoutedState();
       const routed = await routedState.handle(ctx, { type: 'telephony.call.routed' });
@@ -409,6 +420,7 @@ describe('Telephony state machine', () => {
 
       const transcribe = vi.fn(async () => ({ text: 'need help' }));
 
+      const emergencyHandoffSpy = vi.fn(async () => {});
       const ctx: TelephonyContext = applyTelephonyDependencies({
         id: 'call-008',
         callId: 'call-008',
@@ -420,6 +432,7 @@ describe('Telephony state machine', () => {
         intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.8,
         emergencyTransferEnabled: false,
+        emergencyHandoff: emergencyHandoffSpy,
       } as TelephonyContext);
 
       const transcribedState = new TranscribedState();
@@ -436,6 +449,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentRoutingDecision).toBe('fallback');
       expect(publishSpy).toHaveBeenCalledTimes(2);
       expect(ctx.callbackWindowOptions).toBeUndefined();
+      expect(emergencyHandoffSpy).not.toHaveBeenCalled();
     });
 
     it('maps billing intent to admin routing without triage input', async () => {

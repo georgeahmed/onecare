@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import math
+import os
 import pickle
 from pathlib import Path
 
 from common.features.encode_features import encode_features
 from common.calibration import fit_temperature_threshold
+from common.model_io import save_model_artifact
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_DATA_PATH = MODEL_DIR / "acuity_training_data.pkl"
-MODEL_PATH = MODEL_DIR / "acuity_model.pkl"
-META_PATH = MODEL_DIR / "acuity.meta.json"
+MODEL_NAME = "acuity"
+MODEL_VERSION = os.getenv("ACUITY_MODEL_VERSION", "0.1.0")
 
 
 def _load_training_samples() -> list[dict]:
@@ -95,8 +96,7 @@ def main() -> None:
         else:
             prototypes[label] = entry["sum"]
 
-    with MODEL_PATH.open("wb") as handle:
-        pickle.dump({"prototypes": prototypes, "schema": "https://onecare/features/acuity/v1"}, handle)
+    artifact_payload = {"prototypes": prototypes, "schema": "https://onecare/features/acuity/v1"}
 
     scores = [_emergency_score(vector, prototypes) for vector in vectors]
     calibrator = fit_temperature_threshold(scores, labels, positive_label=2)
@@ -111,9 +111,15 @@ def main() -> None:
             "positive_label": 2,
         },
     }
-    META_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    artifact_path = save_model_artifact(
+        MODEL_NAME,
+        MODEL_VERSION,
+        artifact_payload,
+        metadata,
+        models_dir=MODEL_DIR,
+    )
 
-    print(f"Training completed. Model saved to {MODEL_PATH}")
+    print(f"Training completed. Model saved to {artifact_path}")
 
 
 if __name__ == "__main__":

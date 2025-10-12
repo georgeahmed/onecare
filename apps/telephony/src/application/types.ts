@@ -12,6 +12,7 @@ import type {
   IntentClassifier,
 } from '../adapters/intent.classifier';
 import type { CallMetadata } from '../adapters/ivr.adapter';
+import type { EmergencyHandoffDetails } from '../adapters/emergency.handoff';
 
 export interface TelephonyContext extends MachineContext {
   callId: string;
@@ -47,6 +48,8 @@ export interface TelephonyContext extends MachineContext {
   emergencyTransferTriggered?: boolean;
   emergencyTransferAt?: number;
   forceEmergencyTransfer?: boolean;
+  emergencyHandoffAt?: number;
+  emergencyHandoff?: (details: EmergencyHandoffDetails) => Promise<void> | void;
   ivrPrompts?: string[];
   enqueuePrompt?: (prompt: string) => Promise<void> | void;
   now?: () => number;
@@ -82,3 +85,5 @@ export interface LanguagePromptSelection {
   promptKey: string;
   digit: number;
 }
+
+export type { EmergencyHandoffDetails };

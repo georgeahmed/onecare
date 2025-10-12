@@ -14,7 +14,7 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (callback_windows_by_priority)
 
 Status: in-progress
-Progress: 20%
+Progress: 40%
 
 Dependencies
 - telephony-voice/engineer-01 (ASR ingest)
@@ -26,4 +26,4 @@ Tasks
 - [ ] TV-02.2 — Map intents → triage input and publish telephony.intent.classified
 - [ ] TV-02.3 — Callback window offering logic using config (by priority)
 - [x] TV-02.4 — IVR prompts and language options (i18n, config-driven)
-- [ ] TV-02.5 — Emergency IVR handoff end‑to‑end stub
+- [x] TV-02.5 — Emergency IVR handoff end‑to‑end stub

@@ -1,6 +1,6 @@
-import { FormEvent, useId, useState } from 'react';
+import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { submitIntake } from '../lib/api';
-import type { ErrorEnvelope, PortalSubmission } from '../lib/types';
+import type { ErrorEnvelope, PortalSubmission, SafetyDecision } from '../lib/types';
 import ErrorAlert from './ErrorAlert';
 
 const buildInitialSubmission = (): PortalSubmission => ({
@@ -17,6 +17,9 @@ const IntakeForm = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<ErrorEnvelope | null>(null);
+  const [decision, setDecision] = useState<SafetyDecision | null>(null);
+  const [decisionCorrelationId, setDecisionCorrelationId] = useState<string | undefined>();
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const practiceIdInputId = useId();
   const patientIdInputId = useId();
@@ -29,6 +32,8 @@ const IntakeForm = () => {
     setFormData(buildInitialSubmission());
     setHasSubmitted(false);
     setSubmitError(null);
+    setDecision(null);
+    setDecisionCorrelationId(undefined);
   };
 
   const normalizeErrorEnvelope = async (error: unknown): Promise<ErrorEnvelope> => {
@@ -41,6 +46,21 @@ const IntakeForm = () => {
 
     if (!error) {
       return fallback;
+    }
+
+    if (typeof error === 'object' && error !== null) {
+      const withEnvelope = error as { envelope?: ErrorEnvelope };
+      if (withEnvelope.envelope?.error) {
+        const envelope = withEnvelope.envelope;
+        return {
+          correlationId: envelope.correlationId,
+          error: {
+            code: envelope.error.code,
+            message: envelope.error.message ?? fallback.error.message,
+            details: envelope.error.details
+          }
+        };
+      }
     }
 
     if (error instanceof Response) {
@@ -66,7 +86,10 @@ const IntakeForm = () => {
     }
 
     if (typeof error === 'object' && error !== null) {
-      const candidate = error as { error?: { code?: string; message?: string; details?: Record<string, unknown> }; correlationId?: string };
+      const candidate = error as {
+        error?: { code?: string; message?: string; details?: Record<string, unknown> };
+        correlationId?: string;
+      };
       if (candidate.error && typeof candidate.error.code === 'string') {
         return {
           correlationId: candidate.correlationId,
@@ -97,18 +120,64 @@ const IntakeForm = () => {
       return;
     }
     setSubmitError(null);
+    setDecision(null);
+    setDecisionCorrelationId(undefined);
+    setHasSubmitted(false);
     setIsSubmitting(true);
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      await submitIntake(formData);
+      const result = await submitIntake(formData, { signal: controller.signal });
+      setDecision(result.decision);
+      setDecisionCorrelationId(result.correlationId);
       setHasSubmitted(true);
     } catch (error) {
       const envelope = await normalizeErrorEnvelope(error);
       setSubmitError(envelope);
     } finally {
       setIsSubmitting(false);
+      abortControllerRef.current = null;
     }
   };
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const renderDecision = () => {
+    if (!decision) return null;
+
+    const outcomeFriendly =
+      decision.outcome === 'SAFE_TO_CONTINUE' ? 'Safe to continue' : 'Divert for review';
+    const defaultReason =
+      decision.outcome === 'SAFE_TO_CONTINUE'
+        ? 'No immediate safety risks detected.'
+        : 'Our team will be alerted to follow up.';
+
+    return (
+      <section aria-labelledby={statusMessageId} role="status">
+        <h2 id={statusMessageId}>{outcomeFriendly}</h2>
+        <p>{decision.reason ?? defaultReason}</p>
+        {decisionCorrelationId ? (
+          <p>
+            Reference: <code>{decisionCorrelationId}</code>
+          </p>
+        ) : null}
+        <button type="button" onClick={handleReset}>
+          Submit another response
+        </button>
+      </section>
+    );
+  };
+
+  if (hasSubmitted && decision) {
+    return renderDecision();
+  }
 
   if (hasSubmitted) {
     return (
