@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AppointmentRequest, AppointmentConfirmation, SlotSummary } from '../src/adapters/gpconnect.client';
 import { GpConnectClient } from '../src/adapters/gpconnect.client';
+import type { EnhancedAccessPolicy } from '../src/application/enhancedAccess';
 import {
   BookingContext,
   SearchState,
@@ -21,8 +22,8 @@ describe('Booking state machine integration', () => {
     const slots: SlotSummary[] = [
       {
         slotId: 'slot-123',
-        start: '2025-10-12T10:00:00Z',
-        end: '2025-10-12T10:10:00Z',
+        start: '2025-10-13T18:30:00+01:00',
+        end: '2025-10-13T18:45:00+01:00',
         organisationId: 'org-1',
         serviceType: 'GP',
       },
@@ -39,8 +40,8 @@ describe('Booking state machine integration', () => {
       return {
         appointmentId: `appt-${request.slotId}`,
         slotId: request.slotId,
-        start: '2025-10-12T10:00:00Z',
-        end: '2025-10-12T10:10:00Z',
+        start: '2025-10-13T18:30:00+01:00',
+        end: '2025-10-13T18:45:00+01:00',
       };
     });
 
@@ -50,18 +51,41 @@ describe('Booking state machine integration', () => {
       appointmentExecutor: executor,
     });
     const searchStub = vi.spyOn(searchClient, 'searchSlots').mockResolvedValue(slots);
+    const policy: EnhancedAccessPolicy = {
+      timezone: 'Europe/London',
+      windows: [
+        { name: 'evening', days: [1, 2, 3, 4, 5], startMinutes: 18 * 60, endMinutes: 21 * 60 },
+      ],
+      allowedSlotTypes: ['GP'],
+      fairness: {},
+    };
     const ctx: BookingContext = {
       id: 'booking-ctx',
       client: searchClient,
       patientId: 'patient-1',
       searchParams: { organisationId: 'org-1', serviceType: 'GP' },
+      enhancedAccessPolicy: policy,
     };
+
+    const { applyEnhancedAccessFilters } = await import('../src/application/enhancedAccess');
+    const manualFiltered = applyEnhancedAccessFilters(
+      slots.map((slot) => ({
+        id: slot.slotId,
+        start: slot.start,
+        end: slot.end,
+        organisationId: slot.organisationId,
+        serviceType: slot.serviceType,
+      })),
+      policy,
+    );
+    expect(manualFiltered.accepted).toHaveLength(1);
 
     const search = new SearchState();
     const nextAfterSearch = await search.handle(ctx, { type: 'booking.search' });
     expect(nextAfterSearch).toBe('Selected');
     expect(searchStub).toHaveBeenCalledWith({ organisationId: 'org-1', serviceType: 'GP' });
-    expect(ctx.slots?.[0].id).toBe('slot-123');
+    expect(ctx.slots?.[0]?.id).toBe('slot-123');
+    expect(ctx.rejectedSlots).toEqual([]);
 
     const select = new SelectedState();
     const nextAfterSelect = await select.handle(ctx, { type: 'booking.select' });

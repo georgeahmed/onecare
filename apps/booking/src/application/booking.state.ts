@@ -2,6 +2,8 @@ import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { GpConnectClient } from '../adapters/gpconnect.client';
 import { mapSlotsToView, type SlotView } from '../adapters/gpconnect.client';
+import type { EnhancedAccessPolicy, RejectedSlot } from './enhancedAccess';
+import { applyEnhancedAccessFilters } from './enhancedAccess';
 
 export interface BookingContext extends MachineContext {
   client: GpConnectClient;
@@ -11,6 +13,8 @@ export interface BookingContext extends MachineContext {
   appointmentConfirmation?: { appointmentId: string; slotId: string };
   patientId?: string;
   narrative?: string;
+  enhancedAccessPolicy?: EnhancedAccessPolicy;
+  rejectedSlots?: RejectedSlot[];
 }
 
 export interface BookingEvent extends MachineEvent {
@@ -30,7 +34,15 @@ export class SearchState extends BaseState<BookingContext, BookingEvent> {
       organisationId: String((params as { organisationId?: string }).organisationId ?? 'demo-org'),
       serviceType: (params as { serviceType?: string }).serviceType,
     });
-    ctx.slots = mapSlotsToView(response);
+    const slots = mapSlotsToView(response);
+    if (ctx.enhancedAccessPolicy) {
+      const result = applyEnhancedAccessFilters(slots, ctx.enhancedAccessPolicy);
+      ctx.slots = result.accepted;
+      ctx.rejectedSlots = result.rejected;
+    } else {
+      ctx.slots = slots;
+      ctx.rejectedSlots = [];
+    }
     return 'Selected';
   }
 }

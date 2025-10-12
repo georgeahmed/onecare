@@ -12,4 +12,7 @@ Short-term follow-ups discovered while wiring early triage functionality:
 - **Task enrichment & notifications**  
   - Extend the triage Task creation flow with richer payload (category, owner assignment provenance, attachments) and downstream notifications once provider assignment logic lands.
 
+- **Booking write-back & notifications**  
+  - Flesh out `WrittenBackState`/`ConfirmedState` in the booking state machine to persist GP Connect confirmations, emit booking events/notifications, and handle failure paths once downstream contracts are defined.
+
 Document owners: backend triage team. Update or prune these items as the surrounding work lands.

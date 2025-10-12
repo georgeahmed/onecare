@@ -11,6 +11,20 @@ core_hours:
 enhanced_access_windows:
   - weekdays_evening
   - saturday
+enhanced_access:
+  timezone: "Europe/London"
+  windows:
+    - name: "weekdays_evening"
+      days: [1, 2, 3, 4, 5]
+      start: "18:30"
+      end: "20:30"
+    - name: "saturday"
+      days: [6]
+      start: "09:00"
+      end: "12:00"
+  allowed_slot_types: ["EA", "ENHANCED_ACCESS"]
+  fairness:
+    max_per_organisation: 3
 red_flag_set:
   - "chest pain"
   - "shortness of breath"
