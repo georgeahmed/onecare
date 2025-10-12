@@ -12,10 +12,12 @@ const tracerName = '@onecare/observability';
 const correlationStorage = new AsyncLocalStorage<CorrelationContext>();
 const correlationAttribute = 'onecare.correlation_id';
 
+const globalDiagKey = Symbol.for('onecare.observability.diagLogger');
+const globalInitKey = Symbol.for('onecare.observability.initTracing');
+
 let tracingEnabled = false;
 let sdkInstance: NodeSDK | undefined;
 let sdkInitPromise: Promise<void> | undefined;
-const globalInitKey = Symbol.for('onecare.observability.initTracing');
 
 const truthy = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
 const falsy = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
@@ -39,7 +41,9 @@ function shouldEnableTracing(): boolean {
 }
 
 function ensureDiagLogger(): void {
+  if ((globalThis as Record<string | symbol, unknown>)[globalDiagKey]) return;
   diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.INFO);
+  (globalThis as Record<string | symbol, unknown>)[globalDiagKey] = true;
 }
 
 export function initTracing(serviceName: string): Promise<void> {

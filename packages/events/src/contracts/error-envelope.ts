@@ -8,6 +8,8 @@ export interface ErrorObject {
     | "unauthorized"
     | "forbidden"
     | "invalid_input"
+    | "unsupported_media_type"
+    | "payload_too_large"
     | "conflict"
     | "upstream_timeout"
     | "upstream_unavailable"

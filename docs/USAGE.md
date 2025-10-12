@@ -54,6 +54,8 @@ Makefile Shortcuts
 - make py-test — run Python tests
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082
+- make dev-run — start Safety Gate + Orchestrator (keeps running)
+- make dev-stop — stop Safety Gate + Orchestrator started by dev-run
 - make docker-up / make docker-down — compose lifecycle
 - make demo-docker — end-to-end demo via Docker (safety-check)
 - make demo-local — local demo (uvicorn + orchestrator)

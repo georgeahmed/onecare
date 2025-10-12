@@ -4,6 +4,7 @@ import type { IcsClient } from '../adapters/ics.client';
 import type { IcsOrganisationPolicy, ResolvedConfig } from '@onecare/config';
 import { getIcsOrganisationPolicies } from '@onecare/config';
 import { createCounter, logger } from '@onecare/observability';
+import type { ErrorEnvelope, ErrorObject } from '@onecare/events';
 
 const routingDecisionCounter = createCounter('ics.routing.decisions_total');
 const routingBlockedCounter = createCounter('ics.routing.blocked_total');
@@ -15,11 +16,16 @@ function normaliseOrgId(orgId: string): string {
   return orgId.trim().toLowerCase();
 }
 
+interface TokenBucketResult {
+  allowed: boolean;
+  retryAfterMs?: number;
+}
+
 class TokenBucketLimiter {
   private windowStart = 0;
   private count = 0;
 
-  constructor(private limit?: number) {}
+  constructor(private limit: number | undefined, private readonly now: () => number) {}
 
   updateLimit(limit?: number): void {
     this.limit = limit;
@@ -31,21 +37,42 @@ class TokenBucketLimiter {
     }
   }
 
-  tryConsume(now = Date.now()): boolean {
-    if (!this.limit || this.limit <= 0) {
-      return true;
+  tryConsume(): TokenBucketResult {
+    const limit = this.limit;
+    if (!limit || limit <= 0) {
+      return { allowed: true };
     }
+    const now = this.now();
     if (this.windowStart === 0 || now - this.windowStart >= RATE_WINDOW_MS) {
       this.windowStart = now;
       this.count = 0;
     }
-    if (this.count >= this.limit) {
-      return false;
+    if (this.count >= limit) {
+      const retryAfterMs = Math.max(0, this.windowStart + RATE_WINDOW_MS - now);
+      return { allowed: false, retryAfterMs };
     }
     this.count += 1;
-    return true;
+    return { allowed: true };
   }
 }
+
+export type RoutingOutcome =
+  | {
+      status: 'allowed';
+      policy: IcsOrganisationPolicy;
+    }
+  | {
+      status: 'forbidden';
+      httpStatus: 403;
+      error: ErrorEnvelope;
+    }
+  | {
+      status: 'rate_limited';
+      httpStatus: 429;
+      error: ErrorEnvelope;
+      retryAfterMs?: number;
+      policy: IcsOrganisationPolicy;
+    };
 
 export interface IcsContext extends MachineContext {
   client?: IcsClient;
@@ -55,6 +82,7 @@ export interface IcsContext extends MachineContext {
   blocked?: boolean;
   rateLimited?: boolean;
   routePolicy?: IcsOrganisationPolicy;
+  routingOutcome?: RoutingOutcome;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -63,12 +91,18 @@ export interface IcsEvent extends MachineEvent {
 
 type OrgPolicyMap = Record<string, IcsOrganisationPolicy>;
 
+interface InboundStateOptions {
+  now?: () => number;
+}
+
 export class InboundState extends BaseState<IcsContext, IcsEvent> {
   private readonly policies = new Map<string, IcsOrganisationPolicy>();
   private readonly limiters = new Map<string, TokenBucketLimiter>();
+  private readonly now: () => number;
 
-  constructor(policies: OrgPolicyMap = {}) {
+  constructor(policies: OrgPolicyMap = {}, options: InboundStateOptions = {}) {
     super('Inbound');
+    this.now = options.now ?? Date.now;
     this.applyPolicies(policies);
   }
 
@@ -82,14 +116,14 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     for (const [org, policy] of Object.entries(policies)) {
       const normalised = normaliseOrgId(org);
       this.policies.set(normalised, policy);
-      this.limiters.set(normalised, new TokenBucketLimiter(policy.rateLimit));
+      this.limiters.set(normalised, new TokenBucketLimiter(policy.rateLimit, this.now));
     }
   }
 
   private getLimiter(orgId: string, policy: IcsOrganisationPolicy): TokenBucketLimiter {
     let limiter = this.limiters.get(orgId);
     if (!limiter) {
-      limiter = new TokenBucketLimiter(policy.rateLimit);
+      limiter = new TokenBucketLimiter(policy.rateLimit, this.now);
       this.limiters.set(orgId, limiter);
       return limiter;
     }
@@ -115,6 +149,18 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       ctx.blocked = true;
       ctx.rateLimited = false;
       ctx.routePolicy = undefined;
+      ctx.routingOutcome = {
+        status: 'forbidden',
+        httpStatus: 403,
+        error: buildErrorEnvelope(
+          'forbidden',
+          'organisation_not_allowed',
+          {
+            organisationId: normalisedOrg,
+          },
+          correlationId,
+        ),
+      };
       logger.warn('ics.routing.blocked', {
         organisationId: normalisedOrg,
         correlationId,
@@ -126,11 +172,28 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     }
 
     const limiter = this.getLimiter(normalisedOrg, policy);
-    const allowed = limiter.tryConsume();
-    if (!allowed) {
+    const bucketResult = limiter.tryConsume();
+    if (!bucketResult.allowed) {
       ctx.blocked = false;
       ctx.rateLimited = true;
       ctx.routePolicy = policy;
+      const retryAfterMs = bucketResult.retryAfterMs;
+      ctx.routingOutcome = {
+        status: 'rate_limited',
+        httpStatus: 429,
+        policy,
+        retryAfterMs,
+        error: buildErrorEnvelope(
+          'too_many_requests',
+          'rate_limit_exceeded',
+          {
+            organisationId: normalisedOrg,
+            limitPerMinute: policy.rateLimit,
+            retryAfterMs,
+          },
+          correlationId,
+        ),
+      };
       logger.warn('ics.routing.rate_limited', {
         organisationId: normalisedOrg,
         correlationId,
@@ -145,6 +208,10 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     ctx.blocked = false;
     ctx.rateLimited = false;
     ctx.routePolicy = policy;
+    ctx.routingOutcome = {
+      status: 'allowed',
+      policy,
+    };
     routingDecisionCounter.add(1, { outcome: 'allowed', organisationId: normalisedOrg });
     return 'Validated';
   }
@@ -157,9 +224,20 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
 
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
     if (ctx.blocked) {
+      ctx.routingOutcome ??= {
+        status: 'forbidden',
+        httpStatus: 403,
+        error: buildErrorEnvelope('forbidden', 'organisation_not_allowed'),
+      };
       return 'Blocked';
     }
     if (ctx.rateLimited) {
+      ctx.routingOutcome ??= {
+        status: 'rate_limited',
+        httpStatus: 429,
+        policy: ctx.routePolicy!,
+        error: buildErrorEnvelope('too_many_requests', 'rate_limit_exceeded'),
+      };
       return 'RateLimited';
     }
     if (!ctx.routePolicy) {
@@ -177,6 +255,21 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
     return 'Acked';
   }
+}
+
+function buildErrorEnvelope(
+  code: Extract<ErrorObject['code'], 'forbidden' | 'too_many_requests'>,
+  message: string,
+  details?: Record<string, unknown>,
+  correlationId?: string,
+): ErrorEnvelope {
+  const error: ErrorObject = {
+    code,
+    message,
+    ...(details ? { details } : {}),
+    ...(correlationId ? { correlationId } : {}),
+  };
+  return { error };
 }
 
 export class AckedState extends BaseState<IcsContext, IcsEvent> {

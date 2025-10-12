@@ -14,6 +14,7 @@ import {
   type PortalState,
   type DeferralFlushContext,
 } from './application/portal.state';
+import type { PortalNotifyPublishRequest, PortalNotifyPublisher } from './adapters/portal-notifier';
 import type { DeferralStore, DeferralRecord } from '@onecare/ports';
 
 export type Task = () => Promise<void> | void;
@@ -83,6 +84,7 @@ export interface PortalGuardDependencies {
   correlationIdFactory?: () => string;
   deferralStore?: DeferralStore;
   deferralPublisher?: DeferralPublisher;
+  portalNotifyPublisher?: PortalNotifyPublisher;
 }
 
 export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDependencies): ScheduledTask {
@@ -205,6 +207,20 @@ export async function runPortalGuardTick(
     decision,
   });
 
+  if (deps.portalNotifyPublisher) {
+    const notifyRequest = buildPortalNotifyRequest(practiceId, correlationId, now, decision);
+    try {
+      await deps.portalNotifyPublisher.publish(notifyRequest);
+    } catch (error) {
+      logger.error('portal.notify.publish_unhandled_failure', {
+        practiceId,
+        correlationId,
+        state: notifyRequest.state,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   await processDeferrals(practiceId, now, correlationId, decision, deps);
   return decision;
 }
@@ -299,5 +315,45 @@ async function processDeferrals(
       correlationId,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+function buildPortalNotifyRequest(
+  practiceId: string,
+  correlationId: string,
+  now: Date,
+  decision: PortalDecision,
+): PortalNotifyPublishRequest {
+  const request: PortalNotifyPublishRequest = {
+    practiceId,
+    state: derivePortalState(decision),
+    at: now.toISOString(),
+    correlationId,
+  };
+  const reasonCode = deriveReasonCode(decision.reason);
+  if (reasonCode) {
+    request.reasonCode = reasonCode;
+  }
+  return request;
+}
+
+function derivePortalState(decision: PortalDecision): 'UP' | 'DOWN' | 'OOH' {
+  if (decision.reason === 'outside_hours') {
+    return 'OOH';
+  }
+  return decision.desiredState.portalOpen ? 'UP' : 'DOWN';
+}
+
+function deriveReasonCode(reason: PortalDecisionReason): string | undefined {
+  switch (reason) {
+    case 'within_hours':
+    case 'outside_hours':
+      return 'CORE_HOURS';
+    case 'config_missing':
+      return 'CONFIG_MISSING';
+    case 'config_invalid':
+      return 'CONFIG_INVALID';
+    default:
+      return undefined;
   }
 }

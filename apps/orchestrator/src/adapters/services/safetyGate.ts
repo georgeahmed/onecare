@@ -63,9 +63,18 @@ function postJson<T>(
             return reject(new Error(`HTTP ${res.statusCode}: ${text}`));
           }
           try {
-            resolve(JSON.parse(text) as T);
+            resolve(parseJsonOrThrow<T>(text));
           } catch (e) {
-            resolve(text as unknown as T);
+            const error = Object.assign(
+              new Error('invalid_json'),
+              {
+                code: 'invalid_json',
+                statusCode: res.statusCode,
+                raw: text,
+                cause: e,
+              },
+            );
+            reject(error);
           }
         });
       });
@@ -87,6 +96,23 @@ function postJson<T>(
       reject(err);
     }
   });
+}
+
+export function parseJsonOrThrow<T>(text: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch (err) {
+    const error = new Error('invalid_json') as Error & {
+      code?: string;
+      cause?: unknown;
+      raw?: string;
+    };
+    error.name = 'SafetyGateParseError';
+    error.code = 'invalid_json';
+    error.cause = err;
+    error.raw = text;
+    throw error;
+  }
 }
 
 export async function analyzePortalSubmission(

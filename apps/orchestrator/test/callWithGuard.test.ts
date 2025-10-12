@@ -7,7 +7,11 @@ beforeEach(() => {
 
 describe('callWithGuard', () => {
   it('returns on success without retries', async () => {
-    const res = await callWithGuard('svc', async () => 42, { now: () => 0, sleep: async () => {}, random: () => 0 });
+    const res = await callWithGuard('svc', async (_signal: AbortSignal) => 42, {
+      now: () => 0,
+      sleep: async () => {},
+      random: () => 0,
+    });
     expect(res).toBe(42);
   });
 
@@ -16,7 +20,7 @@ describe('callWithGuard', () => {
     const sleep = vi.fn(async () => {});
     const res = await callWithGuard(
       'svc2',
-      async () => {
+      async (_signal: AbortSignal) => {
         calls++;
         if (calls === 1) {
           // simulate timeout by ignoring signal and throwing timeout
@@ -34,7 +38,7 @@ describe('callWithGuard', () => {
 
   it('opens circuit after repeated failures', async () => {
     const sleep = async () => {};
-    const failing = async () => {
+    const failing = async (_signal: AbortSignal) => {
       const e: any = new Error('ECONNRESET');
       e.code = 'ECONNRESET';
       throw e;
@@ -50,7 +54,7 @@ describe('callWithGuard', () => {
 
   it('half-open breaker after cooldown', async () => {
     const sleep = async () => {};
-    const failing = async () => {
+    const failing = async (_signal: AbortSignal) => {
       const e: any = new Error('ECONNRESET');
       e.code = 'ECONNRESET';
       throw e;
@@ -74,7 +78,7 @@ describe('callWithGuard', () => {
     await expect(
       callWithGuard(
         'svc-half',
-        async () => {
+        async (_signal: AbortSignal) => {
           halfOpenCalled = true;
           return 'ok';
         },

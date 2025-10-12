@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type {
@@ -85,11 +86,11 @@ export class ClassifiedState extends BaseState<PharmacyContext, PharmacyEvent> {
     const logFields = {
       ctxId: ctx.id,
       correlationId: ctx.correlationId,
-      condition: ctx.document.conditionCode.trim().toLowerCase(),
+      conditionFingerprint: fingerprint(ctx.document.conditionCode),
       eligible: decisionWithReason.ok,
       eligibilityReason: decisionWithReason.reason ?? 'unknown',
-      patientAgeYears: ctx.patient.ageYears,
-      patientSex: ctx.patient.sex,
+      hasPatientAgeYears: isFiniteNumber(ctx.patient.ageYears),
+      hasPatientSex: Boolean(ctx.patient.sex && ctx.patient.sex !== 'unknown'),
     };
 
     if (decisionWithReason.ok) {
@@ -117,7 +118,7 @@ export class EligibleState extends BaseState<PharmacyContext, PharmacyEvent> {
     logger.info('pharmacy.referral.ready', {
       ctxId: ctx.id,
       correlationId: ctx.correlationId,
-      condition: ctx.document?.conditionCode?.trim().toLowerCase(),
+      conditionFingerprint: fingerprint(ctx.document?.conditionCode),
       eligibilityReason: ctx.eligibilityDecision.reason ?? 'eligible',
     });
     return 'Referred';
@@ -176,8 +177,8 @@ export class ReferredState extends BaseState<PharmacyContext, PharmacyEvent> {
       logger.info('pharmacy.referral.sent', {
         ctxId: ctx.id,
         correlationId: ctx.correlationId,
-        organisationId: ctx.referralOrgId,
-        serviceRequestId: ctx.serviceRequest.id,
+        organisationFingerprint: fingerprint(ctx.referralOrgId),
+        hasServiceRequest: Boolean(ctx.serviceRequest?.id),
         status: result.status,
         eligibilityReason: ctx.eligibilityDecision?.reason ?? 'eligible',
       });
@@ -186,8 +187,8 @@ export class ReferredState extends BaseState<PharmacyContext, PharmacyEvent> {
       logger.error('pharmacy.referral.failed', {
         ctxId: ctx.id,
         correlationId: ctx.correlationId,
-        organisationId: ctx.referralOrgId,
-        serviceRequestId: ctx.serviceRequest.id,
+        organisationFingerprint: fingerprint(ctx.referralOrgId),
+        hasServiceRequest: Boolean(ctx.serviceRequest?.id),
         eligibilityReason: ctx.eligibilityDecision?.reason ?? 'eligible',
         error:
           error instanceof Error
@@ -215,7 +216,7 @@ export class OutcomeRecordedState extends BaseState<PharmacyContext, PharmacyEve
     logger.info('pharmacy.outcome.recorded', {
       ctxId: ctx.id,
       correlationId: ctx.correlationId,
-      serviceRequestId: ctx.serviceRequest?.id,
+      hasServiceRequest: Boolean(ctx.serviceRequest?.id),
       referralStatus: ctx.referralResult?.status ?? 'none',
       eligibilityReason: ctx.eligibilityDecision?.reason ?? 'eligible',
     });
@@ -396,4 +397,15 @@ function buildEscalationTask(ctx: PharmacyContext, reason: string): unknown {
     focus: ctx.serviceRequest ? { reference: `ServiceRequest/${ctx.serviceRequest.id}` } : undefined,
     note: ctx.referralSummary ? [{ text: ctx.referralSummary }] : undefined,
   };
+}
+
+function fingerprint(value: string | undefined): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return undefined;
+  const hash = createHash('sha256').update(trimmed).digest('hex');
+  return hash.slice(0, 12);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }

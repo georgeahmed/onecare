@@ -4,7 +4,7 @@ import { callWithGuard, CircuitBreaker } from '../src/adapters/common/guardrails
 describe('guardrails', () => {
   it('retries with backoff and succeeds', async () => {
     let attempts = 0;
-    const fn = async () => {
+    const fn = async (_signal: AbortSignal) => {
       attempts += 1;
       if (attempts < 3) throw new Error('flaky');
       return 'ok';
@@ -16,7 +16,7 @@ describe('guardrails', () => {
 
   it('opens circuit after consecutive failures', async () => {
     let attempts = 0;
-    const fn = async () => {
+    const fn = async (_signal: AbortSignal) => {
       attempts += 1;
       throw new Error('fail');
     };
@@ -31,12 +31,12 @@ describe('guardrails', () => {
     let attempts = 0;
     let resolveSleep: (() => void) | undefined;
     const sleep = vi.fn(
-      () =>
+      (_ms: number, _signal?: AbortSignal) =>
         new Promise<void>((resolve) => {
           resolveSleep = resolve;
         }),
     );
-    const fn = vi.fn(async () => {
+    const fn = vi.fn(async (_signal: AbortSignal) => {
       attempts += 1;
       if (attempts === 1) throw new Error('fail');
       return 'ok';
@@ -63,7 +63,7 @@ describe('guardrails', () => {
   });
 
   it('propagates timeout errors when work exceeds the limit', async () => {
-    const fn = vi.fn(() => new Promise<never>(() => {}));
+    const fn = vi.fn((_signal: AbortSignal) => new Promise<never>(() => {}));
     await expect(
       callWithGuard('svc-timeout', fn, {
         timeoutMs: 10,

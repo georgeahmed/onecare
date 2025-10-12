@@ -17,6 +17,8 @@
     { "path": "apps/access-gate" },
     { "path": "apps/telephony" },
     { "path": "apps/ics-hub" },
-    { "path": "apps/scribe" }
+    { "path": "apps/scribe" },
+    { "path": "apps/analytics" },
+    { "path": "apps/portal" }
   ]
 }

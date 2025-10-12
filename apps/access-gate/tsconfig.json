@@ -10,6 +10,8 @@
     { "path": "../../packages/statekit" },
     { "path": "../../packages/events" },
     { "path": "../../packages/config" },
-    { "path": "../../packages/observability" }
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/bus" },
+    { "path": "../../packages/domain" }
   ]
 }

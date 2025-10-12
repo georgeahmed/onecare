@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { logger } from '@onecare/observability';
 import type { SecurityServices, AuthContext } from '@onecare/security';
 
@@ -33,6 +34,20 @@ function createDefaultSecurityServices(): SecurityServices {
       if (!header || !reqId) {
         return false;
       }
+      const secret = resolveSharedSecret();
+      if (!secret) {
+        logger.warn('zero-trust signature rejected', { requestId: reqId, reason: 'secret_missing' });
+        return false;
+      }
+      const token = extractBearerToken(header);
+      if (!token) {
+        logger.warn('zero-trust signature rejected', { requestId: reqId, reason: 'invalid_header' });
+        return false;
+      }
+      if (!verifySignature(token, reqId, secret)) {
+        logger.warn('zero-trust signature rejected', { requestId: reqId, reason: 'mismatch' });
+        return false;
+      }
       const now = Date.now();
       gc(now);
       const key = `${reqId}:${header}`;
@@ -65,6 +80,34 @@ function createDefaultSecurityServices(): SecurityServices {
       return requestedResources.length > 0;
     },
   };
+}
+
+function resolveSharedSecret(): string | null {
+  const secret = process.env.SECURITY_SHARED_SECRET;
+  if (!secret) return null;
+  const trimmed = secret.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function extractBearerToken(header: string): string | null {
+  const parts = header.split(/	|\s+/).filter(Boolean);
+  if (parts.length !== 2) return null;
+  if (parts[0].toLowerCase() !== 'bearer') return null;
+  return parts[1];
+}
+
+function verifySignature(token: string, payload: string, secret: string): boolean {
+  const expected = createHmac('sha256', secret).update(payload).digest('base64url');
+  const providedBuf = Buffer.from(token);
+  const expectedBuf = Buffer.from(expected);
+  if (providedBuf.length !== expectedBuf.length) {
+    return false;
+  }
+  try {
+    return timingSafeEqual(providedBuf, expectedBuf);
+  } catch {
+    return false;
+  }
 }
 
 let activeSecurityServices: SecurityServices = createDefaultSecurityServices();

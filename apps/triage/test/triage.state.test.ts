@@ -9,6 +9,9 @@ import {
   TaskCreatedState,
   DuplicateState,
   resetDedupCache,
+  getDedupCacheSizeForTest,
+  getDedupCacheEntryCountForTest,
+  DEDUP_CACHE_LIMIT_FOR_TEST,
   type TriageContext,
   type DuplicateDetails,
 } from '../src/application/triage.state';
@@ -135,6 +138,78 @@ describe('IntakeState', () => {
     expect(lateCtx.isDuplicate).not.toBe(true);
     expect(dissimilarCtx.score).toBeCloseTo(0.5, 6);
     expect(lateCtx.score).toBeCloseTo(0.6, 6);
+  });
+
+  it('prunes stale dedup entries when window elapses', async () => {
+    const state = new IntakeState();
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        dedup_window: 'PT1H',
+        sim_threshold: 0.5,
+      },
+    };
+
+    await state.handle(
+      {
+        id: 'first',
+        config,
+        features: { acuity: 1 },
+        patientId: 'patient-old',
+        narrative: 'Initial submission',
+        now: 0,
+      },
+      { type: 'triage.evaluate' },
+    );
+    expect(getDedupCacheSizeForTest()).toBe(1);
+
+    await state.handle(
+      {
+        id: 'second',
+        config,
+        features: { acuity: 0.8 },
+        patientId: 'patient-new',
+        narrative: 'New patient submission',
+        now: 3 * 60 * 60 * 1_000,
+      },
+      { type: 'triage.evaluate' },
+    );
+
+    expect(getDedupCacheSizeForTest()).toBe(1);
+    expect(getDedupCacheEntryCountForTest('patient-old')).toBe(0);
+    expect(getDedupCacheEntryCountForTest('patient-new')).toBeGreaterThan(0);
+  });
+
+  it('caps per-patient dedup history to the configured limit', async () => {
+    const state = new IntakeState();
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        dedup_window: 'PT4H',
+        sim_threshold: 0.9,
+      },
+    };
+
+    const patientId = 'patient-limit';
+    const runs = DEDUP_CACHE_LIMIT_FOR_TEST + 5;
+
+    for (let i = 0; i < runs; i += 1) {
+      await state.handle(
+        {
+          id: `ctx-${i}`,
+          config,
+          features: { acuity: 1 },
+          patientId,
+          narrative: `Submission ${i}`,
+          now: i * 1_000,
+        },
+        { type: 'triage.evaluate' },
+      );
+    }
+
+    expect(getDedupCacheEntryCountForTest(patientId)).toBeLessThanOrEqual(DEDUP_CACHE_LIMIT_FOR_TEST);
   });
 });
 

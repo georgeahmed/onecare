@@ -1,10 +1,24 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from common.contracts.models import PortalSubmission, SafetyDecision
 from common.otel import instrument_fastapi
 
-app = FastAPI(title="Safety Gate Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Load model artifacts before accepting requests.
+    app.state.model_ready = False
+    app.state.model_ready = True  # Replace with actual initialization when available.
+    try:
+        yield
+    finally:
+        app.state.model_ready = False
+
+
+app = FastAPI(title="Safety Gate Service", version="0.1.0", lifespan=lifespan)
 instrument_fastapi(app)
-app.state.model_ready = True
 
 
 @app.get("/health")

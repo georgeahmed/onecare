@@ -14,6 +14,7 @@ import { getCounterRecords, resetMetrics } from '@onecare/observability';
 import type { ResolvedConfig } from '@onecare/config';
 import type { DeferralStore, DeferralRecord } from '@onecare/ports';
 import type { DeferralPublisher } from '../src/scheduler';
+import type { PortalNotifyPublishRequest, PortalNotifyPublisher } from '../src/adapters/portal-notifier';
 
 class MemoryPortalAdapter implements PortalAdapter {
   public state: PortalState = {
@@ -93,6 +94,14 @@ class FakeDeferralPublisher implements DeferralPublisher {
   async publish(record: DeferralRecord, _context: DeferralFlushContext): Promise<void> {
     this.published.push(record);
   }
+}
+
+class MockPortalNotifier implements PortalNotifyPublisher {
+  public readonly requests: PortalNotifyPublishRequest[] = [];
+
+  public publish = vi.fn(async (request: PortalNotifyPublishRequest) => {
+    this.requests.push(request);
+  });
 }
 
 const BASE_CONFIG = {
@@ -231,6 +240,7 @@ describe('portal uptime guard scheduler', () => {
     vi.useFakeTimers();
 
     const loadConfig = vi.fn(async () => BASE_CONFIG);
+    const notifier = new MockPortalNotifier();
     const nowValues = [
       new Date('2025-01-01T08:30:00Z'),
       new Date('2025-01-01T08:31:10Z'),
@@ -242,12 +252,19 @@ describe('portal uptime guard scheduler', () => {
       now: () => nowValues[Math.min(index++, nowValues.length - 1)],
       correlationIdFactory: () => 'corr-1',
       singleflightTtlMs: 5_000,
+      portalNotifyPublisher: notifier,
     });
 
     await vi.runOnlyPendingTimersAsync();
     expect(loadConfig).toHaveBeenCalledTimes(1);
     expect(adapter.applyIntents).toHaveBeenCalledTimes(1);
     expect(adapter.state.portalOpen).toBe(true);
+    expect(notifier.publish).toHaveBeenCalledTimes(1);
+    expect(notifier.requests[0]).toMatchObject({
+      practiceId: 'practice-1',
+      state: 'UP',
+      correlationId: 'corr-1',
+    });
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(loadConfig).toHaveBeenCalledTimes(2);
@@ -292,6 +309,34 @@ describe('portal uptime guard scheduler', () => {
     await vi.runOnlyPendingTimersAsync();
     expect(loadConfig).toHaveBeenCalledTimes(2);
     guard.cancel();
+  });
+
+  it('does not publish portal notify when state unchanged', async () => {
+    Math.random = vi.fn(() => 0);
+    vi.useFakeTimers();
+
+    adapter.state = {
+      portalOpen: true,
+      acceptsSubmissions: true,
+    };
+
+    const loadConfig = vi.fn(async () => BASE_CONFIG);
+    const notifier = new MockPortalNotifier();
+
+    const guard = startPortalUptimeGuard('practice-1', {
+      loadConfig,
+      adapter,
+      now: () => new Date('2025-01-01T08:30:00Z'),
+      correlationIdFactory: () => 'corr-unchanged',
+      singleflightTtlMs: 5_000,
+      portalNotifyPublisher: notifier,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    guard.cancel();
+
+    expect(adapter.applyIntents).not.toHaveBeenCalled();
+    expect(notifier.publish).not.toHaveBeenCalled();
   });
 
   it('flushes deferrals when entering core hours', async () => {

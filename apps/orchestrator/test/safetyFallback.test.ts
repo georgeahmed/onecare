@@ -1,6 +1,7 @@
-import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
+import { beforeAll, afterAll, beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import { Topics, type TriageInput } from '@onecare/events';
+import { createHmac } from 'node:crypto';
+import { Topics, type TriageInput, type PortalSubmission } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 
 vi.mock('../src/adapters/services/callWithGuard', async () => {
@@ -12,10 +13,12 @@ vi.mock('../src/adapters/services/callWithGuard', async () => {
 });
 
 import { server, setBusReadyForTest, getMessageBusForTest, setIdempotencyStoreForTest, resetIdempotencyStoreForTest } from '../src/index';
-import { InMemoryIdempotencyStore } from '../src/application/idempotency';
+import { InMemoryIdempotencyStore, deriveIdempotencyKey } from '../src/application/idempotency';
+import { resetSecurityServices } from '../src/adapters/security';
 
 let bus: MessageBus;
 let baseUrl: string;
+const SHARED_SECRET = 'test-shared-secret';
 
 function url(): string {
   if (baseUrl) return baseUrl;
@@ -33,6 +36,7 @@ describe('safety gate fallback', () => {
   beforeAll(async () => {
     delete process.env.NATS_URL;
     process.env.BUS_IMPL = 'memory';
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
     bus = getMessageBusForTest();
     await new Promise<void>((resolve) => {
       server.listen(0, resolve);
@@ -43,12 +47,15 @@ describe('safety gate fallback', () => {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
+    delete process.env.SECURITY_SHARED_SECRET;
   });
 
   beforeEach(() => {
     baseUrl = '';
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
+    resetSecurityServices();
   });
 
   afterEach(() => {
@@ -59,22 +66,27 @@ describe('safety gate fallback', () => {
     const events: TriageInput[] = [];
     const sub = await subscribeTriage((payload) => events.push(payload));
 
+    const requestId = 'fallback-test';
+    const payload: PortalSubmission = {
+      practiceId: 'practice-1',
+      patient: { id: 'patient-1' },
+      narrative: 'fallback scenario',
+      channel: 'web',
+    };
+    const idemKey = deriveIdempotencyKey(payload, payload.patient.id);
+    const fingerprint = `${requestId}:${idemKey}`;
+    const signature = createHmac('sha256', SHARED_SECRET).update(fingerprint).digest('base64url');
     const res = await fetch(`${url()}/safety-check`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: 'Bearer token',
+        authorization: `Bearer ${signature}`,
         'x-actor-type': 'patient',
         'x-actor-id': 'patient-1',
-        'x-request-id': 'fallback-test',
+        'x-request-id': requestId,
         'x-auth-scope': 'submit',
       },
-      body: JSON.stringify({
-        practiceId: 'practice-1',
-        patient: { id: 'patient-1' },
-        narrative: 'fallback scenario',
-        channel: 'web',
-      }),
+      body: JSON.stringify(payload),
     });
 
     await sub.unsubscribe();

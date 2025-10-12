@@ -73,6 +73,49 @@ describe('TelemetryState', () => {
       expect.objectContaining({ reason: 'stale' }),
     );
   });
+
+  it('degrades gracefully when telemetry collection fails', async () => {
+    const telemetrySource = {
+      getArrivalsPerHour: vi.fn(async () => {
+        throw new Error('telemetry timeout');
+      }),
+      getQueueDepth: vi.fn(async () => 7),
+      getNoShowRate: vi.fn(async () => 0.12),
+      getStaffingLevel: vi.fn(async () => 6),
+      health: vi.fn(async () => ({ ok: true })),
+    } as unknown as TelemetrySource;
+    const clock = () => new Date('2025-03-01T10:00:00Z');
+    const ctx = buildContext({ telemetrySource, clock });
+    const state = new TelemetryState();
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+    const next = await state.handle(ctx, tickEvent);
+
+    expect(next).toBe('Forecast');
+    expect(ctx.telemetryHealth?.ok).toBe(false);
+    expect(ctx.telemetryHealth?.reason).toBe('telemetry timeout');
+    expect(ctx.telemetry).toEqual({
+      arrivalsPerHour: 0,
+      queueDepth: 0,
+      noShowRate: 0,
+      staffingLevel: 0,
+      collectedAt: '2025-03-01T10:00:00.000Z',
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      'capacity.telemetry.collect_failed',
+      expect.objectContaining({ reason: 'telemetry timeout' }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      'metric.capacity.telemetry.health',
+      expect.objectContaining({ ok: false, reason: 'telemetry timeout' }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      'capacity.telemetry.unhealthy',
+      expect.objectContaining({ reason: 'telemetry timeout' }),
+    );
+  });
 });
 
 describe('forecastNeedVsSupply', () => {

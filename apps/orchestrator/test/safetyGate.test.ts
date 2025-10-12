@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzePortalSubmission } from '../src/adapters/services/safetyGate';
+import { analyzePortalSubmission, parseJsonOrThrow } from '../src/adapters/services/safetyGate';
 
 const sample = {
   practiceId: 'p1',
@@ -19,3 +19,19 @@ describe('safetyGate SSRF guard', () => {
   });
 });
 
+describe('parseJsonOrThrow', () => {
+  it('parses valid JSON values', () => {
+    const result = parseJsonOrThrow<{ ok: boolean }>(' { "ok": true } ');
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('throws informative errors for malformed JSON', () => {
+    expect(() => parseJsonOrThrow('not-json')).toThrowError(/invalid_json/);
+    try {
+      parseJsonOrThrow('not-json');
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe('invalid_json');
+      expect((err as { raw?: string }).raw).toBe('not-json');
+    }
+  });
+});

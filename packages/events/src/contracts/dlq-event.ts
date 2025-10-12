@@ -2,19 +2,16 @@
 
 export interface DlqEvent {
   originalTopic: string;
-  failedEnvelopeId: string;
   correlationId?: string;
-  reasonCode:
-    | "schema_mismatch"
-    | "processing_failed"
-    | "timeout"
-    | "circuit_open"
-    | "unauthorized"
-    | "forbidden"
-    | "conflict";
+  errorCode?: string;
   errorMessage?: string;
-  attempts: number;
-  firstSeen?: string;
-  lastFailedAt: string;
-  payloadDigest?: string;
+  /**
+   * Opaque reference or small safe context; avoid PHI.
+   */
+  payloadRef?:
+    | {
+        [k: string]: unknown;
+      }
+    | string;
+  ts: string;
 }

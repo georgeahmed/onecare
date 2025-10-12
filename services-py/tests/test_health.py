@@ -25,14 +25,14 @@ def test_health_endpoint_returns_ok(service_app):
 def test_ready_endpoint_reflects_model_state(service_app):
     original_state = getattr(service_app.state, "model_ready", False)
     try:
-        service_app.state.model_ready = True
         with TestClient(service_app) as client:
+            client.app.state.model_ready = True
             response = client.get("/ready")
             assert response.status_code == 200
             assert response.json() == {"status": "ready"}
 
-        service_app.state.model_ready = False
         with TestClient(service_app) as client:
+            client.app.state.model_ready = False
             response = client.get("/ready")
             assert response.status_code == 503
             assert response.json() == {"detail": {"status": "not_ready"}}

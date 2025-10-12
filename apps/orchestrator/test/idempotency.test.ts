@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import { createHmac } from 'node:crypto';
 import { Topics, type TriageInput, type TypedEnvelope } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import { InMemoryIdempotencyStore, deriveIdempotencyKey } from '../src/application/idempotency';
@@ -46,6 +47,8 @@ async function postSafetyCheck(payload: unknown, headers: Record<string, string>
   });
 }
 
+const SHARED_SECRET = 'test-shared-secret';
+
 const submission = {
   practiceId: 'p1',
   patient: { id: 'patient-123' },
@@ -53,14 +56,26 @@ const submission = {
   channel: 'web' as const,
 };
 
-const authHeaders = {
-  authorization: 'Bearer token',
-  'content-type': 'application/json',
-  'x-actor-type': 'patient',
-  'x-actor-id': 'patient-123',
-  'x-request-id': 'req-uniq-1',
-  'x-auth-scope': 'submit',
-};
+function buildAuthHeaders(
+  requestId: string,
+  payload: typeof submission,
+  overrides: Record<string, string> = {}
+): Record<string, string> {
+  const actorId = overrides['x-actor-id'] ?? payload.patient.id;
+  const explicitKey = overrides['x-idempotency-key'];
+  const derivedKey = explicitKey ?? deriveIdempotencyKey(payload, actorId);
+  const fingerprint = `${requestId}:${derivedKey}`;
+  const signature = createHmac('sha256', SHARED_SECRET).update(fingerprint).digest('base64url');
+  return {
+    authorization: `Bearer ${signature}`,
+    'content-type': 'application/json',
+    'x-actor-type': 'patient',
+    'x-actor-id': actorId,
+    'x-request-id': requestId,
+    'x-auth-scope': 'submit',
+    ...overrides,
+  };
+}
 
 describe('deriveIdempotencyKey', () => {
   it('changes when attachment metadata differs', () => {
@@ -92,6 +107,7 @@ describe('idempotency guard', () => {
   beforeAll(async () => {
     delete process.env.NATS_URL;
     process.env.BUS_IMPL = 'memory';
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
     bus = getMessageBusForTest();
     await new Promise<void>((resolve) => {
       server.listen(0, resolve);
@@ -99,6 +115,7 @@ describe('idempotency guard', () => {
   });
 
   afterAll(async () => {
+    delete process.env.SECURITY_SHARED_SECRET;
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
@@ -108,6 +125,7 @@ describe('idempotency guard', () => {
     base = '';
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
     resetSecurityServices();
   });
 
@@ -119,13 +137,13 @@ describe('idempotency guard', () => {
     const envelopes: TypedEnvelope<TriageInput>[] = [];
     const sub = await subscribeTriage((env) => envelopes.push(env));
 
-    const first = await postSafetyCheck(submission, authHeaders);
+    const first = await postSafetyCheck(submission, buildAuthHeaders('req-uniq-1', submission));
 
     expect(first.status).toBe(200);
     const key = first.headers.get('x-idempotency-key');
     expect(key).toBeTruthy();
 
-    const conflict = await postSafetyCheck(submission, { ...authHeaders, 'x-request-id': 'req-uniq-2' });
+    const conflict = await postSafetyCheck(submission, buildAuthHeaders('req-uniq-2', submission));
     expect(conflict.status).toBe(409);
     expect(conflict.headers.get('x-idempotency-key')).toBe(key);
     const body = await conflict.json();
@@ -144,12 +162,12 @@ describe('idempotency guard', () => {
     const firstSubmission = { ...submission, narrative: '111122223333' };
     const secondSubmission = { ...submission, narrative: 'aaaabbbbcccc' };
 
-    const first = await postSafetyCheck(firstSubmission, authHeaders);
+    const first = await postSafetyCheck(firstSubmission, buildAuthHeaders('req-uniq-1', firstSubmission));
     expect(first.status).toBe(200);
     const firstKey = first.headers.get('x-idempotency-key');
     expect(firstKey).toBeTruthy();
 
-    const second = await postSafetyCheck(secondSubmission, { ...authHeaders, 'x-request-id': 'req-uniq-3' });
+    const second = await postSafetyCheck(secondSubmission, buildAuthHeaders('req-uniq-3', secondSubmission));
     expect(second.status).toBe(200);
     const secondKey = second.headers.get('x-idempotency-key');
     expect(secondKey).toBeTruthy();
@@ -162,14 +180,11 @@ describe('idempotency guard', () => {
   it('allows only one request to proceed under concurrency', async () => {
     const events: TypedEnvelope<TriageInput>[] = [];
     const sub = await subscribeTriage((env) => events.push(env));
-    const concurrencyHeaders = {
-      ...authHeaders,
-      'x-idempotency-key': 'concurrent-key',
-    };
-
-    const requests = Array.from({ length: 5 }, (_, idx) =>
-      postSafetyCheck(submission, { ...concurrencyHeaders, 'x-request-id': `req-concurrent-${idx}` })
-    );
+    const requests = Array.from({ length: 5 }, (_, idx) => {
+      const requestId = `req-concurrent-${idx}`;
+      const headers = buildAuthHeaders(requestId, submission, { 'x-idempotency-key': 'concurrent-key' });
+      return postSafetyCheck(submission, headers);
+    });
     const results = await Promise.all(requests);
     await sub.unsubscribe();
 
@@ -196,12 +211,13 @@ describe('idempotency guard', () => {
       })
       .mockImplementation((name, fn, opts) => original(name, fn, opts));
 
-    const first = await postSafetyCheck(submission, { ...authHeaders, 'x-request-id': 'req-timeout-1' });
+    const first = await postSafetyCheck(submission, buildAuthHeaders('req-timeout-1', submission));
     expect(first.status).toBe(504);
     const firstKey = first.headers.get('x-idempotency-key');
     expect(firstKey).toBeTruthy();
 
-    const retry = await postSafetyCheck(submission, { ...authHeaders, 'x-request-id': 'req-timeout-2' });
+    const retryHeaders = buildAuthHeaders('req-timeout-2', submission);
+    const retry = await postSafetyCheck(submission, retryHeaders);
     expect(retry.status).toBe(200);
     expect(retry.headers.get('x-idempotency-key')).toBe(firstKey);
 

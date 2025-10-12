@@ -49,6 +49,18 @@ describe('logger redaction', () => {
     expect(payload.msg).toBe('token=[REDACTED]');
   });
 
+  it('retains correlation identifiers in top-level and nested fields', () => {
+    log('info', 'incoming request', {
+      'x-correlation-id': 'corr-123',
+      headers: { 'X-Request-Id': 'req-999', Authorization: 'Bearer abc' },
+    });
+
+    const payload = getLastPayload();
+    expect(payload['x-correlation-id']).toBe('corr-123');
+    expect((payload.headers as Record<string, unknown>)['X-Request-Id']).toBe('req-999');
+    expect((payload.headers as Record<string, unknown>).Authorization).toBe('[REDACTED]');
+  });
+
   it('preserves structured objects after redaction', () => {
     log('info', 'object field', { details: { safe: 'value', secretToken: 'abc', nested: { email: 'user@example.com' } } });
 

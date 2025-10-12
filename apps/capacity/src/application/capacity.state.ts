@@ -10,6 +10,7 @@ import {
   type ReleaseDecision,
   type ReleaseCap,
   type TelemetryHealth,
+  type TelemetrySnapshot,
 } from './types';
 
 interface CapacitySettings {
@@ -39,7 +40,8 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
     if (!ctx.telemetrySource) {
       throw new Error('telemetry_source_missing');
     }
-    const health = await evaluateTelemetryHealth(ctx.telemetrySource, ctx.clock);
+    const clock = ctx.clock ?? defaultClock;
+    const health = await evaluateTelemetryHealth(ctx.telemetrySource, clock);
     ctx.telemetryHealth = health;
 
     logger.info('metric.capacity.telemetry.health', {
@@ -57,9 +59,44 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
       });
     }
 
-    const snapshot = await collectTelemetrySnapshot(ctx.telemetrySource, {
-      clock: ctx.clock,
-    });
+    let snapshot: TelemetrySnapshot;
+    try {
+      snapshot = await collectTelemetrySnapshot(ctx.telemetrySource, { clock });
+    } catch (error) {
+      const reason = normalizeErrorReason(error);
+      const degradedHealth: TelemetryHealth = {
+        ok: false,
+        reason,
+        checkedAt: clock().toISOString(),
+      };
+
+      const shouldLogDegradedHealth = !ctx.telemetryHealth || ctx.telemetryHealth.ok;
+      ctx.telemetryHealth = degradedHealth;
+
+      const logMetadata = {
+        practiceId: ctx.practiceId,
+        runId: ctx.id,
+        reason,
+      };
+
+      logger.error('capacity.telemetry.collect_failed', {
+        ...logMetadata,
+        dryRun: Boolean(ctx.dryRun),
+      });
+
+      if (shouldLogDegradedHealth) {
+        logger.info('metric.capacity.telemetry.health', {
+          practiceId: ctx.practiceId,
+          runId: ctx.id,
+          ok: false,
+          reason,
+        });
+        logger.warn('capacity.telemetry.unhealthy', logMetadata);
+      }
+
+      snapshot = buildEmptyTelemetrySnapshot(degradedHealth.checkedAt ?? clock().toISOString());
+    }
+
     ctx.telemetry = snapshot;
     logger.debug('capacity.telemetry.collected', {
       practiceId: ctx.practiceId,
@@ -456,4 +493,28 @@ async function evaluateTelemetryHealth(
     const reason = error instanceof Error ? error.message : 'telemetry_health_error';
     return { ok: false, reason, checkedAt: nowIso };
   }
+}
+
+function buildEmptyTelemetrySnapshot(collectedAt: string): TelemetrySnapshot {
+  return {
+    arrivalsPerHour: 0,
+    queueDepth: 0,
+    noShowRate: 0,
+    staffingLevel: 0,
+    collectedAt,
+  };
+}
+
+function normalizeErrorReason(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim();
+  }
+  return 'telemetry_collect_failed';
+}
+
+function defaultClock(): Date {
+  return new Date();
 }

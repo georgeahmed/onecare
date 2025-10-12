@@ -1,10 +1,23 @@
-// AUTO-GENERATED from schemas. DO NOT EDIT.
+// AUTO-GENERATED from schemas. DO NOT EDIT.\n
 
+/**
+ * Notification of portal state change for a practice.
+ */
 export interface PortalNotify {
+  /**
+   * Stable practice identifier (no PHI).
+   */
   practiceId: string;
-  state: 'UP' | 'DOWN' | 'OOH';
+  /**
+   * Resulting portal availability state.
+   */
+  state: "UP" | "DOWN" | "OOH";
+  /**
+   * Machine-readable reason (e.g., CORE_HOURS, MAINTENANCE, CONFIG_INVALID).
+   */
   reasonCode?: string;
-  at: string; // date-time
-  message?: string | null;
+  /**
+   * Timestamp for the observed state change (UTC).
+   */
+  at: string;
 }
-

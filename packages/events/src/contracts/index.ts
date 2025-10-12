@@ -11,3 +11,5 @@ export * from './error-envelope';
 export * from './appointment-created';
 export * from './ics-referral-request';
 export * from './ics-referral-ack';
+export * from './dlq-event';
+export * from './call-transcribed';

@@ -67,10 +67,10 @@ describe('Contract Matrix', () => {
       state: 'OOH',
       reasonCode: 'CORE_HOURS',
       at: '2025-10-11T12:34:45Z',
-      message: 'Out of hours',
     };
     const p2: PortalNotify = { ...p1, at: '2025-10-11T12:34:59Z' };
     const p3: PortalNotify = { ...p1, at: '2025-10-11T12:35:00Z' };
+    const p4: PortalNotify = { ...p1, practiceId: 'PRAC-1 ', state: 'ooh' as PortalNotify['state'] };
 
     expect(validateNotify(p1)).toBe(true);
     expect(validateNotify(p2)).toBe(true);
@@ -79,9 +79,13 @@ describe('Contract Matrix', () => {
     const k1 = computePortalNotifyKey(p1.practiceId, p1.state, p1.at);
     const k2 = computePortalNotifyKey(p2.practiceId, p2.state, p2.at);
     const k3 = computePortalNotifyKey(p3.practiceId, p3.state, p3.at);
+    const k4 = computePortalNotifyKey(p4.practiceId, p4.state, p4.at);
+    const kInvalid = computePortalNotifyKey(p1.practiceId, p1.state, 'not-a-date');
 
     expect(k1).toEqual(k2);
     expect(k3).not.toEqual(k1);
+    expect(k4).toEqual(k1);
+    expect(kInvalid.endsWith('not-a-date')).toBe(true);
   });
 
   it('validates ErrorEnvelope shape for common errors', async () => {

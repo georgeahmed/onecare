@@ -2,6 +2,9 @@
 
 function toMinuteIso(ts: string): string {
   const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) {
+    return ts.trim();
+  }
   const pad = (n: number) => n.toString().padStart(2, '0');
   const yyyy = d.getUTCFullYear();
   const mm = pad(d.getUTCMonth() + 1);
@@ -13,6 +16,7 @@ function toMinuteIso(ts: string): string {
 
 export function computePortalNotifyKey(practiceId: string, state: 'UP' | 'DOWN' | 'OOH', atIso: string): string {
   const minute = toMinuteIso(atIso);
-  return `portal.notify:${practiceId}:${state}:${minute}`;
+  const normalizedPractice = practiceId.trim().toLowerCase();
+  const normalizedState = state.trim().toUpperCase() as 'UP' | 'DOWN' | 'OOH';
+  return `portal.notify:${normalizedPractice}:${normalizedState}:${minute}`;
 }
-

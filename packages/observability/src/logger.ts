@@ -11,11 +11,38 @@ const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
 const KEY_VALUE_SECRET_RE =
   /\b(token|secret|password|key|authorization|bearer)\b\s*([:=])\s*([^\s,;]+)/gi;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const SAFE_ID_KEYS = new Set(['correlationid', 'traceid', 'spanid', 'requestid', 'practiceid', 'practice_id']);
+const SAFE_ID_KEYS = new Set([
+  'correlationid',
+  'traceid',
+  'spanid',
+  'requestid',
+  'practiceid',
+  'practice_id',
+  'servicerequestid',
+  'x-correlation-id',
+  'x_correlation_id',
+  'x-correlationid',
+  'x-request-id',
+  'x_request_id',
+  'x-requestid',
+]);
+const SAFE_ID_PARTS = [
+  'correlationid',
+  'correlation-id',
+  'requestid',
+  'request-id',
+  'traceid',
+  'spanid',
+  'practiceid',
+  'practice-id',
+  'servicerequestid',
+  'service-request-id',
+];
 
 function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (SAFE_ID_KEYS.has(lower)) return false;
+  if (SAFE_ID_PARTS.some((part) => lower.includes(part))) return false;
   if (lower.endsWith('id')) return true;
   return /(token|secret|password|credential|ssn|phone|email|authorization|bearer)/i.test(lower);
 }

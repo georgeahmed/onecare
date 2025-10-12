@@ -1,10 +1,13 @@
 import { describe, it, beforeAll, afterAll, beforeEach, afterEach, expect, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import type { TypedEnvelope, TriageInput, SafetyDecision } from '@onecare/events';
+import { createHmac } from 'node:crypto';
+import type { TypedEnvelope, TriageInput, SafetyDecision, PortalSubmission } from '@onecare/events';
 import { Topics } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
 import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
+import { resetSecurityServices } from '../src/adapters/security';
+import { deriveIdempotencyKey } from '../src/application/idempotency';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -18,7 +21,7 @@ vi.mock('../src/adapters/services/safetyGate', async () => {
   };
 });
 
-const submission = {
+const submission: PortalSubmission = {
   practiceId: 'p1',
   patient: { id: 'patient-123' },
   narrative: 'non emergency narrative',
@@ -29,6 +32,7 @@ let server: import('http').Server;
 let setBusReadyForTest: (ready: boolean) => void;
 let bus: MessageBus;
 let auditEvents: LedgerAuditEvent[];
+const SHARED_SECRET = 'test-shared-secret';
 
 function installAuditStub(): void {
   auditEvents = [];
@@ -58,6 +62,7 @@ describe('triage input publishing', () => {
   beforeAll(async () => {
     delete process.env.NATS_URL;
     process.env.BUS_IMPL = 'memory';
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
     const mod = await import('../src/index');
     server = mod.server;
     setBusReadyForTest = mod.setBusReadyForTest;
@@ -71,11 +76,14 @@ describe('triage input publishing', () => {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
+    delete process.env.SECURITY_SHARED_SECRET;
   });
 
   beforeEach(() => {
     setBusReadyForTest(true);
     installAuditStub();
+    process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
+    resetSecurityServices();
   });
 
   afterEach(() => {
@@ -89,14 +97,18 @@ describe('triage input publishing', () => {
       envelopes.push(envelope);
     });
 
+    const requestId = 'triage-test-req';
+    const idemKey = deriveIdempotencyKey(submission, submission.patient.id);
+    const fingerprint = `${requestId}:${idemKey}`;
+    const signature = createHmac('sha256', SHARED_SECRET).update(fingerprint).digest('base64url');
     const res = await fetch(`${baseUrl()}/safety-check`, {
       method: 'POST',
       headers: {
-        authorization: 'Bearer token',
+        authorization: `Bearer ${signature}`,
         'content-type': 'application/json',
         'x-actor-id': submission.patient.id,
         'x-actor-type': 'patient',
-        'x-request-id': 'triage-test-req',
+        'x-request-id': requestId,
         'x-auth-scope': 'submit',
       },
       body: JSON.stringify(submission),

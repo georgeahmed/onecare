@@ -1,4 +1,5 @@
 .PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav
+ .PHONY: dev-run dev-stop
 
 install:
 	npm ci
@@ -78,6 +79,25 @@ demo-local:
 	-@bash -c 'kill $$(cat .pid_orch 2>/dev/null) 2>/dev/null || true; rm -f .pid_orch'
 	-@bash -c 'kill $$(cat .pid_safety 2>/dev/null) 2>/dev/null || true; rm -f .pid_safety'
 	@echo "[demo] Done."
+
+# Dev: start Safety Gate + Orchestrator and keep them running
+dev-run:
+	@echo "[dev] Building orchestrator..."
+	npm -w @onecare/app-orchestrator run build --silent
+	@echo "[dev] Starting Safety Gate..."
+	@bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
+	@bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
+	@echo "[dev] Starting Orchestrator..."
+	@bash -c 'PORT=3001 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+	@bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
+	@echo "[dev] Up. Try: curl -s http://localhost:3001/health && echo" 
+	@echo "[dev] Stop with: make dev-stop"
+
+dev-stop:
+	@echo "[dev] Stopping services..."
+	-@bash -c 'kill $$(cat .pid_orch 2>/dev/null) 2>/dev/null || true; rm -f .pid_orch'
+	-@bash -c 'kill $$(cat .pid_safety 2>/dev/null) 2>/dev/null || true; rm -f .pid_safety'
+	@echo "[dev] Stopped."
 
 ci-local:
 	@echo "[ci] TS build/typecheck/lint/test"

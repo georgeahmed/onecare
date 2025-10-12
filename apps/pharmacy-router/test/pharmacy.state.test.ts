@@ -112,7 +112,14 @@ describe('ClassifiedState', () => {
     expect(ctx.serviceRequest?.id).toMatch(/^sr-/);
     expect(ctx.referralSummary).toMatch(/Pharmacy First referral/);
     const logCall = infoSpy.mock.calls.find(([msg]) => msg === 'pharmacy.eligibility.decision');
-    expect(logCall?.[1]).toMatchObject({ eligible: true, eligibilityReason: 'eligible' });
+    expect(logCall?.[1]).toMatchObject({
+      eligible: true,
+      eligibilityReason: 'eligible',
+      hasPatientAgeYears: true,
+      hasPatientSex: true,
+    });
+    expect(logCall?.[1]).not.toHaveProperty('condition');
+    expect(logCall?.[1]?.conditionFingerprint).toEqual(expect.any(String));
   });
 
   it('uses injected ruleset when provided', async () => {
@@ -145,7 +152,12 @@ describe('ClassifiedState', () => {
     expect(next).toBe('Ineligible');
     expect(ctx.eligibilityDecision).toEqual({ ok: false, reason: 'age_below_min' });
     const logCall = warnSpy.mock.calls.find(([msg]) => msg === 'pharmacy.eligibility.decision');
-    expect(logCall?.[1]).toMatchObject({ eligible: false, eligibilityReason: 'age_below_min' });
+    expect(logCall?.[1]).toMatchObject({
+      eligible: false,
+      eligibilityReason: 'age_below_min',
+      hasPatientAgeYears: true,
+    });
+    expect(logCall?.[1]).not.toHaveProperty('condition');
   });
 
   it('throws when document missing', async () => {
@@ -163,7 +175,11 @@ describe('EligibleState', () => {
     const next = await state.handle(ctx, baseEvent);
     expect(next).toBe('Referred');
     const logCall = infoSpy.mock.calls.find(([msg]) => msg === 'pharmacy.referral.ready');
-    expect(logCall?.[1]).toMatchObject({ eligibilityReason: 'eligible' });
+    expect(logCall?.[1]).toMatchObject({
+      eligibilityReason: 'eligible',
+      conditionFingerprint: expect.any(String),
+    });
+    expect(logCall?.[1]).not.toHaveProperty('condition');
   });
 
   it('throws if eligibility not confirmed', async () => {
@@ -213,7 +229,13 @@ describe('ReferredState', () => {
     );
     expect(ctx.referralResult).toEqual({ status: 'accepted', reference: 'ref' });
     const logCall = infoSpy.mock.calls.find(([msg]) => msg === 'pharmacy.referral.sent');
-    expect(logCall?.[1]).toMatchObject({ eligibilityReason: 'eligible' });
+    expect(logCall?.[1]).toMatchObject({
+      eligibilityReason: 'eligible',
+      organisationFingerprint: expect.any(String),
+      hasServiceRequest: true,
+      status: 'accepted',
+    });
+    expect(logCall?.[1]).not.toHaveProperty('serviceRequestId');
     expect((ctx.notifier as PatientNotifier).notifyReferral).toHaveBeenCalledWith(
       expect.objectContaining({ serviceRequestId: ctx.serviceRequest?.id, status: 'accepted' }),
     );
@@ -234,7 +256,11 @@ describe('ReferredState', () => {
     await expect(state.handle(ctx, baseEvent)).rejects.toThrow('network');
     expect(ctx.referralError).toBe(error);
     const logCall = errorSpy.mock.calls.find(([msg]) => msg === 'pharmacy.referral.failed');
-    expect(logCall?.[1]).toMatchObject({ eligibilityReason: 'eligible' });
+    expect(logCall?.[1]).toMatchObject({
+      eligibilityReason: 'eligible',
+      organisationFingerprint: expect.any(String),
+      hasServiceRequest: true,
+    });
     expect((ctx.notifier as PatientNotifier).notifyReferral).not.toHaveBeenCalled();
   });
 });
@@ -253,8 +279,9 @@ describe('OutcomeRecordedState', () => {
     expect(logCall?.[1]).toMatchObject({
       eligibilityReason: 'eligible',
       referralStatus: 'queued',
-      serviceRequestId: ctx.serviceRequest?.id,
+      hasServiceRequest: true,
     });
+    expect(logCall?.[1]).not.toHaveProperty('serviceRequestId');
     const repo = ctx.fhirRepository as FhirRepository;
     expect(repo.upsertBundle).toHaveBeenCalled();
     expect(repo.createTask).not.toHaveBeenCalled();

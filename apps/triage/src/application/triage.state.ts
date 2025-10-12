@@ -67,6 +67,7 @@ export interface DuplicateDetails {
 export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | void;
 
 const dedupCache = new Map<string, DedupEntry[]>();
+const DEDUP_CACHE_LIMIT = 50;
 
 function parseDurationToMs(raw: unknown): number {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -132,6 +133,26 @@ export function resetDedupCache(): void {
   dedupCache.clear();
 }
 
+function pruneDedupCache(windowMs: number, now: number): void {
+  if (windowMs <= 0) {
+    dedupCache.clear();
+    return;
+  }
+  for (const [patientId, entries] of dedupCache.entries()) {
+    const fresh = entries.filter((entry) => now - entry.timestamp <= windowMs);
+    if (fresh.length === 0) {
+      dedupCache.delete(patientId);
+    } else {
+      dedupCache.set(patientId, fresh);
+    }
+  }
+}
+
+function trimEntries(entries: DedupEntry[], limit: number): DedupEntry[] {
+  if (entries.length <= limit) return entries;
+  return entries.slice(entries.length - limit);
+}
+
 export class IntakeState extends BaseState<TriageContext, TriageEvent> {
   constructor() {
     super('Intake');
@@ -143,6 +164,8 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
     const patientId = ctx.patientId?.trim();
     const narrative = ctx.narrative?.trim();
     const now = getNow(ctx);
+
+    pruneDedupCache(windowMs, now);
 
     let duplicateSimilarity: number | undefined;
     if (windowMs > 0 && threshold > 0 && patientId && narrative) {
@@ -163,11 +186,10 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
         ctx.duplicateWindowMs = windowMs;
         ctx.duplicateSimilarity = duplicateSimilarity;
         ctx.duplicateReference = duplicateEntry;
-      } else {
-        freshEntries.push({ narrative, timestamp: now });
       }
 
-      dedupCache.set(patientId, freshEntries);
+      const updatedEntries = trimEntries([...freshEntries, { narrative, timestamp: now }], DEDUP_CACHE_LIMIT);
+      dedupCache.set(patientId, updatedEntries);
     }
 
     if (ctx.isDuplicate) {
@@ -260,6 +282,16 @@ export class CompletedState extends BaseState<TriageContext, TriageEvent> {
     return 'Completed';
   }
 }
+
+export function getDedupCacheSizeForTest(): number {
+  return dedupCache.size;
+}
+
+export function getDedupCacheEntryCountForTest(patientId: string): number {
+  return dedupCache.get(patientId)?.length ?? 0;
+}
+
+export { DEDUP_CACHE_LIMIT as DEDUP_CACHE_LIMIT_FOR_TEST };
 
 export class DuplicateState extends BaseState<TriageContext, TriageEvent> {
   constructor() {
