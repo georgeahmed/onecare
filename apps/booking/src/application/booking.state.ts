@@ -4,6 +4,13 @@ import type { GpConnectClient } from '../adapters/gpconnect.client';
 import { mapSlotsToView, type SlotView } from '../adapters/gpconnect.client';
 import type { EnhancedAccessPolicy, RejectedSlot } from './enhancedAccess';
 import { applyEnhancedAccessFilters } from './enhancedAccess';
+import type { FhirRepository } from '@onecare/ports';
+import type { QueueNotifier } from '@onecare/ports';
+import { logger } from '@onecare/observability';
+
+export interface BookingAuditPublisher {
+  emit(event: { type: string; payload: Record<string, unknown> }): Promise<void>;
+}
 
 export interface BookingContext extends MachineContext {
   client: GpConnectClient;
@@ -15,6 +22,12 @@ export interface BookingContext extends MachineContext {
   narrative?: string;
   enhancedAccessPolicy?: EnhancedAccessPolicy;
   rejectedSlots?: RejectedSlot[];
+  fhirRepository?: FhirRepository;
+  originatingTaskId?: string;
+  queueNotifier?: QueueNotifier;
+  queueName?: string;
+  auditPublisher?: BookingAuditPublisher;
+  correlationId?: string;
 }
 
 export interface BookingEvent extends MachineEvent {
@@ -87,6 +100,9 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
       appointmentId: confirmation.appointmentId,
       slotId: confirmation.slotId,
     };
+    await persistAppointment(ctx, confirmation);
+    await notifyQueue(ctx, confirmation);
+    await emitAudit(ctx, confirmation);
     return 'WrittenBack';
   }
 }
@@ -109,4 +125,91 @@ export class ConfirmedState extends BaseState<BookingContext, BookingEvent> {
   async handle(_ctx: BookingContext, _evt: BookingEvent): Promise<string> {
     return 'Confirmed';
   }
+}
+
+async function persistAppointment(
+  ctx: BookingContext,
+  confirmation: { appointmentId: string; slotId: string },
+): Promise<void> {
+  const repo = ctx.fhirRepository;
+  if (!repo) {
+    logger.info('booking.no_fhir_repository_configured', {
+      appointmentId: confirmation.appointmentId,
+      correlationId: ctx.correlationId,
+    });
+    return;
+  }
+
+  const appointmentResource = {
+    resourceType: 'Appointment',
+    id: confirmation.appointmentId,
+    status: 'booked',
+    start: ctx.selectedSlot?.start,
+    end: ctx.selectedSlot?.end,
+    participant: [
+      { actor: { reference: `Patient/${ctx.patientId}` }, status: 'accepted' },
+    ],
+  };
+
+  let appointmentRef: { id: string; resourceType: string } | undefined;
+  try {
+    appointmentRef = await repo.createAppointment(appointmentResource);
+  } catch (error) {
+    throw new Error(`appointment_write_failed:${(error as Error).message}`);
+  }
+
+  if (repo.updateTask && ctx.originatingTaskId) {
+    const patch = {
+      resourceType: 'Task',
+      id: ctx.originatingTaskId,
+      status: 'completed',
+      output: [
+        {
+          type: { text: 'appointment' },
+          valueReference: { reference: `Appointment/${appointmentRef.id}` },
+        },
+      ],
+    };
+    try {
+      await repo.updateTask(ctx.originatingTaskId, patch);
+    } catch (error) {
+      logger.warn('booking.task_update_failed', {
+        taskId: ctx.originatingTaskId,
+        correlationId: ctx.correlationId,
+        reason: (error as Error).message,
+      });
+    }
+  }
+}
+
+async function notifyQueue(
+  ctx: BookingContext,
+  confirmation: { appointmentId: string; slotId: string },
+): Promise<void> {
+  if (!ctx.queueNotifier) return;
+  const payload = {
+    appointmentId: confirmation.appointmentId,
+    slotId: confirmation.slotId,
+    patientId: ctx.patientId,
+    slot: ctx.selectedSlot,
+  };
+  const queue = ctx.queueName ?? 'booking.notifications';
+  await ctx.queueNotifier.notify(queue, payload);
+}
+
+async function emitAudit(
+  ctx: BookingContext,
+  confirmation: { appointmentId: string; slotId: string },
+): Promise<void> {
+  if (!ctx.auditPublisher) return;
+  await ctx.auditPublisher.emit({
+    type: 'booking.appointment.created',
+    payload: {
+      appointmentId: confirmation.appointmentId,
+      slotId: confirmation.slotId,
+      patientId: ctx.patientId,
+      taskId: ctx.originatingTaskId,
+      correlationId: ctx.correlationId,
+    },
+  });
 }

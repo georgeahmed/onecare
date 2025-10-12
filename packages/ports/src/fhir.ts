@@ -9,6 +9,7 @@ export interface FhirRepository {
   createTask(task: unknown): Promise<FhirResourceRef>;
   createAppointment(appt: unknown): Promise<FhirResourceRef>;
   createDocumentReference(doc: unknown): Promise<FhirResourceRef>;
+  updateTask?(taskId: string, patch: unknown): Promise<void>;
 }
 
 export type InvalidFhirReason =
