@@ -5,9 +5,11 @@ import os
 import re
 import threading
 from collections.abc import Callable
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, MutableMapping
 
 LOGGER = logging.getLogger("safety_gate_service.ner")
+
+SafetyNERResult = Dict[str, Any]
 
 _LABEL_MAP: Mapping[str, str] = {
     "SYMPTOM": "symptoms",
@@ -29,7 +31,7 @@ def _normalize_value(raw: str) -> str:
     return " ".join(raw.strip().split())
 
 
-def _build_stub_pipeline() -> Callable[[str], list[dict[str, str]]]:
+def _build_stub_pipeline() -> Callable[[str], list[dict[str, Any]]]:
     keyword_map = {
         "chest pain": "SYMPTOM",
         "shortness of breath": "SYMPTOM",
@@ -48,12 +50,12 @@ def _build_stub_pipeline() -> Callable[[str], list[dict[str, str]]]:
 
     compiled = [(re.compile(rf"\b{re.escape(phrase)}\b"), phrase, label) for phrase, label in keyword_map.items()]
 
-    def _pipeline(text: str) -> list[dict[str, str]]:
+    def _pipeline(text: str) -> list[dict[str, Any]]:
         lowered = text.lower()
-        results: list[dict[str, str]] = []
+        results: list[dict[str, Any]] = []
         for pattern, phrase, label in compiled:
             if pattern.search(lowered):
-                results.append({"entity_group": label, "word": phrase})
+                results.append({"entity_group": label, "word": phrase, "score": 0.9, "model": "stub"})
         return results
 
     return _pipeline
@@ -94,12 +96,8 @@ class SafetyNER:
         pipeline = self._get_pipeline()
         entities = pipeline(text)
 
-        bucket: Dict[str, List[str]] = {
-            "symptoms": [],
-            "severity": [],
-            "temporal": [],
-            "context_entities": [],
-        }
+        bucket: Dict[str, List[str]] = {key: [] for key in ("symptoms", "severity", "temporal", "context_entities")}
+        symptom_mentions: MutableMapping[str, dict[str, Any]] = {}
 
         for entity in entities or []:
             label = (
@@ -122,11 +120,23 @@ class SafetyNER:
             if normalized not in bucket[target]:
                 bucket[target].append(normalized)
 
+            if target == "symptoms":
+                confidence = _extract_confidence(entity)
+                key = normalized.lower()
+                mention = symptom_mentions.get(key)
+                if mention is None or confidence > mention["confidence"]:
+                    symptom_mentions[key] = {
+                        "name": normalized,
+                        "confidence": confidence,
+                        "source": entity.get("model") or ("hf" if not self._use_stub else "stub"),
+                    }
+
         return {
             "symptoms": bucket["symptoms"],
             "severity": bucket["severity"],
             "temporal": bucket["temporal"],
             "context_entities": bucket["context_entities"],
+            "symptom_mentions": list(symptom_mentions.values()),
         }
 
     def _get_pipeline(self) -> Callable[[str], list[dict[str, Any]]]:
@@ -174,3 +184,11 @@ class SafetyNER:
         if device == "cuda":
             return 0
         raise ValueError(f"Unsupported device '{self._device_str}'. Expected 'cpu' or 'cuda'.")
+
+
+def _extract_confidence(entity: Mapping[str, Any]) -> float:
+    for key in ("score", "confidence", "probability"):
+        value = entity.get(key)
+        if isinstance(value, (float, int)):
+            return float(value)
+    return 1.0

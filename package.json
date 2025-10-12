@@ -16,7 +16,8 @@
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "test": "vitest --run",
     "metrics:rollup": "node scripts/metrics_rollup.js",
-    "metrics:quality": "node scripts/analytics_quality.js"
+    "metrics:quality": "node scripts/analytics_quality.js",
+    "feature:backfill": "node scripts/feature_backfill.js"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",

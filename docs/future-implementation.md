@@ -8,6 +8,7 @@ Short-term follow-ups discovered while wiring early triage functionality:
 
 - **Feature extraction into Intake state**  
   - Provide the real feature vector (acuity, risk, complexity, time, capacity) before entering `IntakeState`; today the context expects `ctx.features` but nothing populates it.
+  - Replace the JSONL writer in `scripts/feature_backfill.js` with the production feature store client once the ingestion/backfill pipelines are provisioned (DE-02.3+).
 
 - **Task enrichment & notifications**  
   - Extend the triage Task creation flow with richer payload (category, owner assignment provenance, attachments) and downstream notifications once provider assignment logic lands.
@@ -31,5 +32,8 @@ Short-term follow-ups discovered while wiring early triage functionality:
 
 - **Billing service integration**  
   - Implement the real billing HTTP workflow (claim payload mapping, response reconciliation, TLS client wiring) and replace stub dispatchers once the external API contract is finalised.
+
+- **Telephony emergency transfer workflow**  
+  - Replace the emergency transfer stub with the production handler, wire the prompts into the IVR adapter, and integrate the downstream routing once the call-handling stack is ready.
 
 Document owners: backend triage team. Update or prune these items as the surrounding work lands.

@@ -2,11 +2,12 @@ import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
 import { logger } from '@onecare/observability';
-import type { FhirRepository, FhirResourceRef, QueueNotifier } from '@onecare/ports';
+import type { FeatureStore, FhirRepository, FhirResourceRef, QueueNotifier } from '@onecare/ports';
 import { createTaskResource } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
+import { logFeatureVector } from '../featuresHook';
 
 export interface TriageContext extends MachineContext {
   config: ResolvedConfig;
@@ -34,6 +35,7 @@ export interface TriageContext extends MachineContext {
   taskDescription?: string;
   queueNotifier?: QueueNotifier;
   queueName?: string;
+  featureStore?: FeatureStore;
 }
 
 export interface TriageEvent extends MachineEvent {
@@ -209,6 +211,18 @@ export class ScoredState extends BaseState<TriageContext, TriageEvent> {
   async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
     const score = typeof ctx.score === 'number' ? ctx.score : 0;
     ctx.priority = determinePriority(ctx.config, score);
+    await logFeatureVector({
+      source: 'triage',
+      store: ctx.featureStore,
+      correlationId: ctx.correlationId,
+      patientId: ctx.patientId,
+      entityId: ctx.patientId,
+      features: ctx.features ?? {},
+      metadata: {
+        score,
+        priority: ctx.priority,
+      },
+    });
     return 'TaskCreated';
   }
 }

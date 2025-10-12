@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ResolvedConfig } from '@onecare/config';
 import type { MessageBus } from '@onecare/bus';
-import type { FhirRepository, QueueNotifier } from '@onecare/ports';
+import type { FeatureStore, FhirRepository, QueueNotifier } from '@onecare/ports';
 import { Topics } from '@onecare/events';
 import {
   IntakeState,
@@ -270,6 +270,20 @@ describe('DuplicateState', () => {
 });
 
 describe('ScoredState', () => {
+  class FakeFeatureStore implements FeatureStore {
+    public readonly records = new Map<string, Record<string, unknown>>();
+    async putFeatures(key: string, features: Record<string, unknown>): Promise<void> {
+      this.records.set(key, features);
+    }
+    async getFeatures(key: string): Promise<Record<string, unknown> | null> {
+      return this.records.get(key) ?? null;
+    }
+  }
+
+  afterEach(() => {
+    delete process.env.FEATURE_LOGGING;
+  });
+
   it('derives priority from score and config thresholds', async () => {
     const scored = new ScoredState();
     const ctx: TriageContext = {
@@ -292,6 +306,38 @@ describe('ScoredState', () => {
 
     expect(next).toBe('TaskCreated');
     expect(ctx.priority).toBe('URGENT');
+  });
+
+  it('logs feature vectors when logging enabled and store provided', async () => {
+    process.env.FEATURE_LOGGING = 'true';
+    const scored = new ScoredState();
+    const store = new FakeFeatureStore();
+    const ctx: TriageContext = {
+      id: 'feature-log',
+      config: {
+        practiceId: 'demo',
+        triage: { score_weights: { acuity: 1 } },
+        priority_thresholds: {
+          stat: 0.9,
+          urgent: 0.7,
+          soon: 0.3,
+          routine: 0,
+        },
+      },
+      features: { acuity: 0.8 },
+      score: 0.8,
+      patientId: 'patient-100',
+      correlationId: 'corr-xyz',
+      featureStore: store,
+    };
+
+    await scored.handle(ctx, { type: 'triage.evaluate' });
+
+    const record = await store.getFeatures('triage:patient-100:corr-xyz');
+    expect(record).not.toBeNull();
+    expect(record?.source).toBe('triage');
+    expect(record?.metadata).toMatchObject({ score: 0.8, priority: 'URGENT' });
+    expect(record?.features).toMatchObject({ acuity: 0.8 });
   });
 });
 

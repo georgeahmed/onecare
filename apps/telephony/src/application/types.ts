@@ -34,6 +34,11 @@ export interface TelephonyContext extends MachineContext {
   intentClassifiedPublishedAt?: number;
   intentConfidenceThreshold?: number;
   intentRoutingDecision?: IntentRoutingDecision;
+  emergencyTransferEnabled?: boolean;
+  emergencyTransferTriggered?: boolean;
+  emergencyTransferAt?: number;
+  forceEmergencyTransfer?: boolean;
+  ivrPrompts?: string[];
   now?: () => number;
 }
 
@@ -52,4 +57,4 @@ export type {
   IntentClassifier,
 } from '../adapters/intent.classifier';
 
-export type IntentRoutingDecision = 'auto' | 'fallback';
+export type IntentRoutingDecision = 'auto' | 'fallback' | 'emergency';

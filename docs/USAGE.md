@@ -107,6 +107,7 @@ Analytics Consumer
 - Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
 - Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
 - Data hygiene: `npm run metrics:quality` produces a markdown report flagging missing fields and numeric outliers. Adjust the z-score threshold via `--zscore` or `ANALYTICS_QUALITY_ZSCORE`.
+- Feature backfill: `npm run feature:backfill -- --input <events.jsonl> --output <features.jsonl>` hydrates the feature store from historical triage events, validating payloads against `triage-core`.
 
 Team & Status
 - Team status: make team-status

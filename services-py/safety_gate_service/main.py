@@ -6,14 +6,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from common.contracts.models import PortalSubmission, SafetyDecision
 from common.otel import instrument_fastapi
 from .acuity import AcuityModel
+from .analyzer import AnalysisOutcome, analyze_submission
 from .classifier import EmergencyClassifier
-from .decision import DecisionResult, DEFAULT_RED_FLAG_SET, decide
+from .decision import DEFAULT_RED_FLAG_SET
 from .ner import SafetyNER
 
 
@@ -203,10 +205,11 @@ def analyze(submission: PortalSubmission) -> SafetyDecision:
     narrative_raw = submission.narrative or ""
     classifier = getattr(app.state, "classifier", None) or get_classifier()
     ner = getattr(app.state, "ner", None) or get_ner()
+    acuity_model = getattr(app.state, "acuity_model", None) or get_acuity_model()
     decision_config = getattr(app.state, "decision_config", None) or get_decision_config()
 
     nlp_analysis = ner.analyze(narrative_raw)
-    symptom_mentions = [{"name": name, "confidence": 1.0, "source": "ner"} for name in nlp_analysis.get("symptoms", [])]
+    symptom_mentions = _resolve_symptom_mentions(nlp_analysis)
     lexical_hits = _derive_lexical_hits(narrative_raw, decision_config)
     nlp_payload = {
         "symptom_mentions": symptom_mentions,
@@ -221,10 +224,17 @@ def analyze(submission: PortalSubmission) -> SafetyDecision:
         LOGGER.exception("Emergency classifier failed, defaulting to SAFE_TO_CONTINUE: %s", exc)
         return SafetyDecision(outcome="SAFE_TO_CONTINUE")
 
+    acuity_estimate = acuity_model.predict(
+        narrative=narrative_raw,
+        nlp_results=nlp_payload,
+        classifier_result=classification,
+    )
+    patient_payload: dict[str, Any] = {"acuity": acuity_estimate}
+
     decision_result: DecisionResult = decide(
         nlp_results=nlp_payload,
         classifier_result=classification,
-        patient={},
+        patient=patient_payload,
         config=decision_config,
     )
 
@@ -244,3 +254,26 @@ def _derive_lexical_hits(narrative: str, config: dict[str, Any]) -> list[str]:
         if pattern.search(narrative):
             hits.append(normalized)
     return hits
+
+
+def _resolve_symptom_mentions(nlp_analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    raw_mentions = nlp_analysis.get("symptom_mentions")
+    if isinstance(raw_mentions, list):
+        for item in raw_mentions:
+            if isinstance(item, Mapping):
+                name = item.get("name") or item.get("text")
+                if isinstance(name, str):
+                    confidence = item.get("confidence")
+                    mentions.append(
+                        {
+                            "name": name,
+                            "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
+                            "source": item.get("source") or "ner",
+                        }
+                    )
+    if not mentions:
+        for name in nlp_analysis.get("symptoms", []):
+            if isinstance(name, str):
+                mentions.append({"name": name, "confidence": None, "source": "ner"})
+    return mentions

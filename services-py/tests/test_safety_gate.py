@@ -10,6 +10,8 @@ def reset_classifier_fixture(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_MODEL_VERSION", raising=False)
     monkeypatch.delenv("SAFETY_GATE_MODEL_VARIANT", raising=False)
     monkeypatch.delenv("SAFETY_GATE_CLASSIFIER_MODE", raising=False)
+    monkeypatch.delenv("SAFETY_GATE_ACUITY_MODE", raising=False)
+    monkeypatch.delenv("SAFETY_GATE_ACUITY_MODEL_PATH", raising=False)
     reset_models_for_testing()
     yield
     reset_models_for_testing()

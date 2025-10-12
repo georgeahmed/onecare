@@ -114,3 +114,22 @@ def test_decide_handles_precomputed_red_flags():
 
     assert result.outcome == "DIVERTED"
     assert result.rationale["reason"] == "red_flag:severe_bleeding"
+
+
+def test_decide_respects_red_flag_threshold():
+    config = _base_config(red_flag_threshold=0.8)
+    nlp_results = {
+        "symptom_mentions": [
+            {"name": "chest pain", "confidence": 0.6},
+        ]
+    }
+
+    result = decide(
+        nlp_results=nlp_results,
+        classifier_result={"prob_emergency": 0.2, "threshold": 0.9},
+        patient={},
+        config=config,
+    )
+
+    assert result.outcome == "SAFE_TO_CONTINUE"
+    assert result.rationale["reason"] == "safe"

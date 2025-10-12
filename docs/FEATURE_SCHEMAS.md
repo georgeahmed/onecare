@@ -107,4 +107,4 @@ Conventions & Next Steps
 - File naming: `schemas/features/<feature-set>.json` (kebab-case). `$id` mirrors the path under `https://onecare/schemas/features/`.
 - All schemas set `additionalProperties: false`; additive signals should be placed under the `extensions` map (triage) or require a schema bump.
 - When introducing a new feature set, add a corresponding entry in this document capturing owner, freshness SLA, join keys, and sample payload.
-- Pipelines must validate payloads with `@onecare/domain` before writing to the feature store. A failing validation should be treated as a data quality incident (surface to DLQ/alerts).
+- Pipelines (including `scripts/feature_backfill.js`) must validate payloads with the `@onecare/ports` helpers before writing to the feature store. A failing validation should be treated as a data quality incident (surface to DLQ/alerts).

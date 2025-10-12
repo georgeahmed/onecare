@@ -14,7 +14,8 @@ import type { AuthContext } from '@onecare/security';
 import { getSecurityServices } from './adapters/security';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
-import type { IdempotencyStore } from '@onecare/ports';
+import { InMemoryFeatureStore } from '@onecare/feature-store-memory';
+import type { FeatureStore, IdempotencyStore } from '@onecare/ports';
 import { normalizeToFhir, validateProfiles } from './application/normalize';
 import { resolveServerPort } from './support/port';
 
@@ -27,6 +28,15 @@ const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
 const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
 const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
 const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
+
+function parseBooleanFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+const featureLoggingOn = parseBooleanFlag(process.env.FEATURE_LOGGING);
+let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore() : null;
 
 logger.info('practice config applied', {
   practiceId: practiceConfig.practiceId,
@@ -448,6 +458,79 @@ function classifyErrorCode(err: unknown): string | undefined {
   return code ? String(code).toLowerCase() : undefined;
 }
 
+interface FeatureLogEntry {
+  source: 'triage' | 'safety';
+  entityId?: string | null;
+  patientId?: string | null;
+  correlationId?: string | null;
+  features?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  occurredAt?: string | number | Date | null;
+}
+
+interface FeatureLogRequestBody {
+  source?: unknown;
+  entityId?: unknown;
+  patientId?: unknown;
+  correlationId?: unknown;
+  features?: unknown;
+  metadata?: unknown;
+  recordedAt?: unknown;
+}
+
+function buildFeatureLogKey(entry: FeatureLogEntry): string {
+  const parts: string[] = [entry.source];
+  if (entry.entityId) {
+    parts.push(entry.entityId);
+  }
+  if (entry.correlationId) {
+    parts.push(entry.correlationId);
+  } else {
+    parts.push(String(Date.now()));
+  }
+  return parts.join(':');
+}
+
+async function logFeatureRecord(entry: FeatureLogEntry): Promise<void> {
+  if (!featureLoggingOn || !featureStore) {
+    return;
+  }
+
+  const record = {
+    source: entry.source,
+    recordedAt: entry.occurredAt ? new Date(entry.occurredAt).toISOString() : new Date().toISOString(),
+    correlationId: entry.correlationId ?? null,
+    patientId: entry.patientId ?? null,
+    metadata: entry.metadata ?? {},
+    features: entry.features ?? {},
+  } satisfies Record<string, unknown>;
+
+  const key = buildFeatureLogKey(entry);
+  try {
+    await featureStore.putFeatures(key, record);
+    logger.debug('feature record stored', {
+      key,
+      source: entry.source,
+      correlationId: entry.correlationId,
+    });
+  } catch (err) {
+    logger.warn('feature record storage failed', {
+      key,
+      source: entry.source,
+      correlationId: entry.correlationId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export function getFeatureStoreForTest(): FeatureStore | null {
+  return featureStore;
+}
+
+export function setFeatureStoreForTest(store: FeatureStore | null): void {
+  featureStore = store;
+}
+
 const server = http.createServer((req, res) => withCorrelationContext(() => {
   if (!req.url) {
     res.statusCode = 400;
@@ -469,6 +552,58 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
     res.statusCode = busReady ? 200 : 503;
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/feature-log') {
+    const routeLabel = 'POST /feature-log';
+    handleHttp(req, res, routeLabel, corr, async () => {
+      if (!featureLoggingOn || !featureStore) {
+        res.statusCode = 202;
+        res.end('feature logging disabled');
+        return;
+      }
+
+      const rawBuf = await readRequestBody(req, 64 * 1024);
+      let payload: FeatureLogRequestBody;
+      try {
+        payload = JSON.parse(rawBuf.toString('utf8')) as FeatureLogRequestBody;
+      } catch {
+        throw new HttpError('invalid_input', 'Invalid JSON body');
+      }
+
+      if (!payload || typeof payload !== 'object') {
+        throw new HttpError('invalid_input', 'Invalid request body');
+      }
+
+      const source = payload.source;
+      if (source !== 'triage' && source !== 'safety') {
+        throw new HttpError('invalid_input', 'Invalid source');
+      }
+
+      const entityId = typeof payload.entityId === 'string' && payload.entityId.trim().length > 0 ? payload.entityId : null;
+      const patientId =
+        typeof payload.patientId === 'string' && payload.patientId.trim().length > 0 ? payload.patientId : entityId;
+      const correlationId =
+        typeof payload.correlationId === 'string' && payload.correlationId.trim().length > 0 ? payload.correlationId : corr;
+
+      const features =
+        payload.features && typeof payload.features === 'object' ? (payload.features as Record<string, unknown>) : {};
+      const metadata =
+        payload.metadata && typeof payload.metadata === 'object' ? (payload.metadata as Record<string, unknown>) : {};
+
+      await logFeatureRecord({
+        source,
+        entityId,
+        patientId,
+        correlationId,
+        features,
+        metadata,
+        occurredAt: payload.recordedAt ?? Date.now(),
+      });
+
+      res.statusCode = 202;
+      res.end('accepted');
+    });
     return;
   }
   if (req.method === 'POST' && req.url === '/safety-check') {

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TranscribedState, IntentClassifiedState, RoutedState } from '../src/application/telephony.state';
+import {
+  TranscribedState,
+  IntentClassifiedState,
+  EmergencyTransferState,
+  RoutedState,
+} from '../src/application/telephony.state';
 import type { TelephonyContext } from '../src/application/types';
 import { buildCallTranscribed } from '../src/adapters/asr.client';
 import type { MessageBus } from '@onecare/bus';
@@ -130,7 +135,7 @@ describe('Telephony state machine', () => {
         text: 'check symptoms',
       }));
 
-      const ctx: TelephonyContext = {
+      const ctx: TelephonyContext = applyTelephonyDependencies({
         id: 'call-003',
         callId: 'call-003',
         audioRef: 'memory://call-003',
@@ -141,7 +146,7 @@ describe('Telephony state machine', () => {
         bus,
         intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.35,
-      };
+      } as TelephonyContext);
 
       const transcribedState = new TranscribedState();
       await transcribedState.handle(ctx, { type: 'telephony.call.received' });
@@ -201,7 +206,7 @@ describe('Telephony state machine', () => {
       publishSpy.mockRejectedValue(new Error('bus offline'));
 
       const intentState = new IntentClassifiedState();
-      const ctx: TelephonyContext = {
+      const ctx: TelephonyContext = applyTelephonyDependencies({
         id: 'call-006',
         callId: 'call-006',
         intentClassificationInput: {
@@ -211,7 +216,7 @@ describe('Telephony state machine', () => {
         intentClassifier: { classify: classifySpy },
         bus,
         intentConfidenceThreshold: 0.4,
-      };
+      } as TelephonyContext);
 
       await expect(intentState.handle(ctx, { type: 'telephony.intent.classified' })).rejects.toThrowError(
         'intent_classified_publish_failed',
@@ -245,7 +250,7 @@ describe('Telephony state machine', () => {
         text: 'need help',
       }));
 
-      const ctx: TelephonyContext = {
+      const ctx: TelephonyContext = applyTelephonyDependencies({
         id: 'call-007',
         callId: 'call-007',
         audioRef: 'memory://call-007',
@@ -255,22 +260,61 @@ describe('Telephony state machine', () => {
         bus,
         intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.8,
-      };
+      } as TelephonyContext);
 
       const transcribedState = new TranscribedState();
       await transcribedState.handle(ctx, { type: 'telephony.call.received' });
 
       const intentState = new IntentClassifiedState();
-      await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+      const nextState = await intentState.handle(ctx, { type: 'telephony.intent.classified' });
 
-      expect(ctx.intentRoutingDecision).toBe('fallback');
+      expect(nextState).toBe('EmergencyTransfer');
+      expect(ctx.intentRoutingDecision).toBe('emergency');
       expect(ctx.intentClassified?.intent).toBe('telephony.manual_review');
       expect(ctx.intentClassified?.confidence).toBeCloseTo(0.2);
       expect(ctx.intentConfidenceThreshold).toBeCloseTo(0.8);
 
+      const emergencyState = new EmergencyTransferState();
+      const afterEmergency = await emergencyState.handle(ctx, { type: 'telephony.emergency.transfer' });
+      expect(afterEmergency).toBe('Routed');
+      expect(ctx.ivrPrompts?.at(-1)).toMatch(/emergency services/i);
+      expect(ctx.emergencyTransferAt).toBeDefined();
+
       const routedState = new RoutedState();
       const routed = await routedState.handle(ctx, { type: 'telephony.call.routed' });
       expect(routed).toBe('Routed');
+    });
+
+    it('respects emergency transfer flag when disabled', async () => {
+      classifySpy.mockResolvedValueOnce({
+        intent: 'telephony.manual_review',
+        confidence: 0.2,
+      });
+
+      const transcribe = vi.fn(async () => ({ text: 'need help' }));
+
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-008',
+        callId: 'call-008',
+        audioRef: 'memory://call-008',
+        correlationId: 'corr-low-disabled',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        intentClassifier: { classify: classifySpy },
+        intentConfidenceThreshold: 0.8,
+        emergencyTransferEnabled: false,
+      } as TelephonyContext);
+
+      const transcribedState = new TranscribedState();
+      await transcribedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const intentState = new IntentClassifiedState();
+      const nextState = await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      expect(nextState).toBe('Routed');
+      expect(ctx.emergencyTransferTriggered).toBe(false);
+      expect(ctx.intentRoutingDecision).toBe('fallback');
     });
   });
 

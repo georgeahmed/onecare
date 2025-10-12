@@ -5,6 +5,23 @@ import { IntentServiceClassifier } from '../adapters/intent.client';
 let singleton: IntentClassifier | undefined;
 let factoryOverride: (() => IntentClassifier) | undefined;
 
+function normalizeBoolean(value: string | undefined): boolean | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false;
+  return undefined;
+}
+
+function resolveEmergencyTransferEnabled(current?: boolean): boolean {
+  if (typeof current === 'boolean') return current;
+  const envOverride = normalizeBoolean(process.env.TELEPHONY_EMERGENCY_TRANSFER_ENABLED);
+  if (envOverride !== undefined) return envOverride;
+  const configDefault = normalizeBoolean(process.env.NHS_GP_TELEPHONY_EMERGENCY_TRANSFER_ENABLED);
+  if (configDefault !== undefined) return configDefault;
+  return true;
+}
+
 function buildIntentClassifier(): IntentClassifier {
   if (factoryOverride) {
     return factoryOverride();
@@ -27,6 +44,7 @@ export function applyTelephonyDependencies<T extends TelephonyContext>(ctx: T): 
   if (!ctx.intentClassifier) {
     ctx.intentClassifier = getIntentClassifier();
   }
+  ctx.emergencyTransferEnabled = resolveEmergencyTransferEnabled(ctx.emergencyTransferEnabled);
   return ctx;
 }
 

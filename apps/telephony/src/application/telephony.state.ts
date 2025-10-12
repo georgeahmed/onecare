@@ -35,6 +35,14 @@ function normalizeConfidenceThreshold(raw: unknown): number | undefined {
   return undefined;
 }
 
+function parseBooleanFlag(value: string | undefined): boolean | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false;
+  return undefined;
+}
+
 function resolveIntentConfidenceThreshold(explicit?: number): number {
   const normalized = normalizeConfidenceThreshold(explicit);
   if (normalized !== undefined) return normalized;
@@ -46,6 +54,21 @@ function resolveIntentConfidenceThreshold(explicit?: number): number {
 function ensureIntentConfidenceThreshold(ctx: TelephonyContext): number {
   const resolved = resolveIntentConfidenceThreshold(ctx.intentConfidenceThreshold);
   ctx.intentConfidenceThreshold = resolved;
+  return resolved;
+}
+
+function ensureEmergencyTransferEnabled(ctx: TelephonyContext): boolean {
+  if (typeof ctx.emergencyTransferEnabled === 'boolean') {
+    return ctx.emergencyTransferEnabled;
+  }
+  const envOverride = parseBooleanFlag(process.env.TELEPHONY_EMERGENCY_TRANSFER_ENABLED);
+  if (envOverride !== undefined) {
+    ctx.emergencyTransferEnabled = envOverride;
+    return envOverride;
+  }
+  const configDefault = parseBooleanFlag(process.env.NHS_GP_TELEPHONY_EMERGENCY_TRANSFER_ENABLED);
+  const resolved = configDefault !== undefined ? configDefault : true;
+  ctx.emergencyTransferEnabled = resolved;
   return resolved;
 }
 
@@ -92,6 +115,7 @@ export class CallReceivedState extends BaseState<TelephonyContext, TelephonyEven
     ctx.buildCallTranscribed = ctx.buildCallTranscribed ?? buildCallTranscribed;
     ctx.patientId = sanitizePatientId(ctx.patientId);
     ensureIntentConfidenceThreshold(ctx);
+    ensureEmergencyTransferEnabled(ctx);
 
     if (ctx.metadata?.callerId) {
       ctx.metadata = {
@@ -143,6 +167,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
     ctx.callTranscribedEnvelope = envelope;
     ctx.intentClassificationInput = buildIntentClassificationInput(payload, ctx.correlationId);
     ensureIntentConfidenceThreshold(ctx);
+    ensureEmergencyTransferEnabled(ctx);
 
     const bus = ctx.bus;
     if (!bus) {
@@ -205,15 +230,28 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
 
     const confidence =
       typeof payload.confidence === 'number' && Number.isFinite(payload.confidence) ? payload.confidence : undefined;
-    const decision: IntentRoutingDecision =
-      confidence !== undefined && confidence >= threshold ? 'auto' : 'fallback';
+    const highConfidence = confidence !== undefined && confidence >= threshold;
+    const decision: IntentRoutingDecision = highConfidence ? 'auto' : 'fallback';
     ctx.intentRoutingDecision = decision;
-    if (decision === 'fallback') {
+    const emergencyEnabled = ensureEmergencyTransferEnabled(ctx);
+    const forcedTransfer = Boolean(ctx.forceEmergencyTransfer);
+    const shouldTransfer = emergencyEnabled && (forcedTransfer || !highConfidence);
+    ctx.emergencyTransferTriggered = shouldTransfer;
+    if (!highConfidence) {
       logger.warn('telephony.intent.low_confidence', {
         callId: input.callId,
         confidence,
         threshold,
         intent: payload.intent,
+        correlationId: ctx.correlationId,
+      });
+    }
+    if (shouldTransfer) {
+      ctx.intentRoutingDecision = 'emergency';
+      logger.error('telephony.emergency_transfer.queued', {
+        callId: input.callId,
+        intent: payload.intent,
+        confidence,
         correlationId: ctx.correlationId,
       });
     }
@@ -244,6 +282,34 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
       correlationId: ctx.correlationId,
     });
 
+    if (ctx.emergencyTransferTriggered && ctx.emergencyTransferEnabled) {
+      return 'EmergencyTransfer';
+    }
+    return 'Routed';
+  }
+}
+
+export class EmergencyTransferState extends BaseState<TelephonyContext, TelephonyEvent> {
+  constructor() {
+    super('EmergencyTransfer');
+  }
+
+  async handle(ctx: TelephonyContext): Promise<string> {
+    const nowFn = ctx.now ?? Date.now;
+    ctx.emergencyTransferAt = nowFn();
+    ctx.ivrPrompts = ctx.ivrPrompts ?? [];
+    const prompt = 'Connecting you to emergency services. Please stay on the line.';
+    ctx.ivrPrompts.push(prompt);
+    logger.warn('telephony.ivr.prompt.emergency_transfer', {
+      callId: ctx.callId,
+      prompt,
+      correlationId: ctx.correlationId,
+    });
+    logger.error('telephony.emergency_transfer.initiated', {
+      callId: ctx.callId,
+      intent: ctx.intentClassified?.intent ?? 'unknown',
+      correlationId: ctx.correlationId,
+    });
     return 'Routed';
   }
 }
@@ -265,7 +331,13 @@ export class RoutedState extends BaseState<TelephonyContext, TelephonyEvent> {
       correlationId: ctx.correlationId,
       decision,
     });
-    if (decision === 'auto') {
+    if (decision === 'emergency') {
+      logger.error('telephony.routing.emergency_transfer', {
+        callId: ctx.intentClassified.callId,
+        intent: ctx.intentClassified.intent,
+        correlationId: ctx.correlationId,
+      });
+    } else if (decision === 'auto') {
       logger.info('telephony.routing.auto', {
         callId: ctx.intentClassified.callId,
         intent: ctx.intentClassified.intent,
