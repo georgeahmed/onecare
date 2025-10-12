@@ -1,6 +1,7 @@
 import { FormEvent, useId, useState } from 'react';
 import { submitIntake } from '../lib/api';
-import { PortalSubmission } from '../lib/types';
+import type { ErrorEnvelope, PortalSubmission } from '../lib/types';
+import ErrorAlert from './ErrorAlert';
 
 const buildInitialSubmission = (): PortalSubmission => ({
   practiceId: '',
@@ -15,7 +16,7 @@ const IntakeForm = () => {
   const [formData, setFormData] = useState<PortalSubmission>(() => buildInitialSubmission());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<ErrorEnvelope | null>(null);
 
   const practiceIdInputId = useId();
   const patientIdInputId = useId();
@@ -30,6 +31,66 @@ const IntakeForm = () => {
     setSubmitError(null);
   };
 
+  const normalizeErrorEnvelope = async (error: unknown): Promise<ErrorEnvelope> => {
+    const fallback: ErrorEnvelope = {
+      error: {
+        code: 'internal_error',
+        message: 'Something went wrong. Please try again.'
+      }
+    };
+
+    if (!error) {
+      return fallback;
+    }
+
+    if (error instanceof Response) {
+      try {
+        const payload = await error.json();
+        if (payload && typeof payload === 'object' && 'error' in payload) {
+          const envelope = payload as ErrorEnvelope;
+          if (envelope.error && typeof envelope.error.code === 'string') {
+            return {
+              correlationId: envelope.correlationId,
+              error: {
+                code: envelope.error.code,
+                message: envelope.error.message ?? fallback.error.message,
+                details: envelope.error.details
+              }
+            };
+          }
+        }
+      } catch {
+        return fallback;
+      }
+      return fallback;
+    }
+
+    if (typeof error === 'object' && error !== null) {
+      const candidate = error as { error?: { code?: string; message?: string; details?: Record<string, unknown> }; correlationId?: string };
+      if (candidate.error && typeof candidate.error.code === 'string') {
+        return {
+          correlationId: candidate.correlationId,
+          error: {
+            code: candidate.error.code,
+            message: candidate.error.message ?? fallback.error.message,
+            details: candidate.error.details
+          }
+        };
+      }
+    }
+
+    if (error instanceof Error) {
+      return {
+        error: {
+          code: 'internal_error',
+          message: error.message || fallback.error.message
+        }
+      };
+    }
+
+    return fallback;
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isSubmitting) {
@@ -42,7 +103,8 @@ const IntakeForm = () => {
       await submitIntake(formData);
       setHasSubmitted(true);
     } catch (error) {
-      setSubmitError('We could not submit the form. Please try again.');
+      const envelope = await normalizeErrorEnvelope(error);
+      setSubmitError(envelope);
     } finally {
       setIsSubmitting(false);
     }
@@ -163,9 +225,12 @@ const IntakeForm = () => {
       </div>
 
       {submitError ? (
-        <div id={statusMessageId} role="alert">
-          {submitError}
-        </div>
+        <ErrorAlert
+          id={statusMessageId}
+          error={submitError}
+          onRetry={() => setSubmitError(null)}
+          supportUrl="mailto:support@onecare.example"
+        />
       ) : (
         <div id={statusMessageId} aria-live="polite" />
       )}

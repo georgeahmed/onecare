@@ -51,9 +51,26 @@ describe('InMemoryFeatureStore', () => {
     await store.putFeatures('member-2', sampleFeatures);
 
     now = 6;
-    store.purgeExpired();
+    const removed = store.purgeExpired();
 
+    expect(removed).toBe(2);
     expect(await store.getFeatures('member-1')).toBeNull();
     expect(await store.getFeatures('member-2')).toBeNull();
+  });
+
+  it('purgeOlderThan removes entries created beyond retention window', async () => {
+    let now = 1_000;
+    const store = new InMemoryFeatureStore({ clock: () => now });
+
+    await store.putFeatures('stale', sampleFeatures);
+    now += 60;
+    await store.putFeatures('recent', sampleFeatures);
+
+    const retentionMs = 30;
+    const removed = store.purgeOlderThan(retentionMs);
+
+    expect(removed).toBe(1);
+    expect(await store.getFeatures('stale')).toBeNull();
+    expect(await store.getFeatures('recent')).not.toBeNull();
   });
 });

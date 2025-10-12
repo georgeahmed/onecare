@@ -1,3 +1,4 @@
+import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { BaseState } from '@onecare/statekit';
 import { logger } from '@onecare/observability';
 import { Topics, createEnvelope } from '@onecare/events';
@@ -13,7 +14,352 @@ import type {
   IntentRouteTarget,
   CallbackPriority,
   CallbackWindowOptions,
+  LanguagePromptSelection,
 } from './types';
+
+const DEFAULT_LANGUAGE_CODE = 'en';
+
+interface LanguagePromptConfig {
+  intro?: string;
+  confirm?: string;
+  fallbackOption?: string;
+  options: Record<string, string>;
+}
+
+interface AccessibilityLanguageSettings {
+  languages: string[];
+  prompts: LanguagePromptConfig;
+}
+
+const DEFAULT_LANGUAGE_PROMPT_CONFIG: LanguagePromptConfig = {
+  intro: 'ivr.prompt.language.select',
+  options: {
+    [DEFAULT_LANGUAGE_CODE]: 'ivr.prompt.language.option.en',
+  },
+  fallbackOption: 'ivr.prompt.language.option.en',
+};
+
+const DEFAULT_ACCESSIBILITY_SETTINGS: AccessibilityLanguageSettings = {
+  languages: [DEFAULT_LANGUAGE_CODE],
+  prompts: DEFAULT_LANGUAGE_PROMPT_CONFIG,
+};
+
+const accessibilitySettingsCache = new Map<string, AccessibilityLanguageSettings>();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normaliseLanguageCode(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  return trimmed.toLowerCase();
+}
+
+function parseLanguageList(raw: unknown): string[] | undefined {
+  if (!raw) return undefined;
+  if (Array.isArray(raw)) {
+    const parsed = raw
+      .map((entry) => normaliseLanguageCode(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return parsed.length > 0 ? parsed : undefined;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parseLanguageList(parsed);
+      }
+    } catch {
+      // fall through to comma parsing
+    }
+    const split = trimmed
+      .split(',')
+      .map((entry) => normaliseLanguageCode(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return split.length > 0 ? split : undefined;
+  }
+  return undefined;
+}
+
+function ensureLanguageFallback(languages: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const source = Array.isArray(languages) && languages.length > 0 ? languages : DEFAULT_ACCESSIBILITY_SETTINGS.languages;
+  for (const code of source) {
+    const normalized = normaliseLanguageCode(code);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  if (!seen.has(DEFAULT_LANGUAGE_CODE)) {
+    result.unshift(DEFAULT_LANGUAGE_CODE);
+  }
+  return result;
+}
+
+function clonePromptConfig(config: LanguagePromptConfig): LanguagePromptConfig {
+  return {
+    intro: config.intro,
+    confirm: config.confirm,
+    fallbackOption: config.fallbackOption,
+    options: { ...config.options },
+  };
+}
+
+function cloneAccessibilitySettings(settings: AccessibilityLanguageSettings): AccessibilityLanguageSettings {
+  return {
+    languages: [...settings.languages],
+    prompts: clonePromptConfig(settings.prompts),
+  };
+}
+
+function mergePromptConfig(base: LanguagePromptConfig, override?: LanguagePromptConfig): LanguagePromptConfig {
+  if (!override) {
+    return clonePromptConfig(base);
+  }
+  const merged = clonePromptConfig(base);
+  if (override.intro) {
+    merged.intro = override.intro.trim();
+  }
+  if (override.confirm) {
+    merged.confirm = override.confirm.trim();
+  }
+  if (override.fallbackOption) {
+    merged.fallbackOption = override.fallbackOption.trim();
+  }
+  if (override.options) {
+    for (const [code, value] of Object.entries(override.options)) {
+      const normalizedCode = normaliseLanguageCode(code);
+      const trimmedValue = typeof value === 'string' ? value.trim() : undefined;
+      if (!normalizedCode || !trimmedValue) continue;
+      merged.options[normalizedCode] = trimmedValue;
+    }
+  }
+  return merged;
+}
+
+function parsePromptConfig(raw: unknown): LanguagePromptConfig | undefined {
+  if (!isRecord(raw)) return undefined;
+  const options: Record<string, string> = {};
+  const rawOptions = raw.options;
+  if (isRecord(rawOptions)) {
+    for (const [code, value] of Object.entries(rawOptions)) {
+      const normalizedCode = normaliseLanguageCode(code);
+      if (!normalizedCode || typeof value !== 'string') continue;
+      const trimmedValue = value.trim();
+      if (trimmedValue) {
+        options[normalizedCode] = trimmedValue;
+      }
+    }
+  }
+  const intro =
+    typeof raw.intro === 'string' && raw.intro.trim().length > 0 ? raw.intro.trim() : undefined;
+  const confirm =
+    typeof raw.confirm === 'string' && raw.confirm.trim().length > 0 ? raw.confirm.trim() : undefined;
+  let fallbackOption: string | undefined;
+  const fallbackRaw = (raw as Record<string, unknown>).fallbackOption ?? (raw as Record<string, unknown>).fallback_option;
+  if (typeof fallbackRaw === 'string' && fallbackRaw.trim().length > 0) {
+    fallbackOption = fallbackRaw.trim();
+  }
+  if (!intro && !confirm && Object.keys(options).length === 0 && !fallbackOption) {
+    return undefined;
+  }
+  return {
+    intro,
+    confirm,
+    fallbackOption,
+    options,
+  };
+}
+
+function parsePromptConfigFromEnv(raw: string | undefined): LanguagePromptConfig | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsePromptConfig(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseLanguageListFromEnv(): string[] | undefined {
+  const candidates = [
+    process.env.TELEPHONY_IVR_LANGUAGES,
+    process.env.NHS_GP_ACCESSIBILITY_AND_LANGUAGE_INTERPRETER_LANGUAGES,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseLanguageList(candidate);
+    if (parsed && parsed.length > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function resolvePromptOptions(config: LanguagePromptConfig): LanguagePromptConfig {
+  const cloned = clonePromptConfig(config);
+  if (!cloned.options[DEFAULT_LANGUAGE_CODE]) {
+    cloned.options[DEFAULT_LANGUAGE_CODE] =
+      DEFAULT_LANGUAGE_PROMPT_CONFIG.options[DEFAULT_LANGUAGE_CODE];
+  }
+  if (!cloned.fallbackOption) {
+    cloned.fallbackOption =
+      cloned.options[DEFAULT_LANGUAGE_CODE] ?? DEFAULT_LANGUAGE_PROMPT_CONFIG.fallbackOption;
+  }
+  if (!cloned.intro) {
+    cloned.intro = DEFAULT_LANGUAGE_PROMPT_CONFIG.intro;
+  }
+  return cloned;
+}
+
+function getAccessibilityLanguageSettings(practiceId: string): AccessibilityLanguageSettings {
+  const cached = accessibilitySettingsCache.get(practiceId);
+  if (cached) {
+    return cloneAccessibilitySettings(cached);
+  }
+
+  let languages = ensureLanguageFallback(DEFAULT_ACCESSIBILITY_SETTINGS.languages);
+  let prompts = clonePromptConfig(DEFAULT_LANGUAGE_PROMPT_CONFIG);
+
+  try {
+    const resolved: ResolvedConfig = loadConfig(practiceId);
+    const section = (resolved as Record<string, unknown>).accessibility_and_language;
+    if (isRecord(section)) {
+      const configLanguages = parseLanguageList(section.interpreter_languages);
+      if (configLanguages && configLanguages.length > 0) {
+        languages = ensureLanguageFallback(configLanguages);
+      }
+      const configPrompts = parsePromptConfig(section.ivr_prompt_keys);
+      if (configPrompts) {
+        prompts = mergePromptConfig(prompts, configPrompts);
+      }
+    }
+  } catch (error) {
+    logger.warn('telephony.language.config_load_failed', {
+      practiceId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const envLanguages = parseLanguageListFromEnv();
+  if (envLanguages && envLanguages.length > 0) {
+    languages = ensureLanguageFallback(envLanguages);
+  }
+
+  const promptEnvCandidates = [
+    parsePromptConfigFromEnv(process.env.NHS_GP_ACCESSIBILITY_AND_LANGUAGE_IVR_PROMPT_KEYS),
+    parsePromptConfigFromEnv(process.env.TELEPHONY_IVR_PROMPT_KEYS),
+  ];
+  for (const override of promptEnvCandidates) {
+    if (override) {
+      prompts = mergePromptConfig(prompts, override);
+    }
+  }
+
+  prompts = resolvePromptOptions(prompts);
+  const settings: AccessibilityLanguageSettings = {
+    languages,
+    prompts,
+  };
+  accessibilitySettingsCache.set(practiceId, cloneAccessibilitySettings(settings));
+  return cloneAccessibilitySettings(settings);
+}
+
+function resolvePracticeId(ctx: TelephonyContext): string {
+  const ctxId = ctx.metadata?.practiceId?.trim();
+  if (ctxId) return ctxId;
+  const envId =
+    process.env.TELEPHONY_PRACTICE_ID?.trim() ||
+    process.env.PRACTICE_ID?.trim();
+  if (envId) return envId;
+  return 'nhs_gp_defaults';
+}
+
+function ensureLanguageOptions(ctx: TelephonyContext): {
+  practiceId: string;
+  languages: string[];
+  prompts: LanguagePromptConfig;
+} {
+  const practiceId = resolvePracticeId(ctx);
+  const settings = getAccessibilityLanguageSettings(practiceId);
+  ctx.availableLanguages = [...settings.languages];
+  return {
+    practiceId,
+    languages: settings.languages,
+    prompts: settings.prompts,
+  };
+}
+
+function extractLanguagePreference(ctx: TelephonyContext): string | undefined {
+  const explicit = normaliseLanguageCode(ctx.selectedLanguage);
+  if (explicit) return explicit;
+  const attributes = ctx.metadata?.attributes;
+  if (attributes) {
+    const candidates = [
+      attributes.preferredLanguage,
+      attributes.preferred_language,
+      attributes.language,
+      attributes.lang,
+    ];
+    for (const entry of candidates) {
+      const normalized = normaliseLanguageCode(entry);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+  return undefined;
+}
+
+function ensureSelectedLanguage(ctx: TelephonyContext, languages: string[]): string {
+  const normalizedLanguages = languages
+    .map((code) => normaliseLanguageCode(code))
+    .filter((code): code is string => Boolean(code));
+  const available = new Set(normalizedLanguages);
+  if (!available.has(DEFAULT_LANGUAGE_CODE)) {
+    available.add(DEFAULT_LANGUAGE_CODE);
+    normalizedLanguages.unshift(DEFAULT_LANGUAGE_CODE);
+  }
+
+  const preferred = extractLanguagePreference(ctx);
+  if (preferred && available.has(preferred)) {
+    ctx.selectedLanguage = preferred;
+    return preferred;
+  }
+
+  const envDefault = normaliseLanguageCode(process.env.TELEPHONY_IVR_DEFAULT_LANGUAGE);
+  if (envDefault && available.has(envDefault)) {
+    ctx.selectedLanguage = envDefault;
+    return envDefault;
+  }
+
+  const fallback = normalizedLanguages.find((code) => available.has(code)) ?? DEFAULT_LANGUAGE_CODE;
+  ctx.selectedLanguage = fallback;
+  return fallback;
+}
+
+function resolveLanguageOptionPrompt(prompts: LanguagePromptConfig, code: string): string {
+  const normalized = normaliseLanguageCode(code) ?? DEFAULT_LANGUAGE_CODE;
+  const candidate = prompts.options[normalized];
+  if (candidate && candidate.trim()) {
+    return candidate.trim();
+  }
+  const fallback =
+    prompts.fallbackOption ??
+    prompts.options[DEFAULT_LANGUAGE_CODE] ??
+    DEFAULT_LANGUAGE_PROMPT_CONFIG.options[DEFAULT_LANGUAGE_CODE];
+  return fallback;
+}
+
+function resolveIntroPrompt(prompts: LanguagePromptConfig): string | undefined {
+  const intro = prompts.intro ?? DEFAULT_LANGUAGE_PROMPT_CONFIG.intro;
+  const trimmed = intro?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
 
 function sanitizePatientId(raw: string | null | undefined): string | null | undefined {
   if (raw === null) return null;
@@ -233,11 +579,12 @@ function determineCallbackPriority(ctx: TelephonyContext, confidence?: number): 
 function buildIntentClassificationInput(
   payload: { callId: string; transcript: string; lang?: string | null; patientId?: string | null },
   correlationId?: string,
+  fallbackLang?: string | null,
 ): IntentClassificationInput {
   return {
     callId: payload.callId,
     transcript: payload.transcript,
-    lang: payload.lang ?? null,
+    lang: payload.lang ?? fallbackLang ?? null,
     patientId: payload.patientId ?? null,
     correlationId,
   };
@@ -282,6 +629,59 @@ export class CallReceivedState extends BaseState<TelephonyContext, TelephonyEven
       };
     }
 
+    const normalizedLang = normaliseLanguageCode(ctx.selectedLanguage);
+    ctx.selectedLanguage = normalizedLang ?? DEFAULT_LANGUAGE_CODE;
+
+    return 'LanguageSelection';
+  }
+}
+
+export class LanguageSelectionState extends BaseState<TelephonyContext, TelephonyEvent> {
+  constructor() {
+    super('LanguageSelection');
+  }
+
+  async handle(ctx: TelephonyContext): Promise<string> {
+    const callId = ctx.callId?.trim();
+    if (!callId) {
+      throw new Error('call_id_missing');
+    }
+
+    const { practiceId, languages, prompts } = ensureLanguageOptions(ctx);
+    const selectedLanguage = ensureSelectedLanguage(ctx, languages);
+
+    const introPrompt = resolveIntroPrompt(prompts);
+    const promptKeys: string[] = [];
+    if (introPrompt) {
+      await queuePrompt(ctx, introPrompt);
+      promptKeys.push(introPrompt);
+    }
+
+    const selections: LanguagePromptSelection[] = [];
+    languages.forEach((code, index) => {
+      const promptKey = resolveLanguageOptionPrompt(prompts, code);
+      selections.push({
+        code,
+        promptKey,
+        digit: index + 1,
+      });
+    });
+
+    for (const selection of selections) {
+      await queuePrompt(ctx, selection.promptKey);
+      promptKeys.push(selection.promptKey);
+    }
+
+    ctx.languagePromptSelections = selections;
+    ctx.availableLanguages = [...languages];
+    logger.info('telephony.ivr.language.prompts', {
+      callId,
+      practiceId,
+      languages,
+      selectedLanguage,
+      promptKeys,
+    });
+
     return 'Transcribed';
   }
 }
@@ -307,6 +707,9 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
       throw new Error('audio_ref_missing');
     }
 
+    const languages = ensureLanguageFallback(ctx.availableLanguages);
+    const selectedLanguage = ensureSelectedLanguage(ctx, languages);
+
     const builder = ctx.buildCallTranscribed ?? buildCallTranscribed;
     ctx.buildCallTranscribed = builder;
 
@@ -319,11 +722,15 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
       context: ctx.patientId !== undefined ? { patientId: ctx.patientId } : undefined,
     });
 
+    if (!payload.lang && selectedLanguage) {
+      payload.lang = selectedLanguage;
+    }
+
     ctx.callTranscribed = payload;
 
     const envelope = createEnvelope(Topics.telephony.callTranscribed, payload, ctx.correlationId);
     ctx.callTranscribedEnvelope = envelope;
-    ctx.intentClassificationInput = buildIntentClassificationInput(payload, ctx.correlationId);
+    ctx.intentClassificationInput = buildIntentClassificationInput(payload, ctx.correlationId, selectedLanguage);
     ensureIntentConfidenceThreshold(ctx);
     ensureEmergencyTransferEnabled(ctx);
 

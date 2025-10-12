@@ -27,6 +27,13 @@ from .classifier import EmergencyClassifier
 from .metrics import record_latency, render_metrics
 from .decision import DEFAULT_RED_FLAG_SET
 from .ner import SafetyNER
+from .predict import (
+    PredictProbaResponse,
+    PredictRequest,
+    PredictResponse,
+    predict_outcome,
+    predict_proba,
+)
 
 
 LOGGER = logging.getLogger("safety_gate_service.main")
@@ -416,9 +423,68 @@ async def analyze(request: Request, submission: PortalSubmission, response: Resp
     return SafetyDecision(outcome=outcome.decision.outcome, reason=outcome.decision.rationale.get("reason"))
 
 
+def _prediction_error(status_code: int, *, code: str, message: str, correlation_id: str) -> HTTPException:
+    body = {
+        "error": {
+            "code": code,
+            "message": message,
+            "correlationId": correlation_id,
+        }
+    }
+    return HTTPException(status_code=status_code, detail=body)
+
+
 @app.get("/metrics")
 def metrics_endpoint() -> Response:
     return Response(content=render_metrics(), media_type="text/plain; version=0.0.4")
+
+
+@app.post("/predict", response_model=PredictResponse)
+def predict_endpoint(request: Request, payload: PredictRequest, response: Response) -> PredictResponse:
+    correlation_id = _extract_correlation_id(request)
+    response.headers["x-correlation-id"] = correlation_id
+    try:
+        return predict_outcome(payload)
+    except FileNotFoundError:
+        LOGGER.error("safety_gate.predict.missing_artifact correlation_id=%s", correlation_id)
+        raise _prediction_error(
+            503,
+            code="model_unavailable",
+            message="Acuity model artifact unavailable",
+            correlation_id=correlation_id,
+        )
+    except Exception:  # pragma: no cover - defensive path
+        LOGGER.exception("safety_gate.predict.failed correlation_id=%s", correlation_id)
+        raise _prediction_error(
+            500,
+            code="prediction_failed",
+            message="Failed to generate prediction",
+            correlation_id=correlation_id,
+        )
+
+
+@app.post("/predict_proba", response_model=PredictProbaResponse)
+def predict_proba_endpoint(request: Request, payload: PredictRequest, response: Response) -> PredictProbaResponse:
+    correlation_id = _extract_correlation_id(request)
+    response.headers["x-correlation-id"] = correlation_id
+    try:
+        return predict_proba(payload)
+    except FileNotFoundError:
+        LOGGER.error("safety_gate.predict_proba.missing_artifact correlation_id=%s", correlation_id)
+        raise _prediction_error(
+            503,
+            code="model_unavailable",
+            message="Acuity model artifact unavailable",
+            correlation_id=correlation_id,
+        )
+    except Exception:  # pragma: no cover - defensive path
+        LOGGER.exception("safety_gate.predict_proba.failed correlation_id=%s", correlation_id)
+        raise _prediction_error(
+            500,
+            code="prediction_failed",
+            message="Failed to generate probability distribution",
+            correlation_id=correlation_id,
+        )
 
 
 def _sanitize_payload(value: Any, key: Optional[str] = None) -> Any:

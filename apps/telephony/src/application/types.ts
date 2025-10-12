@@ -33,6 +33,9 @@ export interface TelephonyContext extends MachineContext {
   intentClassifiedEnvelope?: TypedEnvelope<IntentClassified>;
   intentClassifiedPublishedAt?: number;
   intentConfidenceThreshold?: number;
+  availableLanguages?: string[];
+  selectedLanguage?: string;
+  languagePromptSelections?: LanguagePromptSelection[];
   intentRoutingDecision?: IntentRoutingDecision;
   intentRouteTarget?: IntentRouteTarget;
   intentRouteReason?: string;
@@ -72,4 +75,10 @@ export interface CallbackWindowOptions {
   priority: CallbackPriority;
   windowCode: string;
   windowLabel: string;
+}
+
+export interface LanguagePromptSelection {
+  code: string;
+  promptKey: string;
+  digit: number;
 }

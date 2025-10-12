@@ -68,6 +68,16 @@ accessibility_and_language:
   interpreter_languages: ["en", "ur", "pa", "pl", "ar"]
   offer_bsl: true
   collect_patient_prefs: ["female_clinician", "wheelchair_access", "language_preference"]
+  ivr_prompt_keys:
+    intro: "ivr.prompt.language.select"
+    confirm: "ivr.prompt.language.confirm"
+    options:
+      en: "ivr.prompt.language.option.en"
+      ur: "ivr.prompt.language.option.ur"
+      pa: "ivr.prompt.language.option.pa"
+      pl: "ivr.prompt.language.option.pl"
+      ar: "ivr.prompt.language.option.ar"
+    fallback_option: "ivr.prompt.language.option.en"
 safety_gate:
   model_ner: "bioclinicalbert"
   model_classifier: "medalpaca-sm"

@@ -1,0 +1,14 @@
+{
+  "schema": "https://onecare/features/acuity/v1",
+  "classes": [
+    2,
+    0,
+    1
+  ],
+  "training_samples": 4,
+  "calibration": {
+    "temperature": 0.5,
+    "threshold": 1.0,
+    "positive_label": 2
+  }
+}

@@ -18,3 +18,12 @@ export interface PortalSubmission {
   attachments?: PortalSubmissionAttachment[];
   channel: PortalChannel;
 }
+
+export interface ErrorEnvelope {
+  error: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+  correlationId?: string;
+}

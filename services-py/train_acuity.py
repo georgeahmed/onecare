@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+import math
 import pickle
 from pathlib import Path
 
 from common.features.encode_features import encode_features
+from common.calibration import fit_temperature_threshold
 
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_DATA_PATH = MODEL_DIR / "acuity_training_data.pkl"
 MODEL_PATH = MODEL_DIR / "acuity_model.pkl"
-METRICS_PATH = MODEL_DIR / "acuity_metrics.json"
+META_PATH = MODEL_DIR / "acuity.meta.json"
 
 
 def _load_training_samples() -> list[dict]:
@@ -56,6 +58,21 @@ def _flatten_features(encoded: dict[str, object]) -> list[float]:
     return list(embedding) + [float(age), float(flags["diabetes"]), float(flags["cardiac"]), float(flags["respiratory"])]
 
 
+def _euclidean_distance(a: list[float], b: list[float]) -> float:
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
+def _emergency_score(vector: list[float], prototypes: dict[int, list[float]]) -> float:
+    emergency = prototypes.get(2)
+    if emergency is None:
+        return 0.0
+
+    emergency_dist = _euclidean_distance(vector, emergency)
+    other = [dist for label, proto in prototypes.items() if label != 2 for dist in [_euclidean_distance(vector, proto)]]
+    other_dist = min(other) if other else emergency_dist + 1.0
+    return other_dist - emergency_dist
+
+
 def main() -> None:
     samples = _load_training_samples()
 
@@ -81,11 +98,20 @@ def main() -> None:
     with MODEL_PATH.open("wb") as handle:
         pickle.dump({"prototypes": prototypes, "schema": "https://onecare/features/acuity/v1"}, handle)
 
-    metrics = {
+    scores = [_emergency_score(vector, prototypes) for vector in vectors]
+    calibrator = fit_temperature_threshold(scores, labels, positive_label=2)
+
+    metadata = {
+        "schema": "https://onecare/features/acuity/v1",
         "classes": list(prototypes.keys()),
         "training_samples": len(samples),
+        "calibration": {
+            "temperature": calibrator.temperature,
+            "threshold": calibrator.threshold,
+            "positive_label": 2,
+        },
     }
-    METRICS_PATH.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    META_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     print(f"Training completed. Model saved to {MODEL_PATH}")
 

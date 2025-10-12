@@ -110,6 +110,7 @@ Analytics Consumer
 - Feature backfill: `npm run feature:backfill -- --input <events.jsonl> --output <features.jsonl>` hydrates the feature store from historical triage events, validating payloads against `triage-core`.
 - Feature compaction: `node scripts/feature_compact.js --input <features.jsonl> --retention-days 7` enforces retention and deduplicates feature records.
 - Feature purge: `node scripts/feature_store_purge.js --url "$FEATURE_STORE_URL" --retention-days 30` deletes feature rows older than the retention window. The `feature-store-purge` GitHub Action runs this nightly for `dev`, `staging`, and `prod` when the respective `FEATURE_STORE_URL_*` secrets are configured.
+- Drift report: `node scripts/drift_report.js --input data/drift/sample.json --output var/reports/drift-report.md` generates a Markdown summary of distribution drift using PSI/mean/std thresholds.
 
 Team & Status
 - Team status: make team-status

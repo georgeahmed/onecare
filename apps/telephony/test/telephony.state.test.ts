@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  CallReceivedState,
+  LanguageSelectionState,
   TranscribedState,
   IntentClassifiedState,
   EmergencyTransferState,
@@ -39,6 +41,63 @@ describe('Telephony state machine', () => {
   afterEach(() => {
     setIntentClassifier(undefined);
     setIntentClassifierFactory(undefined);
+  });
+
+  describe('CallReceivedState', () => {
+    it('normalises call metadata and transitions to language selection', async () => {
+      const transcribe = vi.fn(async () => ({ text: 'hello' }));
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
+        id: 'call-000',
+        callId: ' call-000 ',
+        audioRef: ' memory://call-000 ',
+        metadata: { callerId: '  caller-99  ' },
+        patientId: ' patient-99 ',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+      } as TelephonyContext);
+
+      const state = new CallReceivedState();
+      const next = await state.handle(ctx, { type: 'telephony.call.received' });
+
+      expect(next).toBe('LanguageSelection');
+      expect(ctx.callId).toBe('call-000');
+      expect(ctx.audioRef).toBe('memory://call-000');
+      expect(ctx.metadata?.callerId).toBe('caller-99');
+      expect(ctx.selectedLanguage).toBe('en');
+    });
+  });
+
+  describe('LanguageSelectionState', () => {
+    it('queues prompt keys from config and defaults to English fallback', async () => {
+      const transcribe = vi.fn(async () => ({ text: 'language test' }));
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
+        id: 'call-lang',
+        callId: 'call-lang',
+        audioRef: 'memory://call-lang',
+        metadata: { callerId: 'caller-123', practiceId: 'nhs_gp_defaults' },
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+      } as TelephonyContext);
+
+      const receivedState = new CallReceivedState();
+      await receivedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const languageState = new LanguageSelectionState();
+      const next = await languageState.handle(ctx, { type: 'telephony.language.selection' });
+
+      expect(next).toBe('Transcribed');
+      expect(ctx.availableLanguages).toEqual(expect.arrayContaining(['en', 'ur', 'pa', 'pl', 'ar']));
+      expect(ctx.languagePromptSelections?.length).toBe(ctx.availableLanguages?.length);
+      expect(ctx.ivrPrompts?.[0]).toBe('ivr.prompt.language.select');
+      expect(ctx.ivrPrompts).toContain('ivr.prompt.language.option.en');
+      expect(ctx.selectedLanguage).toBe('en');
+      const optionKeys = ctx.languagePromptSelections?.map((entry) => entry.promptKey) ?? [];
+      expect(optionKeys).toContain('ivr.prompt.language.option.ur');
+    });
   });
 
   describe('TranscribedState', () => {
@@ -158,7 +217,7 @@ describe('Telephony state machine', () => {
       expect(classifySpy).toHaveBeenCalledWith({
         callId: 'call-003',
         transcript: 'check symptoms',
-        lang: null,
+        lang: 'en',
         patientId: 'patient-X',
         correlationId: 'corr-789',
       });
