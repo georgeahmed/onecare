@@ -13,8 +13,8 @@ Start Here
 - Algorithm.md: 6) Capacity Shaper, 13) MLOps
 - Ports: packages/ports/src/feature-store.ts
 
-Status: planned
-Progress: 0%
+Status: in-progress
+Progress: 20%
 
 Dependencies
 - mlops/engineer-02 (Feature monitoring)
@@ -26,7 +26,7 @@ Platform Checklist (pre-flight)
 - No PII leakage; PHI minimized per policy; access controls applied.
 
 Tasks
-- [ ] DE-02.1 — Define feature schemas (JSON) + docs
+- [x] DE-02.1 — Define feature schemas (JSON) + docs
 - [ ] DE-02.2 — Implement FeatureStore.put/get TS impl + tests
 - [ ] DE-02.3 — Backfill job script from historical events (if any)
 - [ ] DE-02.4 — Retention + compaction job (config-driven)

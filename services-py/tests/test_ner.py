@@ -14,6 +14,11 @@ def test_analyze_stub_outputs_expected_categories(monkeypatch):
     assert "severe" in result["severity"]
     assert "today" in result["temporal"]
     assert not result["context_entities"]
+    assert result["symptom_mentions"]
+    for mention in result["symptom_mentions"]:
+        assert "name" in mention
+        assert mention["confidence"] is not None
+        assert 0 <= mention["confidence"] <= 1
 
 
 def test_analyze_stub_deduplicates_entities(monkeypatch):
@@ -23,6 +28,7 @@ def test_analyze_stub_deduplicates_entities(monkeypatch):
     result = ner.analyze("Chest pain reported. Chest pain persists.")
 
     assert result["symptoms"].count("chest pain") == 1
+    assert len(result["symptom_mentions"]) == 1
 
 
 def test_lazy_pipeline_initialization(monkeypatch):
