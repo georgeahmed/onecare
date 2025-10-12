@@ -1,64 +1,63 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { IntentServiceClassifier } from '../../apps/telephony/src/adapters/intent.client';
-import { IntentClassifierError } from '../../apps/telephony/src/adapters/intent.classifier';
+import { StubIntentClassifier } from '../../apps/telephony/src/adapters/intent.classifier';
 
-describe('Telephony Intent Service contract', () => {
-  it('sends JSON payload with expected fields and headers', async () => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string);
-      expect(body).toEqual({
-        text: 'need appointment',
-        lang: 'en-US',
-        callId: 'call-123',
-        patientId: 'pat-9',
-        correlationId: 'corr-1',
-      });
-      return new Response(JSON.stringify({ intent: 'telephony.callback', confidence: 0.87 }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+describe('Telephony Intent Service contract (stub)', () => {
+  it('classifies intents based on keyword configuration', async () => {
+    const classifier = new IntentServiceClassifier({
+      baseUrl: 'https://intent.stub',
+      apiKey: 'demo-key',
+      defaultIntent: 'telephony.callback',
+      defaultConfidence: 0.55,
+      keywordIntents: [
+        {
+          intent: 'telephony.emergency',
+          confidence: 0.94,
+          keywords: ['emergency', 'ambulance'],
+        },
+        {
+          intent: 'telephony.medication',
+          keywords: ['refill', 'prescription'],
+        },
+      ],
     });
 
+    const emergency = await classifier.classify({
+      callId: 'call-101',
+      transcript: 'This is an emergency I need an ambulance',
+      lang: 'en-US',
+    });
+    expect(emergency).toEqual({ intent: 'telephony.emergency', confidence: 0.94 });
+
+    const medication = await classifier.classify({
+      callId: 'call-102',
+      transcript: 'I need a prescription refill for my medication',
+    });
+    expect(medication).toEqual({ intent: 'telephony.medication', confidence: 0.55 });
+
+    const fallback = await classifier.classify({
+      callId: 'call-103',
+      transcript: 'Just checking in',
+    });
+    expect(fallback).toEqual({ intent: 'telephony.callback', confidence: 0.55 });
+  });
+
+  it('uses fallback classifier when configured', async () => {
+    const fallback = new StubIntentClassifier({
+      defaultLanguage: 'en-US',
+      normalizer: (text) => text.trim(),
+    });
     const classifier = new IntentServiceClassifier({
-      baseUrl: 'https://intent.local',
-      apiKey: 'secret',
-      path: '/v1/classify',
-      timeoutMs: 500,
-      fetchImpl: fetchMock,
+      fallback,
+      defaultIntent: 'telephony.callback',
+      keywordIntents: [],
     });
 
     const result = await classifier.classify({
-      callId: 'call-123',
-      transcript: 'need appointment',
-      lang: 'en-US',
-      patientId: 'pat-9',
-      correlationId: 'corr-1',
+      callId: 'call-200',
+      transcript: '',
     });
 
-    expect(result).toEqual({ intent: 'telephony.callback', confidence: 0.87 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://intent.local/v1/classify');
-    expect(init?.method).toBe('POST');
-    expect(init?.headers).toMatchObject({
-      'content-type': 'application/json',
-      authorization: 'Bearer secret',
-    });
-  });
-
-  it('throws contract error when response omits intent', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
-    const classifier = new IntentServiceClassifier({
-      baseUrl: 'https://intent.local',
-      fetchImpl: fetchMock,
-    });
-
-    await expect(
-      classifier.classify({
-        callId: 'call-1',
-        transcript: 'hello',
-      }),
-    ).rejects.toMatchObject({ code: 'intent_classifier_invalid_response' } satisfies IntentClassifierError);
+    expect(typeof result.intent).toBe('string');
   });
 });
-

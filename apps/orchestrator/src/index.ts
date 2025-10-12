@@ -591,6 +591,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const metadata =
         payload.metadata && typeof payload.metadata === 'object' ? (payload.metadata as Record<string, unknown>) : {};
 
+      let recordedAt: string | number | undefined;
+      if (typeof payload.recordedAt === 'string' || typeof payload.recordedAt === 'number') {
+        recordedAt = payload.recordedAt;
+      }
+
       await logFeatureRecord({
         source,
         entityId,
@@ -598,7 +603,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         correlationId,
         features,
         metadata,
-        occurredAt: payload.recordedAt ?? Date.now(),
+        occurredAt: recordedAt ?? Date.now(),
       });
 
       res.statusCode = 202;

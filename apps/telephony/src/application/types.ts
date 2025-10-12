@@ -1,6 +1,6 @@
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { MessageBus } from '@onecare/bus';
-import type { TypedEnvelope, CallTranscribed, IntentClassified } from '@onecare/events';
+import type { TypedEnvelope, CallTranscribed, IntentClassified, TriageInput } from '@onecare/events';
 import type {
   AsrClient,
   CallTranscribedBuilder,
@@ -34,6 +34,11 @@ export interface TelephonyContext extends MachineContext {
   intentClassifiedPublishedAt?: number;
   intentConfidenceThreshold?: number;
   intentRoutingDecision?: IntentRoutingDecision;
+  intentRouteTarget?: IntentRouteTarget;
+  intentRouteReason?: string;
+  triageInput?: TriageInput;
+  triageInputEnvelope?: TypedEnvelope<TriageInput>;
+  triageInputPublishedAt?: number;
   emergencyTransferEnabled?: boolean;
   emergencyTransferTriggered?: boolean;
   emergencyTransferAt?: number;
@@ -58,3 +63,4 @@ export type {
 } from '../adapters/intent.classifier';
 
 export type IntentRoutingDecision = 'auto' | 'fallback' | 'emergency';
+export type IntentRouteTarget = 'triage' | 'admin' | 'pharmacy' | 'billing' | 'emergency';

@@ -7,6 +7,7 @@ This guide lists the environment variables and secrets required by the Python ML
 | Variable | Description | Default |
 | --- | --- | --- |
 | `OTEL_ENABLED` | Enables lightweight OTEL-style logging/metrics (`1`/`true` to enable). Safe to flip on locally for debugging. | `0` |
+| `FEATURE_LOGGING` | Persist feature vectors to the configured FeatureStore via the orchestrator endpoint. | `0` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint if exporting real telemetry (optional for dev). | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers (e.g., `x-api-key=...`). | empty |
 | `OTEL_RESOURCE_ATTRIBUTES` | Service/resource attributes (`service.name=...`). | varies |
@@ -24,6 +25,7 @@ These values are shared between the Node orchestrator and the Python services. D
 | `SAFETY_GATE_PORT` | Optional override for the Uvicorn port inside the safety gate container. | `8081` |
 | `SCRIBE_PORT` | Optional override for the Uvicorn port inside the scribe container. | `8082` |
 | `OTEL_ENABLED` | See table above—repeat here for clarity when injecting into container env. | `0` |
+| `FEATURE_LOG_ENDPOINT` | HTTP endpoint that accepts feature log payloads (used by safety gate). | `http://orchestrator:3001/feature-log` |
 
 Vault path: not required; values are non-secret but should be stored in environment management (ConfigMap/Parameter Store).
 

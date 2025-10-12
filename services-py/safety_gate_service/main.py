@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
-import re
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from uuid import uuid4
+from urllib import error as urllib_error, request as urllib_request
 
 from fastapi import FastAPI, HTTPException, Request
 from common.contracts.models import PortalSubmission, SafetyDecision
@@ -28,6 +31,94 @@ _NER_LOCK = Lock()
 _ACUITY_LOCK = Lock()
 _DECISION_CONFIG: Optional[dict[str, Any]] = None
 _DECISION_CONFIG_LOCK = Lock()
+_FEATURE_LOG_ENDPOINT_ENV = "FEATURE_LOG_ENDPOINT"
+_FEATURE_LOG_TIMEOUT = 0.5
+
+
+def _feature_logging_enabled() -> bool:
+    value = os.getenv("FEATURE_LOGGING", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _feature_log_endpoint() -> Optional[str]:
+    candidate = os.getenv(_FEATURE_LOG_ENDPOINT_ENV, "http://orchestrator:3001/feature-log")
+    trimmed = candidate.strip()
+    return trimmed or None
+
+
+def _emit_feature_log(payload: dict[str, Any]) -> None:
+    if not _feature_logging_enabled():
+        return
+
+    endpoint = _feature_log_endpoint()
+    if not endpoint:
+        return
+
+    try:
+        data = json.dumps(payload, default=str).encode("utf-8")
+    except (TypeError, ValueError) as exc:  # pragma: no cover - serialization guard
+        LOGGER.debug("Failed to serialize feature payload: %s", exc)
+        return
+
+    request_obj = urllib_request.Request(
+        endpoint,
+        data=data,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib_request.urlopen(request_obj, timeout=_FEATURE_LOG_TIMEOUT)
+    except urllib_error.URLError as exc:
+        LOGGER.debug("Feature logging request failed: %s", getattr(exc, "reason", exc))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.debug("Feature logging request errored: %s", exc)
+
+
+def _log_safety_features(
+    *,
+    submission: PortalSubmission,
+    correlation_id: Optional[str],
+    classification: Mapping[str, Any],
+    nlp_payload: Mapping[str, Any],
+    decision_result,
+    lexical_hits: list[str],
+) -> None:
+    feature_packet: dict[str, Any] = {
+        "classifier": {
+            "probEmergency": classification.get("prob_emergency"),
+            "threshold": classification.get("threshold"),
+            "modelVersion": classification.get("model_version"),
+            "isEmergency": classification.get("is_emergency"),
+        },
+        "nlp": {
+            "symptomMentions": nlp_payload.get("symptom_mentions", []),
+            "redFlagHits": lexical_hits,
+            "severity": nlp_payload.get("severity", []),
+            "temporal": nlp_payload.get("temporal", []),
+        },
+        "decision": {
+            "outcome": decision_result.outcome,
+            "reason": decision_result.rationale.get("reason"),
+            "signals": decision_result.rationale.get("signals"),
+        },
+    }
+
+    analysis_id = str(uuid4())
+    payload = {
+        "source": "safety",
+        "entityId": submission.patient.id,
+        "patientId": submission.patient.id,
+        "correlationId": correlation_id,
+        "features": feature_packet,
+        "metadata": {
+            "practiceId": submission.practiceId,
+            "channel": submission.channel,
+            "analysisId": analysis_id,
+            "recordedAt": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+    _emit_feature_log(payload)
 
 
 def get_classifier(force_reload: bool = False) -> EmergencyClassifier:
@@ -104,6 +195,8 @@ def _load_decision_config() -> dict[str, Any]:
         "red_flag_set": list(DEFAULT_RED_FLAG_SET),
         "emergency_confidence": 0.72,
         "acuity_threshold_emergency": 0.75,
+        "timeout_ms": 800,
+        "fallback": "rules",
     }
 
     root = Path(__file__).resolve().parents[2]
@@ -138,7 +231,13 @@ def _load_decision_config() -> dict[str, Any]:
 
     safety_gate_cfg = parsed.get("safety_gate")
     if isinstance(safety_gate_cfg, dict):
-        for key in ("red_flag_threshold", "emergency_confidence", "acuity_threshold_emergency"):
+        for key in (
+            "red_flag_threshold",
+            "emergency_confidence",
+            "acuity_threshold_emergency",
+            "timeout_ms",
+            "fallback",
+        ):
             if key in safety_gate_cfg:
                 base_config[key] = safety_gate_cfg[key]
 
@@ -201,79 +300,43 @@ def ready() -> dict[str, str]:
 
 
 @app.post("/analyze", response_model=SafetyDecision)
-def analyze(submission: PortalSubmission) -> SafetyDecision:
+async def analyze(request: Request, submission: PortalSubmission) -> SafetyDecision:
     narrative_raw = submission.narrative or ""
     classifier = getattr(app.state, "classifier", None) or get_classifier()
     ner = getattr(app.state, "ner", None) or get_ner()
     acuity_model = getattr(app.state, "acuity_model", None) or get_acuity_model()
     decision_config = getattr(app.state, "decision_config", None) or get_decision_config()
 
-    nlp_analysis = ner.analyze(narrative_raw)
-    symptom_mentions = _resolve_symptom_mentions(nlp_analysis)
-    lexical_hits = _derive_lexical_hits(narrative_raw, decision_config)
-    nlp_payload = {
-        "symptom_mentions": symptom_mentions,
-        "red_flag_hits": lexical_hits,
-        "severity": nlp_analysis.get("severity", []),
-        "temporal": nlp_analysis.get("temporal", []),
-    }
+    correlation_id = (
+        request.headers.get("x-correlation-id")
+        or request.headers.get("x-request-id")
+        or str(uuid4())
+    )
 
-    try:
-        classification = classifier.classify(narrative_raw)
-    except Exception as exc:  # pragma: no cover - runtime fallback
-        LOGGER.exception("Emergency classifier failed, defaulting to SAFE_TO_CONTINUE: %s", exc)
-        return SafetyDecision(outcome="SAFE_TO_CONTINUE")
-
-    acuity_estimate = acuity_model.predict(
+    outcome: AnalysisOutcome = await analyze_submission(
         narrative=narrative_raw,
-        nlp_results=nlp_payload,
-        classifier_result=classification,
-    )
-    patient_payload: dict[str, Any] = {"acuity": acuity_estimate}
-
-    decision_result: DecisionResult = decide(
-        nlp_results=nlp_payload,
-        classifier_result=classification,
-        patient=patient_payload,
+        classifier=classifier,
+        ner=ner,
+        acuity_model=acuity_model,
         config=decision_config,
+        correlation_id=correlation_id,
     )
 
-    return SafetyDecision(outcome=decision_result.outcome, reason=decision_result.rationale.get("reason"))
+    if _feature_logging_enabled():
+        artifacts = outcome.artifacts or {}
+        classification = artifacts.get("classification", {}) if isinstance(artifacts.get("classification"), Mapping) else {}
+        nlp_payload = artifacts.get("nlp", {}) if isinstance(artifacts.get("nlp"), Mapping) else {}
+        red_flags = artifacts.get("red_flag_hits", [])
+        if not isinstance(red_flags, list):
+            red_flags = []
+        _log_safety_features(
+            submission=submission,
+            correlation_id=correlation_id,
+            classification=classification,
+            nlp_payload=nlp_payload,
+            decision_result=outcome.decision,
+            lexical_hits=red_flags,
+        )
 
+    return SafetyDecision(outcome=outcome.decision.outcome, reason=outcome.decision.rationale.get("reason"))
 
-def _derive_lexical_hits(narrative: str, config: dict[str, Any]) -> list[str]:
-    narrative_lower = narrative.lower()
-    hits: list[str] = []
-    for item in config.get("red_flag_set", DEFAULT_RED_FLAG_SET):
-        if not isinstance(item, str):
-            continue
-        normalized = item.lower()
-        if not normalized:
-            continue
-        pattern = re.compile(rf"\b{re.escape(normalized)}\b", re.IGNORECASE)
-        if pattern.search(narrative):
-            hits.append(normalized)
-    return hits
-
-
-def _resolve_symptom_mentions(nlp_analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
-    mentions: list[dict[str, Any]] = []
-    raw_mentions = nlp_analysis.get("symptom_mentions")
-    if isinstance(raw_mentions, list):
-        for item in raw_mentions:
-            if isinstance(item, Mapping):
-                name = item.get("name") or item.get("text")
-                if isinstance(name, str):
-                    confidence = item.get("confidence")
-                    mentions.append(
-                        {
-                            "name": name,
-                            "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
-                            "source": item.get("source") or "ner",
-                        }
-                    )
-    if not mentions:
-        for name in nlp_analysis.get("symptoms", []):
-            if isinstance(name, str):
-                mentions.append({"name": name, "confidence": None, "source": "ner"})
-    return mentions

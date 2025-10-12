@@ -86,3 +86,5 @@ export class InMemoryFeatureStore implements FeatureStore {
 }
 
 export default InMemoryFeatureStore;
+
+export * from './drift';

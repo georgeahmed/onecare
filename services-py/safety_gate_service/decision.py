@@ -52,7 +52,7 @@ def _extract_threshold(config: Mapping[str, Any], key: str) -> float:
     return DEFAULT_THRESHOLDS[key]
 
 
-@dataclass(slots=True)
+@dataclass
 class DecisionResult:
     outcome: str  # "DIVERTED" | "SAFE_TO_CONTINUE"
     rationale: dict[str, Any]

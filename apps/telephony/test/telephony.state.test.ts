@@ -171,16 +171,24 @@ describe('Telephony state machine', () => {
         intent: 'telephony.callback',
         confidence: 0.42,
       });
+      expect(ctx.intentRouteTarget).toBe('triage');
+      expect(ctx.intentRouteReason).toBe('triage_pipeline');
+      expect(ctx.triageInput?.patientId).toBe('patient-X');
+      expect(ctx.triageInput?.features?.intent).toBe('telephony.callback');
       expect(ctx.intentClassifiedEnvelope?.payload.intent).toBe('telephony.callback');
       expect(ctx.intentClassifiedPublishedAt).toBeDefined();
+      expect(ctx.triageInputEnvelope?.payload.patientId).toBe('patient-X');
+      expect(ctx.triageInputPublishedAt).toBeDefined();
       expect(ctx.intentRoutingDecision).toBe('auto');
-      expect(publishSpy).toHaveBeenLastCalledWith(
+      expect(publishSpy).toHaveBeenCalledWith(
         Topics.telephony.intentClassified,
         expect.objectContaining({
           payload: expect.objectContaining({ callId: 'call-003', intent: 'telephony.callback' }),
         }) as TypedEnvelope<IntentClassified>,
         { 'x-correlation-id': 'corr-789' },
       );
+      const publishTopics = publishSpy.mock.calls.map((call) => call[0]);
+      expect(publishTopics).toContain(Topics.triage.input);
     });
 
     it('throws when intent classifier is missing', async () => {
@@ -270,6 +278,8 @@ describe('Telephony state machine', () => {
 
       expect(nextState).toBe('EmergencyTransfer');
       expect(ctx.intentRoutingDecision).toBe('emergency');
+      expect(ctx.intentRouteTarget).toBe('emergency');
+      expect(ctx.intentRouteReason).toBe('emergency_transfer');
       expect(ctx.intentClassified?.intent).toBe('telephony.manual_review');
       expect(ctx.intentClassified?.confidence).toBeCloseTo(0.2);
       expect(ctx.intentConfidenceThreshold).toBeCloseTo(0.8);
@@ -314,7 +324,42 @@ describe('Telephony state machine', () => {
 
       expect(nextState).toBe('Routed');
       expect(ctx.emergencyTransferTriggered).toBe(false);
+      expect(ctx.intentRouteTarget).toBe('triage');
+      expect(ctx.intentRouteReason).toBe('triage_pipeline');
+      expect(ctx.triageInput).toBeUndefined();
       expect(ctx.intentRoutingDecision).toBe('fallback');
+    });
+
+    it('maps billing intent to admin routing without triage input', async () => {
+      classifySpy.mockResolvedValueOnce({
+        intent: 'telephony.billing',
+        confidence: 0.65,
+      });
+
+      const transcribe = vi.fn(async () => ({ text: 'Question about a bill' }));
+
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-009',
+        callId: 'call-009',
+        audioRef: 'memory://call-009',
+        correlationId: 'corr-billing',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        intentClassifier: { classify: classifySpy },
+        intentConfidenceThreshold: 0.5,
+      } as TelephonyContext);
+
+      const transcribedState = new TranscribedState();
+      await transcribedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const intentState = new IntentClassifiedState();
+      const nextState = await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      expect(nextState).toBe('Routed');
+      expect(ctx.intentRouteTarget).toBe('billing');
+      expect(ctx.intentRouteReason).toBe('billing_support');
+      expect(ctx.triageInput).toBeUndefined();
     });
   });
 
@@ -330,6 +375,12 @@ describe('Telephony state machine', () => {
         },
         correlationId: 'corr-route',
         intentRoutingDecision: 'auto',
+        intentRouteTarget: 'triage',
+        triageInput: {
+          patientId: 'patient-010',
+          narrative: 'telephony narrative',
+          features: { intent: 'telephony.callback' },
+        },
       };
 
       const next = await state.handle(ctx, { type: 'telephony.call.routed' });

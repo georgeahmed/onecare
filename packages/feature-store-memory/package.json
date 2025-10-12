@@ -9,6 +9,6 @@
     "test": "vitest run --dir test"
   },
   "dependencies": {
-    "@onecare/ports": "workspace:*"
+    "@onecare/ports": "0.1.0"
   }
 }

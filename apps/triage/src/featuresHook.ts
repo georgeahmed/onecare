@@ -24,8 +24,8 @@ export function featureLoggingEnabled(): boolean {
 }
 
 function buildFeatureKey({ source, entityId, correlationId }: FeatureLogInput): string {
-  const safeSource = source || 'unknown';
-  const parts = [safeSource];
+  const safeSource: string = source || 'unknown';
+  const parts: string[] = [safeSource];
   if (entityId) parts.push(entityId);
   if (correlationId) {
     parts.push(correlationId);

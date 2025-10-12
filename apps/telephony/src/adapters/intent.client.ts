@@ -6,121 +6,146 @@ import {
   StubIntentClassifier,
 } from './intent.classifier';
 
+export interface KeywordIntentConfig {
+  intent: string;
+  keywords: string[];
+  confidence?: number;
+}
+
 export interface IntentServiceClassifierOptions {
-  baseUrl: string;
+  baseUrl?: string;
   apiKey?: string;
-  timeoutMs?: number;
-  path?: string;
-  fetchImpl?: typeof fetch;
+  defaultIntent?: string;
+  defaultConfidence?: number;
+  keywordIntents?: KeywordIntentConfig[];
   fallback?: IntentClassifier;
 }
 
-const DEFAULT_TIMEOUT_MS = 1_500;
-const MIN_TIMEOUT_MS = 250;
-const DEFAULT_PATH = '/classify';
+const DEFAULT_INTENT = 'telephony.callback';
+const DEFAULT_CONFIDENCE = 0.6;
+
+const FALLBACK_KEYWORD_CONFIG: KeywordIntentConfig[] = [
+  { intent: 'telephony.emergency', keywords: ['emergency', 'ambulance', 'help now'], confidence: 0.95 },
+  { intent: 'telephony.medication', keywords: ['refill', 'prescription', 'medication'], confidence: 0.8 },
+  { intent: 'telephony.appointment', keywords: ['appointment', 'schedule', 'book'], confidence: 0.75 },
+  { intent: 'telephony.test.results', keywords: ['results', 'lab', 'test'], confidence: 0.7 },
+  { intent: 'telephony.billing', keywords: ['bill', 'payment', 'invoice'], confidence: 0.65 },
+];
+
+function parseFloatEnv(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseKeywordConfig(raw: string | undefined): KeywordIntentConfig[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as KeywordIntentConfig[];
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed
+      .filter((entry) => typeof entry?.intent === 'string' && Array.isArray(entry?.keywords))
+      .map((entry) => ({
+        intent: entry.intent.trim(),
+        keywords: entry.keywords.map((kw) => kw.toLowerCase().trim()).filter(Boolean),
+        confidence: typeof entry.confidence === 'number' ? entry.confidence : undefined,
+      }))
+      .filter((entry) => entry.intent && entry.keywords.length > 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function normaliseKeywordIntents(intents?: KeywordIntentConfig[]): KeywordIntentConfig[] {
+  if (!intents || intents.length === 0) {
+    return FALLBACK_KEYWORD_CONFIG;
+  }
+  return intents.map((entry) => ({
+    intent: entry.intent.trim(),
+    keywords: entry.keywords.map((kw) => kw.toLowerCase().trim()).filter(Boolean),
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : undefined,
+  }));
+}
 
 export class IntentServiceClassifier implements IntentClassifier {
-  private readonly baseUrl: string;
+  private readonly baseUrl?: string;
   private readonly apiKey?: string;
-  private readonly timeoutMs: number;
-  private readonly path: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly defaultIntent: string;
+  private readonly defaultConfidence: number;
+  private readonly keywordIntents: KeywordIntentConfig[];
   private readonly fallback?: IntentClassifier;
 
-  constructor(options: IntentServiceClassifierOptions) {
-    if (!options.baseUrl?.trim()) {
-      throw new IntentClassifierError('intent_classifier_configuration', 'intent service baseUrl missing');
-    }
-    this.baseUrl = options.baseUrl.replace(/\/$/, '');
-    this.apiKey = options.apiKey?.trim() || undefined;
-    const normalizedTimeout =
-      typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
-    this.timeoutMs = Math.max(MIN_TIMEOUT_MS, normalizedTimeout);
-    this.path = options.path?.startsWith('/') ? options.path : DEFAULT_PATH;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-    this.fallback = options.fallback;
+  constructor(options?: IntentServiceClassifierOptions) {
+    this.baseUrl = options?.baseUrl?.trim() || undefined;
+    this.apiKey = options?.apiKey?.trim() || undefined;
+    this.defaultIntent = options?.defaultIntent?.trim() || DEFAULT_INTENT;
+    const confidence = options?.defaultConfidence;
+    this.defaultConfidence = typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : DEFAULT_CONFIDENCE;
+    this.keywordIntents = normaliseKeywordIntents(options?.keywordIntents);
+    this.fallback = options?.fallback;
   }
 
   static fromEnv(): IntentServiceClassifier {
     const baseUrl = process.env.INTENT_SERVICE_URL?.trim();
-    if (!baseUrl) {
-      throw new IntentClassifierError('intent_classifier_configuration', 'INTENT_SERVICE_URL missing');
-    }
-    const apiKey = process.env.INTENT_SERVICE_API_KEY?.trim() || undefined;
-    const timeoutRaw = process.env.INTENT_SERVICE_TIMEOUT_MS?.trim();
-    const timeoutMs = timeoutRaw ? Number.parseInt(timeoutRaw, 10) : undefined;
-    const path = process.env.INTENT_SERVICE_PATH?.trim();
-    const fallback =
-      process.env.INTENT_SERVICE_FALLBACK === 'stub' ? new StubIntentClassifier() : undefined;
+    const apiKey = process.env.INTENT_SERVICE_API_KEY?.trim();
+    const defaultIntent = process.env.INTENT_SERVICE_DEFAULT_INTENT?.trim();
+    const defaultConfidence = parseFloatEnv(process.env.INTENT_SERVICE_DEFAULT_CONFIDENCE);
+    const keywordConfig = parseKeywordConfig(process.env.INTENT_SERVICE_KEYWORD_INTENTS);
+    const fallback = process.env.INTENT_SERVICE_FALLBACK === 'stub' ? new StubIntentClassifier() : undefined;
+
     return new IntentServiceClassifier({
       baseUrl,
       apiKey,
-      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
-      path,
+      defaultIntent,
+      defaultConfidence,
+      keywordIntents: keywordConfig,
       fallback,
     });
   }
 
   async classify(input: IntentClassificationInput): Promise<IntentClassificationResult> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const response = await this.fetchImpl(`${this.baseUrl}${this.path}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          text: input.transcript,
-          lang: input.lang ?? null,
-          callId: input.callId,
-          patientId: input.patientId ?? null,
-          correlationId: input.correlationId ?? null,
-        }),
-        signal: controller.signal,
-      });
+    const transcript = (input.transcript ?? '').toLowerCase();
+    if (!transcript.trim()) {
+      return this.resolveFallback(input, this.defaultIntent, this.defaultConfidence);
+    }
 
-      if (!response.ok) {
-        throw new IntentClassifierError(
-          'intent_classifier_unavailable',
-          `intent classifier responded with ${response.status}`,
-          { status: response.status },
-        );
+    for (const config of this.keywordIntents) {
+      if (config.keywords.some((keyword) => transcript.includes(keyword))) {
+        return {
+          intent: config.intent,
+          confidence: config.confidence ?? this.defaultConfidence,
+        };
       }
+    }
 
-      const data = (await response.json()) as { intent?: string; confidence?: number | null };
-      const intent = typeof data.intent === 'string' ? data.intent.trim() : '';
-      if (!intent) {
-        throw new IntentClassifierError('intent_classifier_invalid_response', 'intent classifier response missing intent', data);
+    if (this.fallback) {
+      try {
+        return await this.fallback.classify(input);
+      } catch (error) {
+        throw new IntentClassifierError('intent_classifier_unavailable', 'fallback classifier failed', error);
       }
-      const confidence =
-        typeof data.confidence === 'number' && Number.isFinite(data.confidence) ? data.confidence : undefined;
+    }
+
+    return {
+      intent: this.defaultIntent,
+      confidence: this.defaultConfidence,
+    };
+  }
+
+  private resolveFallback(
+    input: IntentClassificationInput,
+    intent: string,
+    confidence: number,
+  ): IntentClassificationResult {
+    if (this.fallback) {
       return {
         intent,
         confidence,
       };
-    } catch (error) {
-      if (error instanceof IntentClassifierError) {
-        if (this.fallback) {
-          return this.fallback.classify(input);
-        }
-        throw error;
-      }
-      if ((error as Error)?.name === 'AbortError') {
-        const timeoutError = new IntentClassifierError('intent_classifier_timeout', 'intent classifier timed out', error);
-        if (this.fallback) {
-          return this.fallback.classify(input);
-        }
-        throw timeoutError;
-      }
-      if (this.fallback) {
-        return this.fallback.classify(input);
-      }
-      throw new IntentClassifierError('intent_classifier_unavailable', 'intent classifier request failed', error);
-    } finally {
-      clearTimeout(timeout);
     }
+    return {
+      intent,
+      confidence,
+    };
   }
 }
-

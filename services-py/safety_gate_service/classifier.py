@@ -66,7 +66,7 @@ class PlattScaling:
         return _clamp_probability(adjusted)
 
 
-@dataclass(slots=True)
+@dataclass
 class ModelThreshold:
     default: Optional[float] = None
     variants: MutableMapping[str, float] = field(default_factory=dict)

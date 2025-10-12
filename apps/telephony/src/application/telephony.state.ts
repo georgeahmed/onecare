@@ -1,6 +1,7 @@
 import { BaseState } from '@onecare/statekit';
 import { logger } from '@onecare/observability';
 import { Topics, createEnvelope } from '@onecare/events';
+import type { TriageInput } from '@onecare/events';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
 import type {
@@ -8,6 +9,7 @@ import type {
   TelephonyEvent,
   IntentClassificationInput,
   IntentRoutingDecision,
+  IntentRouteTarget,
 } from './types';
 
 function sanitizePatientId(raw: string | null | undefined): string | null | undefined {
@@ -70,6 +72,84 @@ function ensureEmergencyTransferEnabled(ctx: TelephonyContext): boolean {
   const resolved = configDefault !== undefined ? configDefault : true;
   ctx.emergencyTransferEnabled = resolved;
   return resolved;
+}
+
+interface IntentRouteResult {
+  target: IntentRouteTarget;
+  reason: string;
+  triageInput?: TriageInput;
+}
+
+const INTENT_ROUTE_TABLE: Record<string, IntentRouteTarget> = {
+  'telephony.emergency': 'emergency',
+  'telephony.medication': 'pharmacy',
+  'telephony.billing': 'billing',
+  'telephony.appointment': 'admin',
+  'telephony.test.results': 'admin',
+};
+
+function buildTriageNarrative(intent: string, transcript: string): string {
+  const summaryIntent = intent.replace(/^telephony\./, '').replace(/_/g, ' ');
+  const trimmed = transcript.trim();
+  if (trimmed) return trimmed;
+  return `Caller reported intent: ${summaryIntent}`;
+}
+
+function buildTriageInput(
+  intent: string,
+  transcript: string,
+  patientId: string | null | undefined,
+  confidence?: number,
+): TriageInput | undefined {
+  if (!patientId) return undefined;
+  const narrative = buildTriageNarrative(intent, transcript);
+  const features: Record<string, string | number | boolean | null> = {
+    channel: 'telephony',
+    intent,
+  };
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    features.confidence = Number.parseFloat(confidence.toFixed(3));
+  }
+  return {
+    patientId,
+    narrative,
+    features,
+  };
+}
+
+function mapIntentToRoute(
+  intent: string,
+  transcript: string,
+  patientId: string | null | undefined,
+  confidence?: number,
+): IntentRouteResult {
+  const normalizedIntent = intent || 'telephony.callback';
+  const target = INTENT_ROUTE_TABLE[normalizedIntent] ?? 'triage';
+  if (target === 'triage') {
+    const triageInput = buildTriageInput(normalizedIntent, transcript, patientId, confidence);
+    return {
+      target,
+      reason: 'triage_pipeline',
+      triageInput,
+    };
+  }
+  if (target === 'emergency') {
+    return {
+      target,
+      reason: 'emergency_transfer',
+    };
+  }
+  const reasonMap: Record<IntentRouteTarget, string> = {
+    admin: 'admin_routing',
+    pharmacy: 'pharmacy_routing',
+    billing: 'billing_support',
+    triage: 'triage_pipeline',
+    emergency: 'emergency_transfer',
+  };
+  return {
+    target,
+    reason: reasonMap[target] ?? 'routing',
+  };
 }
 
 function buildIntentClassificationInput(
@@ -226,6 +306,17 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
 
     const payload = buildIntentClassifiedEvent(input, result);
     ctx.intentClassified = payload;
+    const transcriptText = ctx.transcription?.text ?? '';
+    const route = mapIntentToRoute(payload.intent, transcriptText, ctx.patientId, payload.confidence ?? undefined);
+    ctx.intentRouteTarget = route.target;
+    ctx.intentRouteReason = route.reason;
+    ctx.triageInput = route.triageInput;
+    if (route.target === 'triage' && !route.triageInput) {
+      logger.warn('telephony.intent.triage_input_missing_patient', {
+        callId: input.callId,
+        correlationId: ctx.correlationId,
+      });
+    }
     const threshold = ensureIntentConfidenceThreshold(ctx);
 
     const confidence =
@@ -248,6 +339,8 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
     }
     if (shouldTransfer) {
       ctx.intentRoutingDecision = 'emergency';
+      ctx.intentRouteTarget = 'emergency';
+      ctx.intentRouteReason = 'emergency_transfer';
       logger.error('telephony.emergency_transfer.queued', {
         callId: input.callId,
         intent: payload.intent,
@@ -255,6 +348,14 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
         correlationId: ctx.correlationId,
       });
     }
+    logger.info('telephony.intent.route', {
+      callId: input.callId,
+      intent: payload.intent,
+      target: ctx.intentRouteTarget,
+      reason: ctx.intentRouteReason,
+      triageInput: Boolean(ctx.triageInput),
+      correlationId: ctx.correlationId,
+    });
 
     const envelope = createEnvelope(Topics.telephony.intentClassified, payload, ctx.correlationId);
     ctx.intentClassifiedEnvelope = envelope;
@@ -281,6 +382,28 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
       confidence: payload.confidence,
       correlationId: ctx.correlationId,
     });
+
+    if (ctx.intentRouteTarget === 'triage' && ctx.triageInput) {
+      const triageEnvelope = createEnvelope(Topics.triage.input, ctx.triageInput, ctx.correlationId);
+      try {
+        await bus.publish(Topics.triage.input, triageEnvelope, headers);
+        ctx.triageInputEnvelope = triageEnvelope;
+        ctx.triageInputPublishedAt = nowFn();
+        logger.info('telephony.triage_input.published', {
+          callId: input.callId,
+          patientId: ctx.triageInput.patientId,
+          correlationId: ctx.correlationId,
+        });
+      } catch (error) {
+        logger.error('telephony.triage_input.publish_failed', {
+          callId: input.callId,
+          patientId: ctx.triageInput.patientId,
+          correlationId: ctx.correlationId,
+          reason: (error as Error).message,
+        });
+        throw new Error('triage_input_publish_failed');
+      }
+    }
 
     if (ctx.emergencyTransferTriggered && ctx.emergencyTransferEnabled) {
       return 'EmergencyTransfer';
@@ -330,9 +453,16 @@ export class RoutedState extends BaseState<TelephonyContext, TelephonyEvent> {
       intent: ctx.intentClassified.intent,
       correlationId: ctx.correlationId,
       decision,
+      target: ctx.intentRouteTarget ?? 'unknown',
     });
     if (decision === 'emergency') {
       logger.error('telephony.routing.emergency_transfer', {
+        callId: ctx.intentClassified.callId,
+        intent: ctx.intentClassified.intent,
+        correlationId: ctx.correlationId,
+      });
+    } else if (ctx.intentRouteTarget === 'triage' && ctx.triageInput) {
+      logger.info('telephony.routing.triage_ready', {
         callId: ctx.intentClassified.callId,
         intent: ctx.intentClassified.intent,
         correlationId: ctx.correlationId,
@@ -350,6 +480,7 @@ export class RoutedState extends BaseState<TelephonyContext, TelephonyEvent> {
         intent: ctx.intentClassified.intent,
         confidence: ctx.intentClassified.confidence,
         threshold: ctx.intentConfidenceThreshold,
+        target: ctx.intentRouteTarget ?? 'unknown',
         correlationId: ctx.correlationId,
       });
     }

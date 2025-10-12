@@ -5,7 +5,7 @@ import os
 import math
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Optional
 
 import anyio
@@ -16,10 +16,11 @@ from .decision import DEFAULT_RED_FLAG_SET, DecisionResult, decide
 LOGGER = logging.getLogger("safety_gate_service.analyzer")
 
 
-@dataclass(slots=True)
+@dataclass
 class AnalysisOutcome:
     decision: DecisionResult
     fallback: bool
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
 
 class FallbackMetrics:
@@ -58,30 +59,39 @@ async def analyze_submission(
     LOGGER.info("safety_gate.analysis.start correlation_id=%s timeout_ms=%s", correlation_id, timeout_ms)
 
     try:
-        decision = await anyio.fail_after(timeout_ms / 1000.0, _run_pipeline(narrative, classifier, ner, acuity_model, config))
+        with anyio.fail_after(timeout_ms / 1000.0):
+            decision, artifacts = await _run_pipeline(narrative, classifier, ner, acuity_model, config)
         LOGGER.info(
             "safety_gate.analysis.success correlation_id=%s outcome=%s reason=%s",
             correlation_id,
             decision.outcome,
             decision.rationale.get("reason"),
         )
-        return AnalysisOutcome(decision=decision, fallback=False)
+        return AnalysisOutcome(decision=decision, fallback=False, artifacts=artifacts)
     except TimeoutError:
         LOGGER.warning("safety_gate.analysis.timeout correlation_id=%s mode=%s", correlation_id, fallback_mode)
         key = f"timeout_{fallback_mode or 'none'}"
         fallback_metrics.increment(key, correlation_id)
+        artifacts = {"trigger": "timeout", "mode": fallback_mode or "none", "red_flag_hits": []}
         if fallback_mode == "rules":
-            decision = _rules_fallback(narrative, config)
+            decision, fallback_artifacts = _rules_fallback(narrative, config)
             decision.rationale.setdefault("signals", {})["trigger"] = "timeout"
-            return AnalysisOutcome(decision=decision, fallback=True)
+            artifacts.update(fallback_artifacts)
+            return AnalysisOutcome(decision=decision, fallback=True, artifacts=artifacts)
         safe_decision = DecisionResult(
             outcome="SAFE_TO_CONTINUE",
             rationale={"reason": "fallback:timeout", "signals": {"trigger": "timeout", "mode": fallback_mode or "none"}},
         )
-        return AnalysisOutcome(decision=safe_decision, fallback=True)
+        return AnalysisOutcome(decision=safe_decision, fallback=True, artifacts=artifacts)
 
 
-async def _run_pipeline(narrative: str, classifier, ner, acuity_model, config: Mapping[str, Any]) -> DecisionResult:
+async def _run_pipeline(
+    narrative: str,
+    classifier,
+    ner,
+    acuity_model,
+    config: Mapping[str, Any],
+) -> tuple[DecisionResult, dict[str, Any]]:
     nlp_analysis = await to_thread.run_sync(ner.analyze, narrative)
     symptom_mentions = _resolve_symptom_mentions(nlp_analysis)
     lexical_hits = _derive_lexical_hits(narrative, config)
@@ -93,39 +103,44 @@ async def _run_pipeline(narrative: str, classifier, ner, acuity_model, config: M
     }
     classification = await to_thread.run_sync(classifier.classify, narrative)
     acuity_estimate = await to_thread.run_sync(
-        acuity_model.predict,
-        narrative=narrative,
-        nlp_results=nlp_payload,
-        classifier_result=classification,
+        lambda: acuity_model.predict(
+            narrative=narrative,
+            nlp_results=nlp_payload,
+            classifier_result=classification,
+        )
     )
     patient_payload = {"acuity": acuity_estimate}
-    return decide(
+    decision = decide(
         nlp_results=nlp_payload,
         classifier_result=classification,
         patient=patient_payload,
         config=config,
     )
+    artifacts = {
+        "nlp": nlp_payload,
+        "classification": classification,
+        "acuity": acuity_estimate,
+        "red_flag_hits": lexical_hits,
+    }
+    return decision, artifacts
 
 
-def _rules_fallback(narrative: str, config: Mapping[str, Any]) -> DecisionResult:
+def _rules_fallback(narrative: str, config: Mapping[str, Any]) -> tuple[DecisionResult, dict[str, Any]]:
     hits = _derive_lexical_hits(narrative, config)
     if hits:
         rationale = {
             "reason": "fallback:red_flag",
             "signals": {"red_flag": hits[0]},
         }
-        return DecisionResult(outcome="DIVERTED", rationale=rationale)
+        return DecisionResult(outcome="DIVERTED", rationale=rationale), {"red_flag_hits": hits}
     rationale = {
         "reason": "fallback:safe",
         "signals": {"red_flags": []},
     }
-    return DecisionResult(outcome="SAFE_TO_CONTINUE", rationale=rationale)
+    return DecisionResult(outcome="SAFE_TO_CONTINUE", rationale=rationale), {"red_flag_hits": []}
 
 
 def _extract_timeout(config: Mapping[str, Any]) -> float:
-    raw = config.get("timeout_ms")
-    if isinstance(raw, (int, float)) and math.isfinite(raw) and raw > 0:
-        return float(raw)
     env_override = os.getenv("SAFETY_GATE_TIMEOUT_MS")
     if env_override:
         try:
@@ -134,6 +149,10 @@ def _extract_timeout(config: Mapping[str, Any]) -> float:
                 return value
         except ValueError:
             pass
+
+    raw = config.get("timeout_ms")
+    if isinstance(raw, (int, float)) and math.isfinite(raw) and raw > 0:
+        return float(raw)
     return 800.0
 
 
