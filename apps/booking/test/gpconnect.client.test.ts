@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { GpConnectClient, mapSlotsToView } from '../src/adapters/gpconnect.client';
+import {
+  GpConnectClient,
+  mapSlotsToView,
+  AppointmentRequest,
+} from '../src/adapters/gpconnect.client';
 
 const envBackup = { ...process.env };
 
@@ -39,6 +43,69 @@ describe('GpConnectClient', () => {
     });
     expect(confirmation.appointmentId).toBe('appt-slot-1');
     expect(confirmation.slotId).toBe('slot-1');
+  });
+  it('retries once on conflict before succeeding', async () => {
+    let attempts = 0;
+    const executor = vi.fn(async (request: AppointmentRequest) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = new Error('conflict');
+        (error as { status: number }).status = 409;
+        throw error;
+      }
+      return {
+        appointmentId: `appt-${request.slotId}`,
+        slotId: request.slotId,
+        start: '2025-10-12T10:00:00Z',
+        end: '2025-10-12T10:10:00Z',
+      };
+    });
+
+    const client = new GpConnectClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+      appointmentExecutor: executor,
+    });
+
+    const confirmation = await client.createAppointment({ slotId: 'slot-1', patientId: 'patient-1', reason: 'x' });
+
+    expect(confirmation.appointmentId).toBe('appt-slot-1');
+    expect(executor).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws mapped conflict error after retries', async () => {
+    const executor = vi.fn(async () => {
+      const error = new Error('conflict');
+      (error as { status: number }).status = 409;
+      throw error;
+    });
+
+    const client = new GpConnectClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+      appointmentExecutor: executor,
+    });
+
+    await expect(
+      client.createAppointment({ slotId: 'slot-1', patientId: 'p', reason: 'x' }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(executor).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps other errors to unknown', async () => {
+    const executor = vi.fn(async () => {
+      throw new Error('boom');
+    });
+
+    const client = new GpConnectClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+      appointmentExecutor: executor,
+    });
+
+    await expect(
+      client.createAppointment({ slotId: 'slot-1', patientId: 'p', reason: 'x' }),
+    ).rejects.toMatchObject({ code: 'unknown' });
   });
 });
 

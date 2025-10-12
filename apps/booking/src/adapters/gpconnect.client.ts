@@ -4,6 +4,7 @@ export interface GpConnectClientOptions {
   baseUrl: string;
   apiKey: string;
   timeoutMs?: number;
+  appointmentExecutor?: AppointmentExecutor;
 }
 
 export interface SearchSlotsParams {
@@ -43,15 +44,28 @@ export interface SlotView {
   serviceType?: string;
 }
 
+export type AppointmentExecutor = (request: AppointmentRequest) => Promise<AppointmentConfirmation>;
+
+export type GpConnectErrorCode = 'conflict' | 'unavailable' | 'unknown';
+
+export class GpConnectClientError extends Error {
+  constructor(public readonly code: GpConnectErrorCode, message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = 'GpConnectClientError';
+  }
+}
+
 export class GpConnectClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
+  private readonly appointmentExecutor?: AppointmentExecutor;
 
   constructor(options: GpConnectClientOptions) {
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 5_000;
+    this.appointmentExecutor = options.appointmentExecutor;
   }
 
   static fromEnv(): GpConnectClient {
@@ -81,13 +95,27 @@ export class GpConnectClient {
   }
 
   async createAppointment(request: AppointmentRequest): Promise<AppointmentConfirmation> {
-    await delay(5);
-    return {
-      appointmentId: `appt-${request.slotId}`,
-      slotId: request.slotId,
-      start: new Date().toISOString(),
-      end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
-    };
+    const executor = this.appointmentExecutor ?? defaultAppointmentExecutor;
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (attempt < 2) {
+      try {
+        return await executor(request);
+      } catch (error) {
+        lastError = error;
+        const conflict = isConflictError(error);
+        if (conflict && attempt === 0) {
+          const backoffMs = Math.min(200, Math.max(50, this.timeoutMs * 0.05));
+          await delay(backoffMs + Math.random() * 25);
+          attempt += 1;
+          continue;
+        }
+        throw mapToClientError(error);
+      }
+    }
+
+    throw mapToClientError(lastError);
   }
 
   getBaseUrl(): string {
@@ -112,4 +140,41 @@ export function mapSlotsToView(slots: SlotSummary[]): SlotView[] {
     organisationId: slot.organisationId,
     serviceType: slot.serviceType,
   }));
+}
+
+async function defaultAppointmentExecutor(request: AppointmentRequest): Promise<AppointmentConfirmation> {
+  await delay(5);
+  return {
+    appointmentId: `appt-${request.slotId}`,
+    slotId: request.slotId,
+    start: new Date().toISOString(),
+    end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
+  };
+}
+
+function isConflictError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof error === 'object') {
+    const status = (error as { status?: number }).status;
+    if (status === 409) return true;
+    const code = (error as { code?: string }).code;
+    if (code?.toLowerCase() === 'conflict') return true;
+  }
+  if (typeof error === 'string') {
+    return error.toLowerCase().includes('conflict');
+  }
+  return false;
+}
+
+function mapToClientError(error: unknown): GpConnectClientError {
+  if (isConflictError(error)) {
+    return new GpConnectClientError('conflict', 'Appointment slot already booked', error);
+  }
+  if (typeof error === 'object' && error) {
+    const status = (error as { status?: number }).status ?? (error as { response?: { status?: number } }).response?.status;
+    if (status && status >= 500) {
+      return new GpConnectClientError('unavailable', 'GP Connect service unavailable', error);
+    }
+  }
+  return new GpConnectClientError('unknown', 'GP Connect request failed', error);
 }
