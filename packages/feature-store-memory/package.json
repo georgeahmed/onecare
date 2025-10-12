@@ -5,9 +5,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
-    "test": "vitest run --config ../../vitest.config.ts --dir test"
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --dir test"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@onecare/ports": "workspace:*"
+  }
 }

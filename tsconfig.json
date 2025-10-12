@@ -6,6 +6,7 @@
     { "path": "packages/domain" },
     { "path": "packages/config" },
     { "path": "packages/ports" },
+    { "path": "packages/feature-store-memory" },
     { "path": "packages/bus" },
     { "path": "packages/security" },
     { "path": "packages/observability" },

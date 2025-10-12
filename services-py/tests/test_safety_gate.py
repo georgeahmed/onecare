@@ -43,6 +43,7 @@ def test_analyze_divert():
     )
     assert resp.status_code == 200
     assert resp.json()["outcome"] == "DIVERTED"
+    assert resp.json()["reason"] == "red_flag:chest_pain"
 
 
 def test_analyze_classifier_emergency_without_red_flag():
@@ -59,4 +60,4 @@ def test_analyze_classifier_emergency_without_red_flag():
     body = resp.json()
     assert resp.status_code == 200
     assert body["outcome"] == "DIVERTED"
-    assert body.get("reason") == "emergency_classifier"
+    assert body.get("reason") == "classifier:probability"

@@ -13,8 +13,8 @@ Start Here
 - Algorithm.md: 12) Observability, analytics.* topics
 - Schemas: schemas/analytics/metric.json
 
-Status: in-progress
-Progress: 83%
+Status: stable
+Progress: 100%
 
 Dependencies
 - devops-sre/engineer-02 (Observability stack)
@@ -32,7 +32,7 @@ Tasks
 - [x] DE-01.3 — Daily rollup ETL (counts, p95 latencies) job script
 - [x] DE-01.4 — Basic dashboards (arrival rate, error rate, latency)
 - [x] DE-01.5 — Data hygiene checks (missing fields, outliers) + report
-- [ ] DE-01.6 — Analytics payload schema validation
+- [x] DE-01.6 — Analytics payload schema validation
  - [ ] DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
  - [ ] DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
  - [ ] DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)

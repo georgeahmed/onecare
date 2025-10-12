@@ -5,6 +5,7 @@ const TRIAGE_INPUT_ID = 'https://onecare/schemas/triage/triage-input.json';
 const APPOINTMENT_CREATED_ID = 'https://onecare/schemas/booking/appointment-created.json';
 const ERROR_ENVELOPE_ID = 'https://onecare/schemas/common/error-envelope.json';
 const DLQ_EVENT_ID = 'https://onecare.example/schemas/common/dlq-event.json';
+const ANALYTICS_METRIC_ID = 'https://onecare/schemas/analytics/metric.json';
 
 describe('schema validation harness', () => {
   describe('triage.input', () => {
@@ -228,6 +229,51 @@ describe('schema validation harness', () => {
               "format": "date-time",
             },
             "path": "/ts",
+          },
+        ]
+      `);
+    });
+  });
+
+  describe('analytics.metric', () => {
+    const validMetric = {
+      name: 'requests_total',
+      value: 12,
+      labels: { service: 'booking' },
+      timestamp: '2025-10-12T10:00:00.000Z',
+    };
+
+    it('accepts analytics metrics that align with the schema', () => {
+      const result = validate(ANALYTICS_METRIC_ID, validMetric);
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('rejects metrics missing required fields and additional properties', () => {
+      const invalidMetric = {
+        value: 'not-numeric',
+        labels: { service: 'booking' },
+        extra: true,
+      };
+
+      const result = validate(ANALYTICS_METRIC_ID, invalidMetric);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('Expected validation failure');
+      const errorShape = result.errors.map(({ path, keyword, params }) => ({ path, keyword, params }));
+      expect(errorShape).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "additionalProperties",
+            "params": {
+              "additionalProperty": "extra",
+            },
+            "path": "/extra",
+          },
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "name",
+            },
+            "path": "/name",
           },
         ]
       `);
