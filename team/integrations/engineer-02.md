@@ -15,7 +15,7 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (enhanced_access_windows)
 
 Status: in-progress
-Progress: 16%
+Progress: 21%
 
 Dependencies
 - backend/engineer-04 (Booking service)
@@ -29,7 +29,7 @@ Tasks
 - [ ] IN-02.2b — Contract validators (search request/response schemas; codegen + compiled validators)
 - [x] IN-02.3a — Appointment create idempotency + conflict handling (natural key; exactly-once write)
 - [ ] IN-02.3b — Conflict policies + fallback (reselect/backoff; safe retry)
-- [ ] IN-02.4 — Enhanced Access constraints (windows, slot types, fairness floors; config-driven)
+- [x] IN-02.4 — Enhanced Access constraints (windows, slot types, fairness floors; config-driven)
 - [ ] IN-02.5 — FHIR write-back links for created appointments (Task update; references; audit)
 - [ ] IN-02.6 — Observability: latency histograms, error/conflict rates, spans; correlation propagation
 - [ ] IN-02.7 — Backpressure & rate limits (adapter-level caps; 429/503 mapping)
