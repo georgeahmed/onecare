@@ -180,6 +180,7 @@ describe('Telephony state machine', () => {
       expect(ctx.triageInputEnvelope?.payload.patientId).toBe('patient-X');
       expect(ctx.triageInputPublishedAt).toBeDefined();
       expect(ctx.intentRoutingDecision).toBe('auto');
+      expect(publishSpy).toHaveBeenCalledTimes(3);
       expect(publishSpy).toHaveBeenCalledWith(
         Topics.telephony.intentClassified,
         expect.objectContaining({
@@ -230,6 +231,7 @@ describe('Telephony state machine', () => {
         'intent_classified_publish_failed',
       );
       expect(ctx.intentClassifiedPublishedAt).toBeUndefined();
+      expect(publishSpy).toHaveBeenCalledTimes(1);
     });
 
     it('throws when intent classification input is missing', async () => {
@@ -283,6 +285,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentClassified?.intent).toBe('telephony.manual_review');
       expect(ctx.intentClassified?.confidence).toBeCloseTo(0.2);
       expect(ctx.intentConfidenceThreshold).toBeCloseTo(0.8);
+      expect(publishSpy).toHaveBeenCalledTimes(2);
 
       const emergencyState = new EmergencyTransferState();
       const afterEmergency = await emergencyState.handle(ctx, { type: 'telephony.emergency.transfer' });
@@ -328,6 +331,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentRouteReason).toBe('triage_pipeline');
       expect(ctx.triageInput).toBeUndefined();
       expect(ctx.intentRoutingDecision).toBe('fallback');
+      expect(publishSpy).toHaveBeenCalledTimes(2);
     });
 
     it('maps billing intent to admin routing without triage input', async () => {
@@ -360,6 +364,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentRouteTarget).toBe('billing');
       expect(ctx.intentRouteReason).toBe('billing_support');
       expect(ctx.triageInput).toBeUndefined();
+      expect(publishSpy).toHaveBeenCalledTimes(2);
     });
   });
 

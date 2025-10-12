@@ -287,6 +287,23 @@ app = FastAPI(title="Safety Gate Service", version="0.1.0", lifespan=lifespan)
 instrument_fastapi(app)
 
 
+@app.exception_handler(RequestValidationError)
+async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    correlation_id = _extract_correlation_id(request)
+    body = {
+        "error": {
+            "code": "invalid_input",
+            "message": "Invalid request payload",
+            "details": {"errors": exc.errors()},
+            "correlationId": correlation_id,
+        }
+    }
+    LOGGER.info("safety_gate.validation_error correlation_id=%s", correlation_id)
+    response = JSONResponse(status_code=400, content=body)
+    response.headers["x-correlation-id"] = correlation_id
+    return response
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -300,18 +317,15 @@ def ready() -> dict[str, str]:
 
 
 @app.post("/analyze", response_model=SafetyDecision)
-async def analyze(request: Request, submission: PortalSubmission) -> SafetyDecision:
+async def analyze(request: Request, submission: PortalSubmission, response: Response) -> SafetyDecision:
     narrative_raw = submission.narrative or ""
     classifier = getattr(app.state, "classifier", None) or get_classifier()
     ner = getattr(app.state, "ner", None) or get_ner()
     acuity_model = getattr(app.state, "acuity_model", None) or get_acuity_model()
     decision_config = getattr(app.state, "decision_config", None) or get_decision_config()
 
-    correlation_id = (
-        request.headers.get("x-correlation-id")
-        or request.headers.get("x-request-id")
-        or str(uuid4())
-    )
+    correlation_id = _extract_correlation_id(request)
+    response.headers["x-correlation-id"] = correlation_id
 
     outcome: AnalysisOutcome = await analyze_submission(
         narrative=narrative_raw,
@@ -324,8 +338,8 @@ async def analyze(request: Request, submission: PortalSubmission) -> SafetyDecis
 
     if _feature_logging_enabled():
         artifacts = outcome.artifacts or {}
-        classification = artifacts.get("classification", {}) if isinstance(artifacts.get("classification"), Mapping) else {}
-        nlp_payload = artifacts.get("nlp", {}) if isinstance(artifacts.get("nlp"), Mapping) else {}
+        classification = artifacts.get("classification") if isinstance(artifacts.get("classification"), Mapping) else {}
+        nlp_payload = artifacts.get("nlp") if isinstance(artifacts.get("nlp"), Mapping) else {}
         red_flags = artifacts.get("red_flag_hits", [])
         if not isinstance(red_flags, list):
             red_flags = []
@@ -339,4 +353,3 @@ async def analyze(request: Request, submission: PortalSubmission) -> SafetyDecis
         )
 
     return SafetyDecision(outcome=outcome.decision.outcome, reason=outcome.decision.rationale.get("reason"))
-
