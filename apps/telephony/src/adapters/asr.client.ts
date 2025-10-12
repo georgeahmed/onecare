@@ -77,15 +77,24 @@ export const buildCallTranscribed: CallTranscribedBuilder = ({ callId, transcrip
     transcript,
   };
 
-  const lang = transcription?.lang ?? null;
-  if (lang) {
-    payload.lang = lang;
+  const lang = transcription?.lang;
+  if (typeof lang === 'string') {
+    const normalizedLang = lang.trim();
+    if (normalizedLang) {
+      payload.lang = normalizedLang;
+    }
   } else if (lang === null) {
     payload.lang = null;
   }
 
   if (context && 'patientId' in context) {
-    payload.patientId = context.patientId ?? null;
+    const rawPatient = context.patientId;
+    if (typeof rawPatient === 'string') {
+      const normalizedPatient = rawPatient.trim();
+      payload.patientId = normalizedPatient.length > 0 ? normalizedPatient : null;
+    } else {
+      payload.patientId = rawPatient ?? null;
+    }
   }
 
   return payload;
