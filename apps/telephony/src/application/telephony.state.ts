@@ -3,7 +3,13 @@ import { logger } from '@onecare/observability';
 import { Topics, createEnvelope } from '@onecare/events';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
-import type { TelephonyContext, TelephonyEvent, IntentClassificationInput } from './types';
+import { IntentServiceClassifier } from '../adapters/intent.client';
+import type {
+  TelephonyContext,
+  TelephonyEvent,
+  IntentClassificationInput,
+  IntentRoutingDecision,
+} from './types';
 
 function sanitizePatientId(raw: string | null | undefined): string | null | undefined {
   if (raw === null) return null;
@@ -81,7 +87,11 @@ export class CallReceivedState extends BaseState<TelephonyContext, TelephonyEven
     }
 
     if (!ctx.intentClassifier) {
-      throw new Error('intent_classifier_missing');
+      try {
+        ctx.intentClassifier = IntentServiceClassifier.fromEnv();
+      } catch (error) {
+        throw new Error('intent_classifier_missing');
+      }
     }
 
     ctx.buildCallTranscribed = ctx.buildCallTranscribed ?? buildCallTranscribed;

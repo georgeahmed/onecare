@@ -105,6 +105,7 @@ Analytics Consumer
 - Configure bus via `NATS_URL` (optional); override sink path with `ANALYTICS_SINK_PATH`.
 - Docker: `docker compose up analytics` starts the worker alongside NATS and writes metrics under the `analytics-metrics` volume.
 - Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
+- Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
 
 Team & Status
 - Team status: make team-status

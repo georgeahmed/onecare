@@ -70,6 +70,8 @@ class PlattScaling:
 class ModelThreshold:
     default: Optional[float] = None
     variants: MutableMapping[str, float] = field(default_factory=dict)
+    calibration: Optional[Mapping[str, Any]] = None
+    huggingface_model: Optional[str] = None
 
     def resolve(self, variant: Optional[str], fallback: float) -> float:
         if variant:
@@ -108,12 +110,13 @@ class EmergencyClassifier:
         self._config_path = self._resolve_config_path(config_path)
         self._model_version = model_version or self._env.get(_MODEL_VERSION_ENV) or self.DEFAULT_MODEL_VERSION
         self._model_variant = model_variant or self._env.get(_MODEL_VARIANT_ENV)
-        self._calibrator = calibrator or IdentityCalibration()
         self._model_loader = model_loader
         (
             self._base_threshold,
             self._model_thresholds,
         ) = self._load_thresholds(thresholds)
+        self._preferred_model_name = self._resolve_preferred_model_name()
+        self._calibrator = self._resolve_calibrator(calibrator)
         self._override_threshold = self._read_env_threshold_override()
         self._model_lock = threading.Lock()
         self._model: Optional[Callable[[str], float]] = None
@@ -203,10 +206,12 @@ class EmergencyClassifier:
 
     def _parse_model_threshold(self, raw: Any) -> Optional[ModelThreshold]:
         if isinstance(raw, Mapping):
-            default = _coerce_threshold(
-                raw.get("emergency_confidence") or raw.get("default")
-            )
+            default = _coerce_threshold(raw.get("emergency_confidence") or raw.get("default"))
             variants: dict[str, float] = {}
+            calibration_node = raw.get("calibration")
+            calibration_config = dict(calibration_node) if isinstance(calibration_node, Mapping) else None
+            huggingface_model = raw.get("huggingface_model") or raw.get("hf_model")
+            huggingface_model_str = str(huggingface_model) if isinstance(huggingface_model, (str, os.PathLike)) else None
 
             thresholds_node = raw.get("thresholds")
             if isinstance(thresholds_node, Mapping):
@@ -226,7 +231,12 @@ class EmergencyClassifier:
             if default is None and not variants:
                 return None
 
-            return ModelThreshold(default=default, variants=variants)
+            return ModelThreshold(
+                default=default,
+                variants=variants,
+                calibration=calibration_config,
+                huggingface_model=huggingface_model_str,
+            )
 
         candidate = _coerce_threshold(raw)
         if candidate is None:
@@ -271,12 +281,26 @@ class EmergencyClassifier:
         return self._model
 
     def _load_default_model(self) -> Callable[[str], float]:
-        mode = (self._env.get(_MODE_ENV) or "stub").lower()
-        if mode != "stub":
+        mode_env = (self._env.get(_MODE_ENV) or "").strip()
+        if mode_env:
+            if mode_env.lower() in {"stub", "heuristic"}:
+                return _StubEmergencyModel()
             try:
-                return self._load_transformer_model(mode)
+                return self._load_transformer_model(mode_env)
             except Exception as exc:  # pragma: no cover - exercised when transformers missing
                 LOGGER.warning("Falling back to stub classifier: %s", exc, exc_info=False)
+                return _StubEmergencyModel()
+
+        if self._preferred_model_name:
+            try:
+                return self._load_transformer_model(self._preferred_model_name)
+            except Exception as exc:  # pragma: no cover - exercised when transformers missing
+                LOGGER.warning(
+                    "Configured model %s unavailable (%s); falling back to stub",
+                    self._preferred_model_name,
+                    exc,
+                    exc_info=False,
+                )
         return _StubEmergencyModel()
 
     def _load_transformer_model(self, model_name: str) -> Callable[[str], float]:
@@ -316,6 +340,49 @@ class EmergencyClassifier:
         model = self._get_model()
         return float(model(text))
 
+    def _resolve_preferred_model_name(self) -> Optional[str]:
+        model_threshold = self._model_thresholds.get(self._model_version)
+        if model_threshold and model_threshold.huggingface_model:
+            return str(model_threshold.huggingface_model)
+        return None
+
+    def _resolve_calibrator(self, provided: Optional[CalibrationStrategy]) -> CalibrationStrategy:
+        if provided is not None:
+            return provided
+        model_threshold = self._model_thresholds.get(self._model_version)
+        if model_threshold and model_threshold.calibration:
+            try:
+                return self._build_calibrator(model_threshold.calibration)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Invalid calibration config for model %s: %s; defaulting to identity",
+                    self._model_version,
+                    exc,
+                )
+        return IdentityCalibration()
+
+    def _build_calibrator(self, config: Mapping[str, Any]) -> CalibrationStrategy:
+        cal_type = str(config.get("type", "identity")).lower()
+        if cal_type in {"identity", "none"}:
+            return IdentityCalibration()
+        if cal_type in {"temperature", "temp"}:
+            temperature_value = _coerce_positive_float(
+                config.get("temperature")
+                or config.get("value")
+                or config.get("param")
+            )
+            if temperature_value is None:
+                raise ValueError("temperature calibration requires positive `temperature` value")
+            return TemperatureCalibration(temperature=temperature_value)
+        if cal_type in {"platt", "platt_scaling"}:
+            params = config.get("parameters") if isinstance(config.get("parameters"), Mapping) else config
+            a_value = params.get("a")
+            b_value = params.get("b")
+            if a_value is None or b_value is None:
+                raise ValueError("platt calibration requires `a` and `b` coefficients")
+            return PlattScaling(float(a_value), float(b_value))
+        raise ValueError(f"Unsupported calibration type '{cal_type}'")
+
 
 def _coerce_threshold(value: Any) -> Optional[float]:
     if value is None:
@@ -327,6 +394,18 @@ def _coerce_threshold(value: Any) -> Optional[float]:
     if math.isnan(numeric):
         return None
     return _clamp_probability(numeric)
+
+
+def _coerce_positive_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric <= 0:
+        return None
+    return numeric
 
 
 class _StubEmergencyModel:

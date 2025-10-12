@@ -15,3 +15,4 @@ Docker
 
 Rollups
 - Run `npm run metrics:rollup` (or `node scripts/metrics_rollup.js`) to produce daily counts + p95 summaries under `var/analytics/rollup.jsonl`. Override input/output via `ANALYTICS_SINK_PATH`, `ANALYTICS_ROLLUP_PATH`, or CLI flags (`--input`, `--output`, `--date`).
+- Recommended schedule: add a cron entry (e.g., `0 1 * * * npm run metrics:rollup -- --date $(date -I)`) or equivalent scheduler task once deployment cadence is confirmed.

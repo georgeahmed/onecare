@@ -36,6 +36,12 @@ Vault path: not required; values are non-secret but should be stored in environm
 | `SAFETY_RULESET_ID` | Optional ruleset identifier for feature flags. | `dev-default` |
 | `SAFETY_MAX_TIMEOUT_MS` | Max latency budget per request. | `1500` |
 | `SAFETY_SERVICE_API_KEY` | Downstream auth token when calling external services. | Vault secret |
+| `SAFETY_GATE_CLASSIFIER_MODE` | HuggingFace model slug for emergency classifier (`stub` uses heuristic). | `stub` |
+| `SAFETY_GATE_MODEL_VERSION` | Logical classifier version key aligned with `config/safety_gate.yaml`. | `stub-v1` |
+| `SAFETY_GATE_MODEL_VARIANT` | Optional A/B bucket (`control`, `high_precision`, etc.). | unset |
+| `SAFETY_GATE_EMERGENCY_CONFIDENCE` | Overrides config threshold when set (0–1 float). | unset |
+| `SAFETY_GATE_CONFIG_PATH` | Custom path to classifier threshold YAML (defaults to repo config). | unset |
+| `SAFETY_GATE_NER_MODE` | `stub` keeps deterministic keyword NER; set to `hf` to use BioClinicalBERT pipeline. | `stub` (tests) |
 
 Vault path: `kv/ml/safety-gate/*`
 
