@@ -14,7 +14,7 @@ Start Here
 - Schemas: schemas/analytics/metric.json
 
 Status: in-progress
-Progress: 67%
+Progress: 83%
 
 Dependencies
 - devops-sre/engineer-02 (Observability stack)
@@ -31,7 +31,7 @@ Tasks
 - [x] DE-01.2 — Implement consumer for analytics.metric envelopes -> sink
 - [x] DE-01.3 — Daily rollup ETL (counts, p95 latencies) job script
 - [x] DE-01.4 — Basic dashboards (arrival rate, error rate, latency)
-- [ ] DE-01.5 — Data hygiene checks (missing fields, outliers) + report
+- [x] DE-01.5 — Data hygiene checks (missing fields, outliers) + report
 - [ ] DE-01.6 — Analytics payload schema validation
  - [ ] DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
  - [ ] DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)

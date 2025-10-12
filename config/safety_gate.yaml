@@ -1,4 +1,6 @@
 # Safety Gate classifier thresholds; defaults can be overridden per practice.
+# Note: Values must be regenerated from the offline evaluation harness (see ML-01.19)
+# before promoting new model versions. Do not update without fresh calibration runs.
 defaults:
   emergency_confidence: 0.74
 

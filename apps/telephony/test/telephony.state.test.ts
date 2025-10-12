@@ -4,6 +4,11 @@ import type { TelephonyContext } from '../src/application/types';
 import { buildCallTranscribed } from '../src/adapters/asr.client';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, type TypedEnvelope, type CallTranscribed, type IntentClassified } from '@onecare/events';
+import {
+  applyTelephonyDependencies,
+  setIntentClassifier,
+  setIntentClassifierFactory,
+} from '../src/application/bootstrap';
 
 describe('Telephony state machine', () => {
   let publishSpy: ReturnType<typeof vi.fn>;
@@ -22,6 +27,13 @@ describe('Telephony state machine', () => {
         unsubscribe: async () => {},
       })),
     };
+    setIntentClassifierFactory(undefined);
+    setIntentClassifier(undefined);
+  });
+
+  afterEach(() => {
+    setIntentClassifier(undefined);
+    setIntentClassifierFactory(undefined);
   });
 
   describe('TranscribedState', () => {
@@ -31,7 +43,8 @@ describe('Telephony state machine', () => {
         lang: ' en-GB ',
       }));
 
-      const ctx: TelephonyContext = {
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
         id: 'call-001',
         callId: 'call-001',
         audioRef: 'memory://call-001',
@@ -41,9 +54,8 @@ describe('Telephony state machine', () => {
         buildCallTranscribed,
         bus,
         now: () => 1_725_000_000_000,
-        intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.3,
-      };
+      } as TelephonyContext);
 
       const state = new TranscribedState();
       const next = await state.handle(ctx, { type: 'telephony.call.received' });
@@ -89,7 +101,8 @@ describe('Telephony state machine', () => {
         text: 'hello',
       }));
 
-      const ctx: TelephonyContext = {
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
         id: 'call-002',
         callId: 'call-002',
         audioRef: 'memory://call-002',
@@ -97,9 +110,8 @@ describe('Telephony state machine', () => {
         asrClient: { transcribe },
         buildCallTranscribed,
         bus,
-        intentClassifier: { classify: classifySpy },
         intentConfidenceThreshold: 0.4,
-      };
+      } as TelephonyContext);
 
       const state = new TranscribedState();
 

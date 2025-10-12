@@ -15,7 +15,8 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "test": "vitest --run",
-    "metrics:rollup": "node scripts/metrics_rollup.js"
+    "metrics:rollup": "node scripts/metrics_rollup.js",
+    "metrics:quality": "node scripts/analytics_quality.js"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",

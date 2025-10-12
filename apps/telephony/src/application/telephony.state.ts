@@ -3,7 +3,6 @@ import { logger } from '@onecare/observability';
 import { Topics, createEnvelope } from '@onecare/events';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
-import { IntentServiceClassifier } from '../adapters/intent.client';
 import type {
   TelephonyContext,
   TelephonyEvent,
@@ -87,11 +86,7 @@ export class CallReceivedState extends BaseState<TelephonyContext, TelephonyEven
     }
 
     if (!ctx.intentClassifier) {
-      try {
-        ctx.intentClassifier = IntentServiceClassifier.fromEnv();
-      } catch (error) {
-        throw new Error('intent_classifier_missing');
-      }
+      throw new Error('intent_classifier_missing');
     }
 
     ctx.buildCallTranscribed = ctx.buildCallTranscribed ?? buildCallTranscribed;

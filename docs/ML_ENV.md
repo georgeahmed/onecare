@@ -45,6 +45,8 @@ Vault path: not required; values are non-secret but should be stored in environm
 
 Vault path: `kv/ml/safety-gate/*`
 
+> Keep thresholds/calibration in sync with the offline evaluation harness (see task ML-01.19). Any new model promotion requires rerunning calibration on the protected validation set before editing `config/safety_gate.yaml`.
+
 ## Scribe Service (Ambient Documentation)
 
 | Variable | Description | Example / Notes |
