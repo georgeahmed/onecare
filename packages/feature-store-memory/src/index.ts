@@ -15,6 +15,7 @@ export interface InMemoryFeatureStoreOptions {
 type FeatureEntry = {
   value: Record<string, unknown>;
   expiresAt: number | null;
+  createdAt: number;
 };
 
 const clone = <T>(value: T): T => {
@@ -47,6 +48,7 @@ export class InMemoryFeatureStore implements FeatureStore {
     this.store.set(key, {
       value: clone(features),
       expiresAt,
+      createdAt: now,
     });
   }
 
@@ -67,16 +69,40 @@ export class InMemoryFeatureStore implements FeatureStore {
   /**
    * Remove expired entries proactively (useful for long-lived test instances).
    */
-  purgeExpired(now = this.clock()): void {
+  purgeExpired(now = this.clock()): number {
     if (this.ttlMs === null) {
-      return;
+      return 0;
     }
 
+    let purged = 0;
     for (const [key, entry] of this.store.entries()) {
       if (entry.expiresAt !== null && now >= entry.expiresAt) {
         this.store.delete(key);
+        purged += 1;
       }
     }
+    return purged;
+  }
+
+  /**
+   * Remove entries that were created before the given retention window.
+   * Useful for stores that rely on external retention policies instead of TTL.
+   */
+  purgeOlderThan(retentionMs: number, now = this.clock()): number {
+    if (!Number.isFinite(retentionMs)) {
+      return 0;
+    }
+    const normalizedRetention = retentionMs < 0 ? 0 : retentionMs;
+    const cutoff = now - normalizedRetention;
+    let purged = 0;
+    for (const [key, entry] of this.store.entries()) {
+      const createdAt = entry.createdAt ?? 0;
+      if (createdAt <= cutoff) {
+        this.store.delete(key);
+        purged += 1;
+      }
+    }
+    return purged;
   }
 
   /** Remove all cached entries. */
@@ -88,3 +114,4 @@ export class InMemoryFeatureStore implements FeatureStore {
 export default InMemoryFeatureStore;
 
 export * from './drift';
+export * from './driftMonitor';

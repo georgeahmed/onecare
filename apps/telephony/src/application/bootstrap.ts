@@ -44,6 +44,8 @@ export function applyTelephonyDependencies<T extends TelephonyContext>(ctx: T): 
   if (!ctx.intentClassifier) {
     ctx.intentClassifier = getIntentClassifier();
   }
+  ctx.ivrPrompts = ctx.ivrPrompts ?? [];
+  ctx.enqueuePrompt = ctx.enqueuePrompt ?? (() => undefined);
   ctx.emergencyTransferEnabled = resolveEmergencyTransferEnabled(ctx.emergencyTransferEnabled);
   return ctx;
 }

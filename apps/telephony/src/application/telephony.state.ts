@@ -4,12 +4,15 @@ import { Topics, createEnvelope } from '@onecare/events';
 import type { TriageInput } from '@onecare/events';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
+import { queuePromptForCall } from '../adapters/ivr.prompts';
 import type {
   TelephonyContext,
   TelephonyEvent,
   IntentClassificationInput,
   IntentRoutingDecision,
   IntentRouteTarget,
+  CallbackPriority,
+  CallbackWindowOptions,
 } from './types';
 
 function sanitizePatientId(raw: string | null | undefined): string | null | undefined {
@@ -20,6 +23,12 @@ function sanitizePatientId(raw: string | null | undefined): string | null | unde
 }
 
 const DEFAULT_INTENT_CONFIDENCE_THRESHOLD = 0.55;
+const DEFAULT_CALLBACK_WINDOWS: Record<CallbackPriority, { code: string; label: string }> = {
+  stat: { code: 'immediate', label: 'We will connect you immediately.' },
+  urgent: { code: 'within_2h', label: 'We can call you back within 2 hours.' },
+  soon: { code: 'same_day', label: 'We can call you back later today.' },
+  routine: { code: 'within_48h', label: 'We can call you back within 48 hours.' },
+};
 
 function normalizeConfidenceThreshold(raw: unknown): number | undefined {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -74,6 +83,64 @@ function ensureEmergencyTransferEnabled(ctx: TelephonyContext): boolean {
   return resolved;
 }
 
+async function queuePrompt(ctx: TelephonyContext, prompt: string): Promise<void> {
+  const sanitized = prompt?.trim();
+  if (!sanitized) return;
+  ctx.ivrPrompts = ctx.ivrPrompts ?? [];
+  ctx.ivrPrompts.push(sanitized);
+  if (ctx.enqueuePrompt) {
+    await Promise.resolve(ctx.enqueuePrompt(sanitized));
+  }
+  try {
+    await queuePromptForCall(ctx.callId, sanitized);
+  } catch (error) {
+    logger.warn('telephony.ivr.prompt.dispatch_failed', {
+      callId: ctx.callId,
+      correlationId: ctx.correlationId,
+      reason: (error as Error).message,
+    });
+  }
+}
+
+function parseCallbackWindowOverrides(raw: string | undefined): Partial<Record<CallbackPriority, { code: string; label?: string }>> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { code?: string; label?: string }>;
+    const result: Partial<Record<CallbackPriority, { code: string; label?: string }>> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const priority = key.trim().toLowerCase() as CallbackPriority;
+      if (!['stat', 'urgent', 'soon', 'routine'].includes(priority)) continue;
+      const code = value?.code?.trim();
+      if (!code) continue;
+      result[priority] = { code, label: value?.label?.trim() || undefined };
+    }
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
+function humanizeWindowLabel(code: string): string {
+  return code
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function ensureCallbackWindowOptions(ctx: TelephonyContext, priority: CallbackPriority): CallbackWindowOptions {
+  if (!ctx.callbackWindowOptions || ctx.callbackWindowOptions.priority !== priority) {
+    const overrides = parseCallbackWindowOverrides(process.env.TELEPHONY_CALLBACK_WINDOWS);
+    const base = overrides?.[priority] ?? DEFAULT_CALLBACK_WINDOWS[priority];
+    const windowCode = base.code;
+    const windowLabel = base.label ?? humanizeWindowLabel(windowCode);
+    ctx.callbackWindowOptions = {
+      priority,
+      windowCode,
+      windowLabel,
+    };
+  }
+  return ctx.callbackWindowOptions;
+}
+
 interface IntentRouteResult {
   target: IntentRouteTarget;
   reason: string;
@@ -125,14 +192,14 @@ function mapIntentToRoute(
 ): IntentRouteResult {
   const normalizedIntent = intent || 'telephony.callback';
   const target = INTENT_ROUTE_TABLE[normalizedIntent] ?? 'triage';
-  if (target === 'triage') {
-    const triageInput = buildTriageInput(normalizedIntent, transcript, patientId, confidence);
-    return {
-      target,
-      reason: 'triage_pipeline',
-      triageInput,
-    };
-  }
+    if (target === 'triage') {
+      const triageInput = buildTriageInput(normalizedIntent, transcript, patientId, confidence);
+      return {
+        target,
+        reason: 'triage_pipeline',
+        triageInput,
+      };
+    }
   if (target === 'emergency') {
     return {
       target,
@@ -150,6 +217,17 @@ function mapIntentToRoute(
     target,
     reason: reasonMap[target] ?? 'routing',
   };
+}
+
+function determineCallbackPriority(ctx: TelephonyContext, confidence?: number): CallbackPriority {
+  if (ctx.intentRouteTarget === 'emergency' || ctx.intentRoutingDecision === 'emergency') {
+    return 'stat';
+  }
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    if (confidence >= 0.85) return 'urgent';
+    if (confidence >= 0.65) return 'soon';
+  }
+  return 'routine';
 }
 
 function buildIntentClassificationInput(
@@ -341,6 +419,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
       ctx.intentRoutingDecision = 'emergency';
       ctx.intentRouteTarget = 'emergency';
       ctx.intentRouteReason = 'emergency_transfer';
+      ctx.callbackWindowOptions = ensureCallbackWindowOptions(ctx, 'stat');
       logger.error('telephony.emergency_transfer.queued', {
         callId: input.callId,
         intent: payload.intent,
@@ -403,6 +482,15 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
         });
         throw new Error('triage_input_publish_failed');
       }
+      const priority = determineCallbackPriority(ctx, confidence);
+      const options = ensureCallbackWindowOptions(ctx, priority);
+      await queuePrompt(ctx, options.windowLabel);
+      logger.info('telephony.callback_window.selected', {
+        callId: input.callId,
+        priority,
+        windowCode: options.windowCode,
+        correlationId: ctx.correlationId,
+      });
     }
 
     if (ctx.emergencyTransferTriggered && ctx.emergencyTransferEnabled) {
@@ -420,9 +508,8 @@ export class EmergencyTransferState extends BaseState<TelephonyContext, Telephon
   async handle(ctx: TelephonyContext): Promise<string> {
     const nowFn = ctx.now ?? Date.now;
     ctx.emergencyTransferAt = nowFn();
-    ctx.ivrPrompts = ctx.ivrPrompts ?? [];
     const prompt = 'Connecting you to emergency services. Please stay on the line.';
-    ctx.ivrPrompts.push(prompt);
+    await queuePrompt(ctx, prompt);
     logger.warn('telephony.ivr.prompt.emergency_transfer', {
       callId: ctx.callId,
       prompt,

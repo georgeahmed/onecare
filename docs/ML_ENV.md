@@ -8,6 +8,9 @@ This guide lists the environment variables and secrets required by the Python ML
 | --- | --- | --- |
 | `OTEL_ENABLED` | Enables lightweight OTEL-style logging/metrics (`1`/`true` to enable). Safe to flip on locally for debugging. | `0` |
 | `FEATURE_LOGGING` | Persist feature vectors to the configured FeatureStore via the orchestrator endpoint. | `0` |
+| `FEATURE_DRIFT_MONITORING` | Enable live drift checks when feature logging is on. | `0` |
+| `FEATURE_STORE_URL` | Postgres connection string for the feature store (used by purge job + local tooling). Configure per environment via secrets. | unset |
+| `FEATURE_STORE_RETENTION_DAYS` | Optional override when running the purge script locally (days). | unset |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint if exporting real telemetry (optional for dev). | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers (e.g., `x-api-key=...`). | empty |
 | `OTEL_RESOURCE_ATTRIBUTES` | Service/resource attributes (`service.name=...`). | varies |
@@ -26,6 +29,11 @@ These values are shared between the Node orchestrator and the Python services. D
 | `SCRIBE_PORT` | Optional override for the Uvicorn port inside the scribe container. | `8082` |
 | `OTEL_ENABLED` | See table above—repeat here for clarity when injecting into container env. | `0` |
 | `FEATURE_LOG_ENDPOINT` | HTTP endpoint that accepts feature log payloads (used by safety gate). | `http://orchestrator:3001/feature-log` |
+| `FEATURE_DRIFT_BASELINE_SIZE` | Sample size for drift baseline window. | `200` |
+| `FEATURE_DRIFT_CURRENT_SIZE` | Sample size for each evaluated window. | `50` |
+| `FEATURE_DRIFT_PSI_THRESHOLD` | PSI threshold that emits a drift alert. | `0.5` |
+| `FEATURE_DRIFT_MEAN_THRESHOLD` | Absolute mean delta that emits a drift alert. | `0.3` |
+| `FEATURE_DRIFT_STD_THRESHOLD` | Absolute std-dev delta that emits a drift alert. | `0.3` |
 
 Vault path: not required; values are non-secret but should be stored in environment management (ConfigMap/Parameter Store).
 

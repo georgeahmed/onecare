@@ -1,46 +1,85 @@
-export interface ReferralRequest {
-  requestId: string;
-  serviceCode?: string; // e.g., SNOMED or local routing code
-  destinationHint?: string; // optional hint
-  patientId?: string;
-}
+import type { IcsReferralRequest } from '@onecare/events';
 
 export interface RoutingConfig {
-  defaultOrgId: string;
-  byServiceCode?: Record<string, string>;
-  byDestinationHint?: Record<string, string>;
+  defaultDestinationOrgId?: string;
+  orgOverrides?: Record<string, string>;
 }
 
 export interface RouteDecision {
   destinationOrgId: string;
-  policy: string;
+  policy: 'org' | 'default' | 'fallback';
   rationale: string;
 }
 
-export function buildRouteDecision(req: ReferralRequest, cfg: RoutingConfig): RouteDecision {
-  // Try explicit hint mapping first
-  if (req.destinationHint && cfg.byDestinationHint?.[req.destinationHint]) {
-    const org = cfg.byDestinationHint[req.destinationHint];
-    return {
-      destinationOrgId: org,
-      policy: 'hint',
-      rationale: `mapped by destination hint ${req.destinationHint}`,
-    };
+function normaliseKey(value: string | undefined): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function normaliseValue(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+interface NormalisedRoutingConfig {
+  defaultDestinationOrgId?: string;
+  orgOverrides: Map<string, string>;
+}
+
+function normaliseConfig(config: RoutingConfig = {}): NormalisedRoutingConfig {
+  const overrides = new Map<string, string>();
+  if (config.orgOverrides) {
+    for (const [key, destination] of Object.entries(config.orgOverrides)) {
+      const normalisedKey = normaliseKey(key);
+      const normalisedDestination = normaliseValue(destination);
+      if (!normalisedKey || !normalisedDestination) continue;
+      overrides.set(normalisedKey, normalisedDestination);
+    }
   }
-  // Then service code mapping
-  if (req.serviceCode && cfg.byServiceCode?.[req.serviceCode]) {
-    const org = cfg.byServiceCode[req.serviceCode];
-    return {
-      destinationOrgId: org,
-      policy: 'serviceCode',
-      rationale: `mapped by service code ${req.serviceCode}`,
-    };
-  }
-  // Fallback default
+  const defaultDestination = normaliseValue(config.defaultDestinationOrgId);
   return {
-    destinationOrgId: cfg.defaultOrgId,
-    policy: 'default',
-    rationale: 'no specific mapping found; using default',
+    defaultDestinationOrgId: defaultDestination,
+    orgOverrides: overrides,
   };
 }
 
+function deriveFallback(org: string): RouteDecision {
+  const trimmed = org.trim();
+  const destinationOrgId = trimmed.length > 0 ? trimmed : 'unknown';
+  return {
+    destinationOrgId,
+    policy: 'fallback',
+    rationale: 'no routing override or default configured; using incoming organisation identifier',
+  };
+}
+
+export function buildRouteDecision(request: IcsReferralRequest, config: RoutingConfig = {}): RouteDecision {
+  const normalisedOrg = normaliseKey(request.org);
+  if (!normalisedOrg) {
+    return {
+      destinationOrgId: 'unknown',
+      policy: 'fallback',
+      rationale: 'organisation identifier missing; using placeholder destination',
+    };
+  }
+
+  const normalisedConfig = normaliseConfig(config);
+  const override = normalisedConfig.orgOverrides.get(normalisedOrg);
+  if (override) {
+    return {
+      destinationOrgId: override,
+      policy: 'org',
+      rationale: `matched routing override for organisation ${request.org}`,
+    };
+  }
+
+  if (normalisedConfig.defaultDestinationOrgId) {
+    return {
+      destinationOrgId: normalisedConfig.defaultDestinationOrgId,
+      policy: 'default',
+      rationale: 'no organisation override; using configured default destination',
+    };
+  }
+
+  return deriveFallback(request.org);
+}

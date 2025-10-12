@@ -179,6 +179,11 @@ describe('Telephony state machine', () => {
       expect(ctx.intentClassifiedPublishedAt).toBeDefined();
       expect(ctx.triageInputEnvelope?.payload.patientId).toBe('patient-X');
       expect(ctx.triageInputPublishedAt).toBeDefined();
+      expect(ctx.callbackWindowOptions).toEqual({
+        priority: 'routine',
+        windowCode: 'within_48h',
+        windowLabel: 'We can call you back within 48 hours.',
+      });
       expect(ctx.intentRoutingDecision).toBe('auto');
       expect(publishSpy).toHaveBeenCalledTimes(3);
       expect(publishSpy).toHaveBeenCalledWith(
@@ -190,6 +195,44 @@ describe('Telephony state machine', () => {
       );
       const publishTopics = publishSpy.mock.calls.map((call) => call[0]);
       expect(publishTopics).toContain(Topics.triage.input);
+    });
+
+    it('publishes triage input with narrative when patient present', async () => {
+      const transcribe = vi.fn(async () => ({
+        text: 'Caller reports severe sore throat and fever',
+      }));
+
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-012',
+        callId: 'call-012',
+        audioRef: 'memory://call-012',
+        correlationId: 'corr-triage',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        patientId: 'patient-12',
+        bus,
+        intentClassifier: { classify: classifySpy },
+        intentConfidenceThreshold: 0.3,
+      } as TelephonyContext);
+
+      const transcribedState = new TranscribedState();
+      await transcribedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const intentState = new IntentClassifiedState();
+      await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      expect(publishSpy).toHaveBeenCalledTimes(3);
+      const triageCall = publishSpy.mock.calls.find(([topic]) => topic === Topics.triage.input);
+      expect(triageCall).toBeDefined();
+      const [, triageEnvelope] = triageCall as [string, TypedEnvelope<TriageInput>];
+      expect(triageEnvelope.payload.patientId).toBe('patient-12');
+      expect(triageEnvelope.payload.narrative).toMatch(/sore throat/i);
+      expect(triageEnvelope.payload.features?.intent).toBeDefined();
+      expect(ctx.triageInputEnvelope?.payload.patientId).toBe('patient-12');
+      expect(ctx.intentRouteTarget).toBe('triage');
+      expect(ctx.intentRouteReason).toBe('triage_pipeline');
+      expect(ctx.callbackWindowOptions?.priority).toBe('routine');
+      expect(ctx.ivrPrompts?.at(-1)).toMatch(/call you back/i);
     });
 
     it('throws when intent classifier is missing', async () => {
@@ -286,6 +329,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentClassified?.confidence).toBeCloseTo(0.2);
       expect(ctx.intentConfidenceThreshold).toBeCloseTo(0.8);
       expect(publishSpy).toHaveBeenCalledTimes(2);
+      expect(ctx.callbackWindowOptions?.priority).toBe('stat');
 
       const emergencyState = new EmergencyTransferState();
       const afterEmergency = await emergencyState.handle(ctx, { type: 'telephony.emergency.transfer' });
@@ -332,6 +376,7 @@ describe('Telephony state machine', () => {
       expect(ctx.triageInput).toBeUndefined();
       expect(ctx.intentRoutingDecision).toBe('fallback');
       expect(publishSpy).toHaveBeenCalledTimes(2);
+      expect(ctx.callbackWindowOptions).toBeUndefined();
     });
 
     it('maps billing intent to admin routing without triage input', async () => {
@@ -365,6 +410,7 @@ describe('Telephony state machine', () => {
       expect(ctx.intentRouteReason).toBe('billing_support');
       expect(ctx.triageInput).toBeUndefined();
       expect(publishSpy).toHaveBeenCalledTimes(2);
+      expect(ctx.callbackWindowOptions).toBeUndefined();
     });
   });
 
@@ -386,10 +432,16 @@ describe('Telephony state machine', () => {
           narrative: 'telephony narrative',
           features: { intent: 'telephony.callback' },
         },
+        callbackWindowOptions: {
+          priority: 'routine',
+          windowCode: 'within_48h',
+          windowLabel: 'We can call you back within 48 hours.',
+        },
       };
 
       const next = await state.handle(ctx, { type: 'telephony.call.routed' });
       expect(next).toBe('Routed');
+      expect(ctx.callbackWindowOptions?.windowLabel).toBe('We can call you back within 48 hours.');
     });
 
     it('throws if classification payload is missing', async () => {

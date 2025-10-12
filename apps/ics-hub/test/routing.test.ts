@@ -1,32 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { buildRouteDecision, RoutingConfig, ReferralRequest } from '../src/application/routing';
+import { buildRouteDecision, type RoutingConfig } from '../src/application/routing';
+import type { IcsReferralRequest } from '@onecare/events';
 
-const cfg: RoutingConfig = {
-  defaultOrgId: 'ORG-DEFAULT',
-  byServiceCode: { '1111': 'ORG-SVC', '2222': 'ORG-SVC-2' },
-  byDestinationHint: { 'hub-east': 'ORG-EAST' },
+const baseRequest: IcsReferralRequest = {
+  referralId: 'ref-1',
+  patientId: 'patient-1',
+  org: 'Org-Alpha',
+  reason: 'demo',
 };
 
 describe('ICS routing decision', () => {
-  it('uses destination hint when present', () => {
-    const req: ReferralRequest = { requestId: 'r1', destinationHint: 'hub-east' };
-    const d = buildRouteDecision(req, cfg);
-    expect(d.destinationOrgId).toBe('ORG-EAST');
-    expect(d.policy).toBe('hint');
+  it('routes using organisation override (case-insensitive match)', () => {
+    const cfg: RoutingConfig = {
+      orgOverrides: {
+        'org-alpha': 'dest-1',
+      },
+    };
+
+    const decision = buildRouteDecision(baseRequest, cfg);
+
+    expect(decision.destinationOrgId).toBe('dest-1');
+    expect(decision.policy).toBe('org');
+    expect(decision.rationale).toContain('organisation');
   });
 
-  it('falls back to service code mapping when hint absent', () => {
-    const req: ReferralRequest = { requestId: 'r2', serviceCode: '1111' };
-    const d = buildRouteDecision(req, cfg);
-    expect(d.destinationOrgId).toBe('ORG-SVC');
-    expect(d.policy).toBe('serviceCode');
+  it('falls back to default destination when override missing', () => {
+    const cfg: RoutingConfig = {
+      defaultDestinationOrgId: 'default-dest',
+    };
+
+    const decision = buildRouteDecision(baseRequest, cfg);
+
+    expect(decision.destinationOrgId).toBe('default-dest');
+    expect(decision.policy).toBe('default');
   });
 
-  it('uses default when no mapping available', () => {
-    const req: ReferralRequest = { requestId: 'r3', serviceCode: '9999' };
-    const d = buildRouteDecision(req, cfg);
-    expect(d.destinationOrgId).toBe('ORG-DEFAULT');
-    expect(d.policy).toBe('default');
+  it('falls back to incoming organisation when no overrides or default configured', () => {
+    const decision = buildRouteDecision(baseRequest);
+
+    expect(decision.destinationOrgId).toBe('Org-Alpha');
+    expect(decision.policy).toBe('fallback');
   });
 });
-

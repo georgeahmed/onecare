@@ -1,5 +1,6 @@
 import type { MessageBus } from '@onecare/bus';
-import { Topics } from '@onecare/events';
+import { Topics, createEnvelope, type AuditEvent } from '@onecare/events';
+import type { AutomationTaskCreation } from '../application/automation.rules';
 
 export interface PublishOptions {
   timeoutMs?: number;
@@ -72,5 +73,47 @@ async function publishWithTimeout<T>(
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+export interface AutomationPublishOptions {
+  taskPublish?: PublishOptions;
+  auditPublish?: PublishOptions;
+  auditEventType?: string;
+  now?: () => string;
+}
+
+export async function publishAutomationTasks(
+  bus: MessageBus,
+  creations: readonly AutomationTaskCreation[] | undefined,
+  options: AutomationPublishOptions = {},
+): Promise<void> {
+  if (!Array.isArray(creations) || creations.length === 0) {
+    return;
+  }
+  const now = options.now ?? (() => new Date().toISOString());
+  const auditType = options.auditEventType ?? 'automation.task.created';
+
+  for (const creation of creations) {
+    const correlationId = creation.correlationId;
+    const taskEnvelope = createEnvelope(Topics.tasks.created, creation.task, correlationId);
+    await publishWithGuard(bus, taskEnvelope.topic, taskEnvelope, correlationId, options.taskPublish);
+
+    const audit: AuditEvent = {
+      type: auditType,
+      timestamp: creation.triggeredAt ?? now(),
+      correlationId: correlationId ?? null,
+      details: {
+        ruleName: creation.ruleName,
+        reason: creation.reason,
+        category: creation.category,
+        sourceTaskId: creation.sourceTaskId,
+        taskId: creation.task.taskId,
+        patientId: creation.task.patientId,
+        triggeredAt: creation.triggeredAt,
+      },
+    };
+    const auditEnvelope = createEnvelope(Topics.audit.event, audit, correlationId);
+    await publishWithGuard(bus, auditEnvelope.topic, auditEnvelope, correlationId, options.auditPublish);
   }
 }

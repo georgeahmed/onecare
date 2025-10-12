@@ -14,3 +14,4 @@ export * from './ics-referral-ack';
 export * from './dlq-event';
 export * from './call-transcribed';
 export * from './intent-classified';
+export * from './task-created';

@@ -39,11 +39,13 @@ export interface TelephonyContext extends MachineContext {
   triageInput?: TriageInput;
   triageInputEnvelope?: TypedEnvelope<TriageInput>;
   triageInputPublishedAt?: number;
+  callbackWindowOptions?: CallbackWindowOptions;
   emergencyTransferEnabled?: boolean;
   emergencyTransferTriggered?: boolean;
   emergencyTransferAt?: number;
   forceEmergencyTransfer?: boolean;
   ivrPrompts?: string[];
+  enqueuePrompt?: (prompt: string) => Promise<void> | void;
   now?: () => number;
 }
 
@@ -64,3 +66,10 @@ export type {
 
 export type IntentRoutingDecision = 'auto' | 'fallback' | 'emergency';
 export type IntentRouteTarget = 'triage' | 'admin' | 'pharmacy' | 'billing' | 'emergency';
+export type CallbackPriority = 'stat' | 'urgent' | 'soon' | 'routine';
+
+export interface CallbackWindowOptions {
+  priority: CallbackPriority;
+  windowCode: string;
+  windowLabel: string;
+}

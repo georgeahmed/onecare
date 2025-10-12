@@ -4,7 +4,21 @@ import type { IcsClient } from '../adapters/ics.client';
 import type { IcsOrganisationPolicy, ResolvedConfig } from '@onecare/config';
 import { getIcsOrganisationPolicies } from '@onecare/config';
 import { createCounter, logger } from '@onecare/observability';
-import type { ErrorEnvelope, ErrorObject } from '@onecare/events';
+import type { TypedEnvelope, IcsReferralRequest, AuditEvent, ErrorEnvelope } from '@onecare/events';
+import type { MessageBus } from '@onecare/bus';
+import { publishAutomationTasks, type AutomationPublishOptions } from '../adapters/bus.adapter';
+import { buildRouteDecision, type RouteDecision, type RoutingConfig } from './routing';
+import { validateReferralIngress } from './ingress';
+import { createErrorEnvelope } from './errors';
+import {
+  evaluateAutomationTriggers,
+  buildAutomationTaskCreations,
+  loadAutomationConfig,
+  type AutomationTriggerConfig,
+  type AutomationTriggerEvent,
+  type AutomationIntent,
+  type AutomationTaskCreation,
+} from './automation.rules';
 
 const routingDecisionCounter = createCounter('ics.routing.decisions_total');
 const routingBlockedCounter = createCounter('ics.routing.blocked_total');
@@ -60,6 +74,7 @@ export type RoutingOutcome =
   | {
       status: 'allowed';
       policy: IcsOrganisationPolicy;
+      routeDecision: RouteDecision;
     }
   | {
       status: 'forbidden';
@@ -72,17 +87,37 @@ export type RoutingOutcome =
       error: ErrorEnvelope;
       retryAfterMs?: number;
       policy: IcsOrganisationPolicy;
+      routeDecision: RouteDecision;
+    }
+  | {
+      status: 'invalid';
+      httpStatus: 400;
+      error: ErrorEnvelope;
     };
 
 export interface IcsContext extends MachineContext {
   client?: IcsClient;
+  bus?: MessageBus;
   organisationId?: string;
   claim?: unknown;
   correlationId?: string;
+  createTaskId?: () => string;
   blocked?: boolean;
   rateLimited?: boolean;
   routePolicy?: IcsOrganisationPolicy;
   routingOutcome?: RoutingOutcome;
+  rawEnvelope?: unknown;
+  referralEnvelope?: TypedEnvelope<IcsReferralRequest>;
+  referral?: IcsReferralRequest;
+  routeDecision?: RouteDecision;
+  destinationOrgId?: string;
+  auditIntents?: AuditEvent[];
+  invalid?: boolean;
+  automationConfig?: AutomationTriggerConfig;
+  automationEvent?: AutomationTriggerEvent;
+  automationIntents?: AutomationIntent[];
+  automationTasks?: AutomationTaskCreation[];
+  automationPublished?: boolean;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -99,10 +134,12 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
   private readonly policies = new Map<string, IcsOrganisationPolicy>();
   private readonly limiters = new Map<string, TokenBucketLimiter>();
   private readonly now: () => number;
+  private routingConfig: RoutingConfig;
 
-  constructor(policies: OrgPolicyMap = {}, options: InboundStateOptions = {}) {
+  constructor(policies: OrgPolicyMap = {}, routing: RoutingConfig = {}, options: InboundStateOptions = {}) {
     super('Inbound');
     this.now = options.now ?? Date.now;
+    this.routingConfig = routing;
     this.applyPolicies(policies);
   }
 
@@ -132,17 +169,81 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
   }
 
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (!ctx.auditIntents) {
+      ctx.auditIntents = [];
+    }
     if (!ctx.client) {
       throw new Error('ics_client_missing');
     }
-    const requestedOrg = ctx.organisationId?.trim();
+
+    const validation = validateReferralIngress(ctx.rawEnvelope ?? ctx.referralEnvelope);
+    if (!validation.ok) {
+      ctx.invalid = true;
+      ctx.blocked = false;
+      ctx.rateLimited = false;
+      ctx.routePolicy = undefined;
+      ctx.routeDecision = undefined;
+      ctx.routingOutcome = {
+        status: 'invalid',
+        httpStatus: 400,
+        error: validation.error,
+      };
+      this.recordAudit(ctx, 'ics.referral.validation_failed', {
+        reason: validation.reason,
+      });
+      routingDecisionCounter.add(1, { outcome: 'invalid' });
+      return 'Validated';
+    }
+
+    const envelope = validation.envelope;
+    ctx.rawEnvelope = envelope;
+    ctx.referralEnvelope = envelope;
+    ctx.referral = envelope.payload;
+    ctx.correlationId = validation.correlationId;
+
+    const requestedOrgRaw = envelope.payload.org ?? '';
+    const requestedOrg = requestedOrgRaw.trim();
     if (!requestedOrg) {
-      throw new Error('organisation_missing');
+      ctx.invalid = true;
+      ctx.blocked = false;
+      ctx.rateLimited = false;
+      ctx.routePolicy = undefined;
+      ctx.routeDecision = undefined;
+      ctx.routingOutcome = {
+        status: 'invalid',
+        httpStatus: 400,
+        error: createErrorEnvelope(
+          'invalid_input',
+          'organisation_missing',
+          { referralId: envelope.payload.referralId },
+          ctx.correlationId,
+        ),
+      };
+      this.recordAudit(ctx, 'ics.referral.validation_failed', {
+        reason: 'organisation_missing',
+        referralId: envelope.payload.referralId,
+      });
+      routingDecisionCounter.add(1, { outcome: 'invalid' });
+      return 'Validated';
     }
 
     const correlationId = ctx.correlationId;
+    this.recordAudit(ctx, 'ics.referral.received', {
+      referralId: envelope.payload.referralId,
+      organisationId: requestedOrg,
+    }, correlationId);
+
     const normalisedOrg = normaliseOrgId(requestedOrg);
     ctx.organisationId = normalisedOrg;
+
+    const routeDecision = buildRouteDecision(envelope.payload, this.routingConfig);
+    ctx.routeDecision = routeDecision;
+    ctx.destinationOrgId = routeDecision.destinationOrgId;
+    this.recordAudit(ctx, 'ics.referral.route_decided', {
+      referralId: envelope.payload.referralId,
+      destinationOrgId: routeDecision.destinationOrgId,
+      policy: routeDecision.policy,
+    }, correlationId);
 
     const policy = this.policies.get(normalisedOrg);
     if (!policy) {
@@ -152,7 +253,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       ctx.routingOutcome = {
         status: 'forbidden',
         httpStatus: 403,
-        error: buildErrorEnvelope(
+        error: createErrorEnvelope(
           'forbidden',
           'organisation_not_allowed',
           {
@@ -183,7 +284,8 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
         httpStatus: 429,
         policy,
         retryAfterMs,
-        error: buildErrorEnvelope(
+        routeDecision,
+        error: createErrorEnvelope(
           'too_many_requests',
           'rate_limit_exceeded',
           {
@@ -211,9 +313,30 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     ctx.routingOutcome = {
       status: 'allowed',
       policy,
+      routeDecision,
     };
     routingDecisionCounter.add(1, { outcome: 'allowed', organisationId: normalisedOrg });
     return 'Validated';
+  }
+
+  private timestamp(): string {
+    return new Date(this.now()).toISOString();
+  }
+
+  private recordAudit(
+    ctx: IcsContext,
+    type: string,
+    details: Record<string, unknown>,
+    correlationId?: string,
+  ): void {
+    const event: AuditEvent = {
+      type,
+      timestamp: this.timestamp(),
+      correlationId: correlationId ?? null,
+      actor: null,
+      details,
+    };
+    ctx.auditIntents?.push(event);
   }
 }
 
@@ -223,11 +346,15 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
   }
 
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (ctx.routingOutcome?.status === 'invalid') {
+      ctx.invalid = true;
+      return 'Invalid';
+    }
     if (ctx.blocked) {
       ctx.routingOutcome ??= {
         status: 'forbidden',
         httpStatus: 403,
-        error: buildErrorEnvelope('forbidden', 'organisation_not_allowed'),
+        error: createErrorEnvelope('forbidden', 'organisation_not_allowed'),
       };
       return 'Blocked';
     }
@@ -236,7 +363,8 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
         status: 'rate_limited',
         httpStatus: 429,
         policy: ctx.routePolicy!,
-        error: buildErrorEnvelope('too_many_requests', 'rate_limit_exceeded'),
+        routeDecision: ctx.routeDecision ?? buildRouteDecisionFromContext(ctx),
+        error: createErrorEnvelope('too_many_requests', 'rate_limit_exceeded'),
       };
       return 'RateLimited';
     }
@@ -257,19 +385,85 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
   }
 }
 
-function buildErrorEnvelope(
-  code: Extract<ErrorObject['code'], 'forbidden' | 'too_many_requests'>,
-  message: string,
-  details?: Record<string, unknown>,
-  correlationId?: string,
-): ErrorEnvelope {
-  const error: ErrorObject = {
-    code,
-    message,
-    ...(details ? { details } : {}),
-    ...(correlationId ? { correlationId } : {}),
+export class InvalidState extends BaseState<IcsContext, IcsEvent> {
+  constructor() {
+    super('Invalid');
+  }
+
+  async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    return 'Invalid';
+  }
+}
+
+function buildRouteDecisionFromContext(ctx: IcsContext): RouteDecision {
+  if (ctx.routeDecision) return ctx.routeDecision;
+  if (ctx.referral) {
+    return buildRouteDecision(ctx.referral, {});
+  }
+  return {
+    destinationOrgId: ctx.destinationOrgId ?? 'unknown',
+    policy: 'fallback',
+    rationale: 'route decision unavailable; using fallback',
   };
-  return { error };
+}
+
+export interface AutomationEvaluationOptions {
+  config?: AutomationTriggerConfig;
+  createTaskId?: () => string;
+  correlationId?: string;
+  now?: () => string;
+}
+
+export function evaluateAutomation(
+  ctx: IcsContext,
+  event: AutomationTriggerEvent,
+  options: AutomationEvaluationOptions = {},
+): AutomationTaskCreation[] {
+  if (!event || !event.current) {
+    throw new Error('automation_event_invalid');
+  }
+
+  const config =
+    options.config ??
+    ctx.automationConfig ??
+    loadAutomationConfig();
+  ctx.automationConfig = config;
+  ctx.automationEvent = event;
+
+  if (options.createTaskId) {
+    ctx.createTaskId = options.createTaskId;
+  }
+
+  if (options.correlationId) {
+    ctx.correlationId = options.correlationId;
+  } else if (!ctx.correlationId && event.correlationId) {
+    ctx.correlationId = event.correlationId;
+  }
+
+  const intents = evaluateAutomationTriggers(event, config);
+  ctx.automationIntents = intents;
+
+  const tasks = buildAutomationTaskCreations(intents, {
+    createTaskId: ctx.createTaskId,
+    correlationId: ctx.correlationId,
+    now: options.now,
+  });
+  ctx.automationTasks = tasks;
+  return tasks;
+}
+
+export async function publishAutomationOutputs(
+  ctx: IcsContext,
+  options: AutomationPublishOptions = {},
+): Promise<void> {
+  if (!ctx.bus) {
+    throw new Error('automation_bus_missing');
+  }
+  if (!ctx.automationTasks || ctx.automationTasks.length === 0) {
+    return;
+  }
+  await publishAutomationTasks(ctx.bus, ctx.automationTasks, options);
+  ctx.automationPublished = true;
 }
 
 export class AckedState extends BaseState<IcsContext, IcsEvent> {

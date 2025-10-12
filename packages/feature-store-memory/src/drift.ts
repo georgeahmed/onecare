@@ -148,9 +148,9 @@ function histogram(
   bins: number,
   epsilon: number
 ): number[] {
-  const counts = new Array<number>(bins).fill(0);
+  const counts = new Array<number>(bins).fill(epsilon);
   if (min === max) {
-    counts[0] = values.length;
+    counts[0] += values.length;
   } else {
     const range = max - min;
     const width = range / bins;
@@ -160,9 +160,8 @@ function histogram(
     }
   }
 
-  const total = values.length;
-  const smoothing = epsilon;
-  return counts.map((count) => (count === 0 ? smoothing : count / total));
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  return counts.map((count) => (total > 0 ? count / total : 0));
 }
 
 function mean(data: readonly number[]): number {

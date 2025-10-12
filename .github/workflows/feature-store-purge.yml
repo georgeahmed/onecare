@@ -1,0 +1,61 @@
+name: Feature Store Purge
+
+on:
+  schedule:
+    # Runs daily at 02:30 UTC; adjust when aligning with maintenance windows.
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  purge:
+    name: Purge ${{ matrix.env }} feature store
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - env: dev
+            connectionSecret: FEATURE_STORE_URL_DEV
+            retentionDays: 30
+            practiceId: demo
+          - env: staging
+            connectionSecret: FEATURE_STORE_URL_STAGING
+            retentionDays: 45
+            practiceId: demo
+          - env: prod
+            connectionSecret: FEATURE_STORE_URL_PROD
+            retentionDays: 90
+            practiceId: demo
+    env:
+      FEATURE_STORE_URL: ${{ secrets[matrix.connectionSecret] }}
+      PRACTICE_ID: ${{ matrix.practiceId }}
+      FEATURE_STORE_RETENTION_DAYS: ${{ matrix.retentionDays }}
+    steps:
+      - name: Check purge configuration
+        id: config
+        run: |
+          if [ -z "${FEATURE_STORE_URL}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Feature store purge skipped::Secret '${{ matrix.connectionSecret }}' not configured for ${{ matrix.env }} environment."
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.configured == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.config.outputs.configured == 'true'
+        with:
+          node-version: '20'
+
+      - name: Install production dependencies
+        if: steps.config.outputs.configured == 'true'
+        run: npm ci --omit=dev
+
+      - name: Run feature store purge
+        if: steps.config.outputs.configured == 'true'
+        run: >
+          node scripts/feature_store_purge.js
+          --url "${FEATURE_STORE_URL}"
+          --retention-days "${{ matrix.retentionDays }}"
+          --practice "${{ matrix.practiceId }}"

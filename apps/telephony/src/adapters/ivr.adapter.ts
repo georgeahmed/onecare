@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { registerPromptHandler } from './ivr.prompts';
 
 export interface CallMetadata {
   callerId: string;
@@ -20,6 +21,12 @@ export interface StoredCall {
   metadata: CallMetadata;
   startedAt: number;
   chunks: StoredAudioChunk[];
+  prompts: StoredPrompt[];
+}
+
+export interface StoredPrompt {
+  text: string;
+  queuedAt: number;
 }
 
 export type Clock = () => number;
@@ -28,15 +35,18 @@ export interface AudioStore {
   init(callId: string, metadata: CallMetadata, startedAt: number): Promise<void>;
   append(callId: string, chunk: Buffer, sequence: number, receivedAt: number): Promise<StoredAudioChunk>;
   get(callId: string): StoredCall | undefined;
+  recordPrompt(callId: string, prompt: string, queuedAt: number): Promise<StoredPrompt>;
 }
 
 export interface IngestEventPublisher {
   callStarted(callId: string, metadata: CallMetadata): Promise<void> | void;
   audioChunkStored(callId: string, chunk: StoredAudioChunk): Promise<void> | void;
+  promptQueued?(callId: string, prompt: StoredPrompt): Promise<void> | void;
 }
 
 export interface IvrCallSession {
   onAudioChunk(buffer: Buffer): Promise<void>;
+  queuePrompt(prompt: string): Promise<void>;
 }
 
 export interface IvrAdapter {
@@ -67,6 +77,7 @@ const noopPublisher: IngestEventPublisher = {
   // Future pipeline integrations hook in here; keep side effects isolated.
   callStarted: async () => undefined,
   audioChunkStored: async () => undefined,
+  promptQueued: async () => undefined,
 };
 
 const now: Clock = () => Date.now();
@@ -82,6 +93,7 @@ export class InMemoryAudioStore implements AudioStore {
       metadata: { ...metadata },
       startedAt,
       chunks: [],
+      prompts: [],
     });
   }
 
@@ -116,7 +128,21 @@ export class InMemoryAudioStore implements AudioStore {
         checksum: chunk.checksum,
         data: Buffer.from(chunk.data),
       })),
+      prompts: call.prompts.map((prompt) => ({ ...prompt })),
     };
+  }
+
+  async recordPrompt(callId: string, prompt: string, queuedAt: number): Promise<StoredPrompt> {
+    const call = this.calls.get(callId);
+    if (!call) {
+      throw new IvrIngestAdapterError('call_not_initialized', `call ${callId} not initialized`);
+    }
+    const stored: StoredPrompt = {
+      text: prompt,
+      queuedAt,
+    };
+    call.prompts.push(stored);
+    return stored;
   }
 }
 
@@ -141,6 +167,13 @@ class DefaultCallSession implements IvrCallSession {
     const stored = await this.store.append(this.callId, buffer, this.sequence, this.clock());
     this.sequence += 1;
     await Promise.resolve(this.events.audioChunkStored(this.callId, stored));
+  }
+
+  async queuePrompt(prompt: string): Promise<void> {
+    const sanitized = prompt?.trim();
+    if (!sanitized) return;
+    const stored = await this.store.recordPrompt(this.callId, sanitized, this.clock());
+    await Promise.resolve(this.events.promptQueued?.(this.callId, stored));
   }
 }
 
@@ -171,7 +204,8 @@ export class IvrIngestAdapter implements IvrAdapter {
     const startedAt = this.clock();
     await this.store.init(normalizedCallId, sanitizedMetadata, startedAt);
     await Promise.resolve(this.events.callStarted(normalizedCallId, sanitizedMetadata));
-    return new DefaultCallSession(normalizedCallId, this.store, this.events, this.clock);
+    const session = new DefaultCallSession(normalizedCallId, this.store, this.events, this.clock);
+    registerPromptHandler(normalizedCallId, (prompt) => session.queuePrompt(prompt));
+    return session;
   }
 }
-

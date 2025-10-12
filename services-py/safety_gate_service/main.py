@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import math
+import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -12,12 +16,15 @@ from typing import Any, Mapping, Optional
 from uuid import uuid4
 from urllib import error as urllib_error, request as urllib_request
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from common.contracts.models import PortalSubmission, SafetyDecision
 from common.otel import instrument_fastapi
 from .acuity import AcuityModel
 from .analyzer import AnalysisOutcome, analyze_submission
 from .classifier import EmergencyClassifier
+from .metrics import record_latency, render_metrics
 from .decision import DEFAULT_RED_FLAG_SET
 from .ner import SafetyNER
 
@@ -33,6 +40,16 @@ _DECISION_CONFIG: Optional[dict[str, Any]] = None
 _DECISION_CONFIG_LOCK = Lock()
 _FEATURE_LOG_ENDPOINT_ENV = "FEATURE_LOG_ENDPOINT"
 _FEATURE_LOG_TIMEOUT = 0.5
+_DEFAULT_LATENCY_SLO_MS = 800.0
+_SENSITIVE_ID_KEYS = {"patientid", "entityid"}
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+", re.IGNORECASE)
+_PHONE_RE = re.compile(r"\b(?:\+?\d[\d\s\-]{7,}\d)\b")
+_DIGIT_RE = re.compile(r"\b\d{6,}\b")
+
+
+def _extract_correlation_id(request: Request) -> str:
+    header = request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
+    return header or str(uuid4())
 
 
 def _feature_logging_enabled() -> bool:
@@ -44,6 +61,20 @@ def _feature_log_endpoint() -> Optional[str]:
     candidate = os.getenv(_FEATURE_LOG_ENDPOINT_ENV, "http://orchestrator:3001/feature-log")
     trimmed = candidate.strip()
     return trimmed or None
+
+
+def _clamp_rate(value: Any) -> float:
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(rate):
+        return 0.0
+    if rate < 0:
+        return 0.0
+    if rate > 1:
+        return 1.0
+    return rate
 
 
 def _emit_feature_log(payload: dict[str, Any]) -> None:
@@ -103,19 +134,31 @@ def _log_safety_features(
         },
     }
 
-    analysis_id = str(uuid4())
-    payload = {
-        "source": "safety",
-        "entityId": submission.patient.id,
-        "patientId": submission.patient.id,
-        "correlationId": correlation_id,
-        "features": feature_packet,
-        "metadata": {
+    feature_packet = _sanitize_payload(feature_packet)
+
+    sanitized_metadata = _sanitize_payload(
+        {
             "practiceId": submission.practiceId,
             "channel": submission.channel,
-            "analysisId": analysis_id,
+            "analysisId": str(uuid4()),
             "recordedAt": datetime.now(timezone.utc).isoformat(),
-        },
+        }
+    )
+
+    patient_identifiers = _sanitize_payload(
+        {
+            "entityId": submission.patient.id,
+            "patientId": submission.patient.id,
+        }
+    )
+
+    payload = {
+        "source": "safety",
+        "entityId": patient_identifiers.get("entityId"),
+        "patientId": patient_identifiers.get("patientId"),
+        "correlationId": correlation_id,
+        "features": feature_packet,
+        "metadata": sanitized_metadata,
     }
 
     _emit_feature_log(payload)
@@ -197,6 +240,8 @@ def _load_decision_config() -> dict[str, Any]:
         "acuity_threshold_emergency": 0.75,
         "timeout_ms": 800,
         "fallback": "rules",
+        "log_sample_rate": 0.1,
+        "latency_slo_p95_ms": _DEFAULT_LATENCY_SLO_MS,
     }
 
     root = Path(__file__).resolve().parents[2]
@@ -237,6 +282,8 @@ def _load_decision_config() -> dict[str, Any]:
             "acuity_threshold_emergency",
             "timeout_ms",
             "fallback",
+            "log_sample_rate",
+            "latency_slo_p95_ms",
         ):
             if key in safety_gate_cfg:
                 base_config[key] = safety_gate_cfg[key]
@@ -318,6 +365,7 @@ def ready() -> dict[str, str]:
 
 @app.post("/analyze", response_model=SafetyDecision)
 async def analyze(request: Request, submission: PortalSubmission, response: Response) -> SafetyDecision:
+    start_time = time.perf_counter()
     narrative_raw = submission.narrative or ""
     classifier = getattr(app.state, "classifier", None) or get_classifier()
     ner = getattr(app.state, "ner", None) or get_ner()
@@ -336,7 +384,20 @@ async def analyze(request: Request, submission: PortalSubmission, response: Resp
         correlation_id=correlation_id,
     )
 
-    if _feature_logging_enabled():
+    elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+    latency_snapshot = record_latency(elapsed_ms)
+    slo_p95 = float(decision_config.get("latency_slo_p95_ms", _DEFAULT_LATENCY_SLO_MS))
+    p95 = latency_snapshot.get("p95")
+    if p95 is not None and p95 > slo_p95:
+        LOGGER.warning(
+            "safety_gate.latency_slo_exceeded correlation_id=%s p95_ms=%.2f slo_ms=%.2f",
+            correlation_id,
+            p95,
+            slo_p95,
+        )
+
+    log_sample_rate = _clamp_rate(decision_config.get("log_sample_rate", 0.1))
+    if _feature_logging_enabled() and log_sample_rate > 0 and random.random() <= log_sample_rate:
         artifacts = outcome.artifacts or {}
         classification = artifacts.get("classification") if isinstance(artifacts.get("classification"), Mapping) else {}
         nlp_payload = artifacts.get("nlp") if isinstance(artifacts.get("nlp"), Mapping) else {}
@@ -346,10 +407,40 @@ async def analyze(request: Request, submission: PortalSubmission, response: Resp
         _log_safety_features(
             submission=submission,
             correlation_id=correlation_id,
-            classification=classification,
-            nlp_payload=nlp_payload,
+            classification=_sanitize_payload(classification),
+            nlp_payload=_sanitize_payload(nlp_payload),
             decision_result=outcome.decision,
-            lexical_hits=red_flags,
+            lexical_hits=[_redact_pii(str(item)) for item in red_flags],
         )
 
     return SafetyDecision(outcome=outcome.decision.outcome, reason=outcome.decision.rationale.get("reason"))
+
+
+@app.get("/metrics")
+def metrics_endpoint() -> Response:
+    return Response(content=render_metrics(), media_type="text/plain; version=0.0.4")
+
+
+def _sanitize_payload(value: Any, key: Optional[str] = None) -> Any:
+    if isinstance(value, dict):
+        return {k: _sanitize_payload(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, str):
+        if key and key.lower() in _SENSITIVE_ID_KEYS:
+            return "[REDACTED_ID]"
+        if key and key.lower() == "correlationid":
+            return value
+        return _redact_pii(value)
+    if isinstance(value, (int, float)) and key and key.lower() in _SENSITIVE_ID_KEYS:
+        return "[REDACTED_ID]"
+    return value
+
+
+def _redact_pii(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    redacted = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
+    redacted = _PHONE_RE.sub("[REDACTED_PHONE]", redacted)
+    redacted = _DIGIT_RE.sub("[REDACTED_NUMBER]", redacted)
+    return redacted
