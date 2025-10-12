@@ -1,0 +1,11 @@
+# Safety Gate classifier thresholds; defaults can be overridden per practice.
+defaults:
+  emergency_confidence: 0.72
+
+models:
+  stub-v1:
+    emergency_confidence: 0.70
+  bioclinical-bert-v1:
+    thresholds:
+      control: 0.72
+      experiment: 0.78

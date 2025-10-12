@@ -1,0 +1,8 @@
+{"name":"requests_total","value":5,"labels":{"service":"booking"},"timestamp":"2025-10-11T10:00:00Z"}
+{"name":"requests_total","value":8,"labels":{"service":"booking"},"timestamp":"2025-10-11T12:00:00Z"}
+{"name":"latency_ms","value":120,"timestamp":"2025-10-11T09:00:00Z"}
+{"name":"latency_ms","value":"150","timestamp":"2025-10-11T10:00:00Z"}
+{"name":"latency_ms","value":200,"timestamp":"2025-10-11T11:00:00Z"}
+{"name":"latency_ms","value":"bad","timestamp":"2025-10-11T12:00:00Z"}
+{"name":"requests_total","value":12,"timestamp":"2025-10-12T09:00:00Z"}
+{"name":"latency_ms","value":110,"timestamp":"2025-10-12T09:05:00Z"}

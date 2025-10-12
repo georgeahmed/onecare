@@ -99,6 +99,13 @@ Exposed ports
 - Scribe: localhost:8082
 - NATS (dev): localhost:4222 (client), 8222 (monitor)
 
+Analytics Consumer
+- Build: `npm run --workspace @onecare/app-analytics build`
+- Run locally (memory bus + JSONL sink): `npm run --workspace @onecare/app-analytics start`
+- Configure bus via `NATS_URL` (optional); override sink path with `ANALYTICS_SINK_PATH`.
+- Docker: `docker compose up analytics` starts the worker alongside NATS and writes metrics under the `analytics-metrics` volume.
+- Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
+
 Team & Status
 - Team status: make team-status
 - Update progress from checkboxes: make team-status-write

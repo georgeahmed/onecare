@@ -7,4 +7,9 @@ export {
   resolveAnalyticsSinkPath,
 } from './sink/fileSink';
 export type { AnalyticsSink, FileSinkOptions } from './sink/fileSink';
-export { AnalyticsConsumer, startAnalyticsConsumer } from './consumer';
+export {
+  AnalyticsConsumer,
+  AnalyticsMetricSinkError,
+  AnalyticsMetricValidationError,
+  startAnalyticsConsumer,
+} from './consumer';

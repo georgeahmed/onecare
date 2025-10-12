@@ -92,9 +92,9 @@ services:
           memory: 384M
     depends_on:
       safety-gate:
-        condition: service_started
+        condition: service_healthy
       scribe:
-        condition: service_started
+        condition: service_healthy
       nats:
         condition: service_healthy
 
@@ -132,5 +132,33 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  analytics:
+    build:
+      context: .
+      dockerfile: apps/analytics/Dockerfile
+    restart: unless-stopped
+    environment:
+      - BUS_IMPL=nats
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+      - NATS_CONNECT_TIMEOUT_MS=2000
+      - NATS_MAX_RECONNECT_ATTEMPTS=10
+      - ANALYTICS_SINK_PATH=/var/analytics/metrics.jsonl
+    volumes:
+      - analytics-metrics:/var/analytics
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    depends_on:
+      nats:
+        condition: service_healthy
+
 volumes:
   nats-data:
+  analytics-metrics:

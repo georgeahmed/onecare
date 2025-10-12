@@ -1,17 +1,31 @@
 # ML Services Runtime Environment
 
-This guide lists the environment variables and secrets required by the Python ML services (`safety_gate_service` and `scribe_service`). Populate real values from Vault-backed secrets; never commit populated `.env` files.
+This guide lists the environment variables and secrets required by the Python ML services (`safety_gate_service` and `scribe_service`) plus the orchestration endpoints that call them. Populate real values from Vault-backed secrets; never commit populated `.env` files.
 
 ## Global toggles
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `OTEL_ENABLED` | Enables lightweight OTEL-style logging/metrics (`1`/`true` to enable). | `0` |
+| `OTEL_ENABLED` | Enables lightweight OTEL-style logging/metrics (`1`/`true` to enable). Safe to flip on locally for debugging. | `0` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint if exporting real telemetry (optional for dev). | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers (e.g., `x-api-key=...`). | empty |
 | `OTEL_RESOURCE_ATTRIBUTES` | Service/resource attributes (`service.name=...`). | varies |
 
 Vault path: `kv/observability/otel/*`
+
+## Service endpoints & ports
+
+These values are shared between the Node orchestrator and the Python services. Defaults align with `docker-compose.yml`. Override per environment when deploying.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PY_SAFETY_GATE_URL` | Base URL used by orchestrator to reach the safety gate container. | `http://safety-gate:8081` (compose) |
+| `PY_SCRIBE_URL` | Base URL used by orchestrator to reach the scribe container. | `http://scribe:8082` (compose) |
+| `SAFETY_GATE_PORT` | Optional override for the Uvicorn port inside the safety gate container. | `8081` |
+| `SCRIBE_PORT` | Optional override for the Uvicorn port inside the scribe container. | `8082` |
+| `OTEL_ENABLED` | See table above—repeat here for clarity when injecting into container env. | `0` |
+
+Vault path: not required; values are non-secret but should be stored in environment management (ConfigMap/Parameter Store).
 
 ## Safety Gate Service
 

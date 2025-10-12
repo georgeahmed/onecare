@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable
 from typing import Any, Dict, List, Mapping
@@ -45,11 +46,13 @@ def _build_stub_pipeline() -> Callable[[str], list[dict[str, str]]]:
         "er": "CONTEXT",
     }
 
+    compiled = [(re.compile(rf"\b{re.escape(phrase)}\b"), phrase, label) for phrase, label in keyword_map.items()]
+
     def _pipeline(text: str) -> list[dict[str, str]]:
         lowered = text.lower()
         results: list[dict[str, str]] = []
-        for phrase, label in keyword_map.items():
-            if phrase in lowered:
+        for pattern, phrase, label in compiled:
+            if pattern.search(lowered):
                 results.append({"entity_group": label, "word": phrase})
         return results
 
