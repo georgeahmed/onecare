@@ -8,16 +8,34 @@ export function deriveIdempotencyKey(
   explicitKey?: string
 ): string {
   if (explicitKey) return explicitKey;
-  const safe = {
-    practiceId: submission.practiceId,
-    patientId: submission.patient?.id,
-    narrativeLength: submission.narrative?.length ?? 0,
-    attachmentsCount: Array.isArray(submission.attachments) ? submission.attachments.length : 0,
-    channel: submission.channel,
-  };
   const h = createHash('sha256');
-  h.update(JSON.stringify(safe));
-  if (actorId) h.update(`:${actorId}`);
+  const components: Array<string | undefined> = [
+    submission.practiceId,
+    submission.patient?.id,
+    submission.channel,
+    submission.narrative,
+  ];
+
+  for (const component of components) {
+    h.update('\u0000');
+    if (component) h.update(component);
+  }
+
+  if (Array.isArray(submission.attachments) && submission.attachments.length > 0) {
+    const normalized = submission.attachments
+      .map((attachment) => `${attachment.contentType ?? ''}::${attachment.url ?? ''}`)
+      .sort();
+    for (const value of normalized) {
+      h.update('\u0001');
+      h.update(value);
+    }
+  }
+
+  if (actorId) {
+    h.update('\u0002');
+    h.update(actorId);
+  }
+
   return h.digest('hex');
 }
 

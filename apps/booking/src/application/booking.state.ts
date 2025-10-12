@@ -1,12 +1,18 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
-import type { GpConnectClient } from '../adapters/gpconnect.client';
-import { mapSlotsToView, type SlotView } from '../adapters/gpconnect.client';
+import {
+  mapSlotsToView,
+  type SlotView,
+  GpConnectClientError,
+} from '../adapters/gpconnect.client';
+import type { GpConnectClient, SearchSlotsParams } from '../adapters/gpconnect.client';
 import type { EnhancedAccessPolicy, RejectedSlot } from './enhancedAccess';
 import { applyEnhancedAccessFilters } from './enhancedAccess';
 import type { FhirRepository } from '@onecare/ports';
 import type { QueueNotifier } from '@onecare/ports';
 import { logger } from '@onecare/observability';
+import type { MessageBus } from '@onecare/bus';
+import { Topics, createEnvelope, type AppointmentCreated } from '@onecare/events';
 
 export interface BookingAuditPublisher {
   emit(event: { type: string; payload: Record<string, unknown> }): Promise<void>;
@@ -28,11 +34,33 @@ export interface BookingContext extends MachineContext {
   queueName?: string;
   auditPublisher?: BookingAuditPublisher;
   correlationId?: string;
+  bus?: MessageBus;
 }
 
 export interface BookingEvent extends MachineEvent {
   type: 'booking.search' | 'booking.select' | 'booking.book' | string;
   payload?: unknown;
+}
+
+export class BookingSearchError extends Error {
+  constructor(public readonly code: string, public readonly cause?: unknown) {
+    super(code);
+    this.name = 'BookingSearchError';
+  }
+}
+
+export class BookingAppointmentError extends Error {
+  constructor(public readonly code: string, public readonly cause?: unknown) {
+    super(code);
+    this.name = 'BookingAppointmentError';
+  }
+}
+
+interface NormalizedSearchParams {
+  organisationId: string;
+  serviceType: string;
+  windowStart: string;
+  windowEnd: string;
 }
 
 export class SearchState extends BaseState<BookingContext, BookingEvent> {
@@ -42,21 +70,138 @@ export class SearchState extends BaseState<BookingContext, BookingEvent> {
 
   async handle(ctx: BookingContext, _evt: BookingEvent): Promise<string> {
     if (!ctx.client) throw new Error('gp_connect_client_missing');
-    const params = ctx.searchParams ?? {};
-    const response = await ctx.client.searchSlots({
-      organisationId: String((params as { organisationId?: string }).organisationId ?? 'demo-org'),
-      serviceType: (params as { serviceType?: string }).serviceType,
-    });
-    const slots = mapSlotsToView(response);
-    if (ctx.enhancedAccessPolicy) {
-      const result = applyEnhancedAccessFilters(slots, ctx.enhancedAccessPolicy);
-      ctx.slots = result.accepted;
-      ctx.rejectedSlots = result.rejected;
-    } else {
-      ctx.slots = slots;
-      ctx.rejectedSlots = [];
+    const searchParams = buildSearchRequest(ctx.searchParams);
+    let response;
+    try {
+      response = await ctx.client.searchSlots(searchParams);
+    } catch (error) {
+      const friendly = mapSearchError(error);
+      logger.error('booking.search.failed', {
+        code: friendly.code,
+        correlationId: ctx.correlationId,
+      });
+      throw friendly;
     }
+    const slots = mapSlotsToView(response);
+    applySlotsToContext(ctx, slots);
     return 'Selected';
+  }
+}
+
+function buildSearchRequest(raw: Record<string, unknown> | undefined): SearchSlotsParams {
+  const normalized = normalizeSearchParams(raw);
+  return {
+    organisationId: normalized.organisationId,
+    serviceType: normalized.serviceType,
+    startDate: normalized.windowStart,
+    endDate: normalized.windowEnd,
+  };
+}
+
+function applySlotsToContext(ctx: BookingContext, slots: SlotView[]): void {
+  if (ctx.enhancedAccessPolicy) {
+    const result = applyEnhancedAccessFilters(slots, ctx.enhancedAccessPolicy);
+    ctx.slots = result.accepted;
+    ctx.rejectedSlots = result.rejected;
+  } else {
+    ctx.slots = slots;
+    ctx.rejectedSlots = [];
+  }
+}
+
+function normalizeSearchParams(raw: Record<string, unknown> | undefined): NormalizedSearchParams {
+  const source = raw ?? {};
+  const serviceType = readString(source, ['serviceType', 'service_type']);
+  const windowStart = readString(source, ['windowStart', 'window_start']);
+  const windowEnd = readString(source, ['windowEnd', 'window_end']);
+  if (!serviceType || !windowStart || !windowEnd) {
+    throw new BookingSearchError('booking.search.invalid_params');
+  }
+  const organisation =
+    readString(source, ['organisationId', 'organisation_id', 'location']) ?? 'demo-org';
+  return {
+    organisationId: organisation,
+    serviceType,
+    windowStart,
+    windowEnd,
+  };
+}
+
+function readString(source: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function mapSearchError(error: unknown): BookingSearchError {
+  if (error instanceof BookingSearchError) return error;
+  if (error instanceof GpConnectClientError) {
+    if (error.code === 'unavailable') {
+      return new BookingSearchError('booking.search.unavailable', error);
+    }
+  }
+  return new BookingSearchError('booking.search.failed', error);
+}
+
+function mapCreateError(error: unknown): BookingAppointmentError {
+  if (error instanceof BookingAppointmentError) return error;
+  if (error instanceof GpConnectClientError) {
+    if (error.code === 'conflict') {
+      return new BookingAppointmentError('booking.create.conflict', error);
+    }
+    if (error.code === 'unavailable') {
+      return new BookingAppointmentError('booking.create.unavailable', error);
+    }
+  }
+  return new BookingAppointmentError('booking.create.failed', error);
+}
+
+async function refreshSlotsAfterConflict(ctx: BookingContext): Promise<void> {
+  try {
+    const params = buildSearchRequest(ctx.searchParams);
+    const refreshed = await ctx.client?.searchSlots(params);
+    if (refreshed) {
+      applySlotsToContext(ctx, mapSlotsToView(refreshed));
+    }
+  } catch (error) {
+    logger.debug('booking.conflict.refresh_skip', {
+      reason: (error as Error).message,
+      correlationId: ctx.correlationId,
+    });
+  }
+}
+
+async function publishAppointmentCreated(
+  ctx: BookingContext,
+  confirmation: { appointmentId: string; slotId: string; start: string; end: string },
+): Promise<void> {
+  if (!ctx.bus) return;
+  if (!ctx.patientId) return;
+  const slot = ctx.selectedSlot;
+  const payload: AppointmentCreated = {
+    appointmentId: confirmation.appointmentId,
+    patientId: ctx.patientId,
+    start: slot?.start ?? confirmation.start,
+    end: slot?.end ?? confirmation.end,
+  };
+  if (slot?.organisationId) {
+    payload.location = slot.organisationId;
+  }
+  const envelope = createEnvelope(Topics.booking.appointmentCreated, payload, ctx.correlationId);
+  try {
+    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
+    await ctx.bus.publish(Topics.booking.appointmentCreated, envelope, headers);
+    logger.info('booking.create.event_published', {
+      appointmentId: confirmation.appointmentId,
+      correlationId: ctx.correlationId,
+    });
+  } catch (error) {
+    throw new BookingAppointmentError('booking.create.event_failed', error);
   }
 }
 
@@ -83,6 +228,7 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
 
   async handle(ctx: BookingContext, _evt: BookingEvent): Promise<string> {
     if (!ctx.client) throw new Error('gp_connect_client_missing');
+    if (!ctx.bus) throw new Error('bus_missing');
     const slot = ctx.selectedSlot;
     if (!slot) {
       throw new Error('slot_not_selected');
@@ -91,11 +237,31 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
       throw new Error('patient_id_missing');
     }
 
-    const confirmation = await ctx.client.createAppointment({
-      slotId: slot.id,
-      patientId: ctx.patientId,
-      reason: ctx.narrative ?? 'booking request',
-    });
+    let confirmation;
+    try {
+      confirmation = await ctx.client.createAppointment({
+        slotId: slot.id,
+        patientId: ctx.patientId,
+        reason: ctx.narrative ?? 'booking request',
+      });
+    } catch (error) {
+      const mapped = mapCreateError(error);
+      if (mapped.code === 'booking.create.conflict') {
+        await refreshSlotsAfterConflict(ctx).catch((refreshError) => {
+          logger.warn('booking.conflict.refresh_failed', {
+            reason: (refreshError as Error).message,
+            correlationId: ctx.correlationId,
+          });
+        });
+      }
+      logger.warn('booking.create.failed', {
+        code: mapped.code,
+        slotId: slot.id,
+        correlationId: ctx.correlationId,
+      });
+      throw mapped;
+    }
+
     ctx.appointmentConfirmation = {
       appointmentId: confirmation.appointmentId,
       slotId: confirmation.slotId,
@@ -103,6 +269,7 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
     await persistAppointment(ctx, confirmation);
     await notifyQueue(ctx, confirmation);
     await emitAudit(ctx, confirmation);
+    await publishAppointmentCreated(ctx, confirmation);
     return 'WrittenBack';
   }
 }

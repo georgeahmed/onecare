@@ -59,13 +59,13 @@ export class NatsBus implements MessageBus {
   }
 
   async publish<T>(topic: string, payload: T, headers?: Record<string, string>): Promise<void> {
-    this.publishedCount += 1;
     try {
       const conn = await this.getConnection();
       const data = this.encoder.encode(JSON.stringify(payload));
       const publishOptions = headers ? { headers: this.toMsgHeaders(headers) } : undefined;
       conn.publish(topic, data, publishOptions);
       await conn.flush();
+      this.publishedCount += 1;
     } catch (err) {
       this.connected = false;
       throw err;
@@ -73,10 +73,10 @@ export class NatsBus implements MessageBus {
   }
 
   async subscribe<T>(topic: string, handler: Handler<T>): Promise<Subscription> {
-    this.subscribedCount += 1;
     const conn = await this.getConnection();
     const queue = this.queueGroupFor(topic);
     const subscription = conn.subscribe(topic, { queue }) as NatsSubscription;
+    this.subscribedCount += 1;
     const consumePromise = this.consume(subscription, handler, topic);
     return {
       unsubscribe: async () => {

@@ -8,3 +8,6 @@ export * from './safety';
 export * from './portal';
 export * from './audit-event';
 export * from './error-envelope';
+export * from './appointment-created';
+export * from './ics-referral-request';
+export * from './ics-referral-ack';

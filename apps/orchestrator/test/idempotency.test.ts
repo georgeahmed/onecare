@@ -91,7 +91,6 @@ describe('idempotency guard', () => {
     const sub = await subscribeTriage((env) => envelopes.push(env));
 
     const first = await postSafetyCheck(submission, authHeaders);
-    await sub.unsubscribe();
 
     expect(first.status).toBe(200);
     const key = first.headers.get('x-idempotency-key');
@@ -105,6 +104,30 @@ describe('idempotency guard', () => {
 
     expect(envelopes).toHaveLength(1);
     expect(envelopes[0]?.payload.patientId).toBe(submission.patient.id);
+
+    await sub.unsubscribe();
+  });
+
+  it('derives different keys for narratives with equal length but different content', async () => {
+    const envelopes: TypedEnvelope<TriageInput>[] = [];
+    const sub = await subscribeTriage((env) => envelopes.push(env));
+
+    const firstSubmission = { ...submission, narrative: '111122223333' };
+    const secondSubmission = { ...submission, narrative: 'aaaabbbbcccc' };
+
+    const first = await postSafetyCheck(firstSubmission, authHeaders);
+    expect(first.status).toBe(200);
+    const firstKey = first.headers.get('x-idempotency-key');
+    expect(firstKey).toBeTruthy();
+
+    const second = await postSafetyCheck(secondSubmission, { ...authHeaders, 'x-request-id': 'req-uniq-3' });
+    expect(second.status).toBe(200);
+    const secondKey = second.headers.get('x-idempotency-key');
+    expect(secondKey).toBeTruthy();
+    expect(secondKey).not.toBe(firstKey);
+
+    await sub.unsubscribe();
+    expect(envelopes).toHaveLength(2);
   });
 
   it('allows only one request to proceed under concurrency', async () => {

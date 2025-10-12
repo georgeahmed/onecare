@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { loadConfig } from '../src/index';
+import { loadConfig, getIcsOrganisationPolicies, getPharmacyEligibilityRules, type ResolvedConfig } from '../src/index';
 
 function writeYaml(root: string, relativePath: string, contents: string) {
   const fullPath = join(root, relativePath);
@@ -168,5 +168,121 @@ describe('loadConfig', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('parses ICS route authRef and rateLimit aliases', () => {
+    const overrides = {
+      ics: {
+        routes: {
+          ORG1: {
+            endpoint: 'https://ics.example/org1',
+            authRef: 'secrets/ics/org1',
+            rateLimit: 5,
+          },
+        },
+      },
+    } as unknown as Partial<ResolvedConfig>;
+
+    const cfg = loadConfig('demo-ics', { overrides });
+    const route = cfg.ics?.routes?.ORG1;
+    expect(route?.authRef).toBe('secrets/ics/org1');
+    expect(route?.rateLimitPerMinute).toBe(5);
+  });
+
+  it('builds ICS organisation policy mapping', () => {
+    const config = {
+      practiceId: 'demo',
+      ics: {
+        routes: {
+          ORG1: {
+            endpoint: 'https://ics.example/org1',
+            authRef: 'secrets/ics/org1',
+            rateLimitPerMinute: 12,
+          },
+          ORG2: {
+            endpoint: 'https://ics.example/org2',
+          },
+        },
+      },
+    } as unknown as Parameters<typeof getIcsOrganisationPolicies>[0];
+
+    const policies = getIcsOrganisationPolicies(config);
+    expect(policies).toEqual({
+      ORG1: {
+        endpoint: 'https://ics.example/org1',
+        authRef: 'secrets/ics/org1',
+        rateLimit: 12,
+      },
+      ORG2: {
+        endpoint: 'https://ics.example/org2',
+      },
+    });
+  });
+
+  it('parses pharmacy eligibility rules with condition overrides', () => {
+    const cfg = loadConfig('pharmacy-demo', {
+      overrides: {
+        pharmacy: {
+          eligibility: {
+            defaultRule: {
+              minAge: 5,
+              maxAge: 80,
+              sex: ['female', 'male'],
+              severity: { allowed: ['mild', 'Moderate'] },
+              exclusions: ['pregnant'],
+            },
+            conditions: {
+              UTI: {
+                age: { min: 16 },
+                sex: ['female'],
+                exclusions: ['catheter'],
+              },
+            },
+          },
+        },
+      } as Partial<ResolvedConfig>,
+    });
+
+    const eligibility = cfg.pharmacy?.eligibility;
+    expect(eligibility?.defaultRule?.age?.min).toBe(5);
+    expect(eligibility?.defaultRule?.age?.max).toBe(80);
+    expect(eligibility?.defaultRule?.sex).toEqual(['female', 'male']);
+    expect(eligibility?.defaultRule?.severity?.allowed).toEqual(['mild', 'moderate']);
+    expect(eligibility?.defaultRule?.exclusions).toEqual(['pregnant']);
+    const utiRule = eligibility?.conditions?.uti;
+    expect(utiRule?.age?.min).toBe(16);
+    expect(utiRule?.age?.max).toBe(80);
+    expect(utiRule?.sex).toEqual(['female']);
+    expect(utiRule?.exclusions).toEqual(['pregnant', 'catheter']);
+  });
+
+  it('clones pharmacy eligibility rules via accessor', () => {
+    const config = {
+      practiceId: 'demo',
+      pharmacy: {
+        eligibility: {
+          defaultRule: {
+            age: { min: 10 },
+            sex: ['male'],
+            exclusions: ['fever'],
+          },
+          conditions: {
+            soreThroat: {
+              sex: ['male', 'female'],
+              severity: { blocked: ['severe'] },
+            },
+          },
+        },
+      },
+    } as unknown as ResolvedConfig;
+
+    const rules = getPharmacyEligibilityRules(config);
+    expect(rules?.conditions?.soreThroat?.severity?.blocked).toEqual(['severe']);
+    if (rules?.defaultRule?.age) {
+      rules.defaultRule.age.min = 99;
+    }
+    rules?.conditions?.soreThroat?.sex?.push('unknown');
+    expect(config.pharmacy?.eligibility?.defaultRule?.age?.min).toBe(10);
+    expect(config.pharmacy?.eligibility?.conditions?.soreThroat?.sex).toEqual(['male', 'female']);
   });
 });

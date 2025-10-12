@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  GpConnectClient,
+  GpConnectHttpClient,
   mapSlotsToView,
-  AppointmentRequest,
+  type AppointmentRequest,
 } from '../src/adapters/gpconnect.client';
 import {
   resetMetrics,
@@ -14,7 +14,7 @@ import {
 
 const envBackup = { ...process.env };
 
-describe('GpConnectClient', () => {
+describe('GpConnectHttpClient', () => {
   beforeEach(() => {
     process.env.GP_CONNECT_URL = 'https://gp-connect.example';
     process.env.GP_CONNECT_API_KEY = 'demo-key';
@@ -23,21 +23,31 @@ describe('GpConnectClient', () => {
     vi.restoreAllMocks();
   });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  process.env = { ...envBackup };
-});
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...envBackup };
+  });
 
   it('creates client from environment variables', () => {
-    const client = GpConnectClient.fromEnv();
+    const client = GpConnectHttpClient.fromEnv();
     expect(client.getBaseUrl()).toBe('https://gp-connect.example');
     expect(client.getTimeoutMs()).toBe(4_000);
     expect(client.getApiKey()).toBe('demo-key');
   });
 
+  it('applies custom auth headers from environment', () => {
+    process.env.GP_CONNECT_AUTH_HEADER_NAME = 'Authorization';
+    process.env.GP_CONNECT_AUTH_HEADER_VALUE = 'Bearer demo';
+    const client = GpConnectHttpClient.fromEnv();
+    expect(client.getAuthHeaders()).toMatchObject({
+      'Ssp-Api-Key': 'demo-key',
+      Authorization: 'Bearer demo',
+    });
+  });
+
   it('searchSlots records metrics and logs success', async () => {
     const infoSpy = vi.spyOn(logger, 'info');
-    const client = GpConnectClient.fromEnv();
+    const client = GpConnectHttpClient.fromEnv();
     setCorrelationId('corr-test');
     const slots = await client.searchSlots({ organisationId: 'org-1', serviceType: 'GP' });
     expect(slots).toHaveLength(1);
@@ -65,7 +75,7 @@ afterEach(() => {
       };
     });
 
-    const client = new GpConnectClient({
+    const client = new GpConnectHttpClient({
       baseUrl: 'https://gp-connect.example',
       apiKey: 'key',
       appointmentExecutor: executor,
@@ -87,7 +97,7 @@ afterEach(() => {
       throw error;
     });
 
-    const client = new GpConnectClient({
+    const client = new GpConnectHttpClient({
       baseUrl: 'https://gp-connect.example',
       apiKey: 'key',
       appointmentExecutor: executor,
@@ -105,7 +115,7 @@ afterEach(() => {
       throw new Error('boom');
     });
 
-    const client = new GpConnectClient({
+    const client = new GpConnectHttpClient({
       baseUrl: 'https://gp-connect.example',
       apiKey: 'key',
       appointmentExecutor: executor,

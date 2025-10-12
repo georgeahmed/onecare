@@ -12,7 +12,6 @@ const tracerName = '@onecare/observability';
 const correlationStorage = new AsyncLocalStorage<CorrelationContext>();
 const correlationAttribute = 'onecare.correlation_id';
 
-let fallbackCorrelationId: string | undefined;
 let tracingEnabled = false;
 let sdkInstance: NodeSDK | undefined;
 let sdkInitPromise: Promise<void> | undefined;
@@ -34,6 +33,7 @@ function shouldEnableTracing(): boolean {
   if (explicit !== undefined) return explicit;
   if (process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) return true;
   if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return true;
+  if (process.env.OTEL_EXPORTER_OTLP_HTTP_ENDPOINT) return true;
   return false;
 }
 
@@ -104,19 +104,22 @@ export function setCorrelationId(id: string | undefined) {
   if (store) {
     store.correlationId = normalized;
   } else {
-    correlationStorage.enterWith({ correlationId: normalized });
+    correlationStorage.enterWith(normalized ? { correlationId: normalized } : {});
   }
-  fallbackCorrelationId = normalized;
   updateCorrelationAttribute(normalized);
 }
 
 export function getCorrelationId(): string | undefined {
   const store = correlationStorage.getStore();
-  return store?.correlationId ?? fallbackCorrelationId;
+  return store?.correlationId;
 }
 
 export function isTracingEnabled(): boolean {
   return tracingEnabled;
+}
+
+export function withCorrelationContext<T>(fn: () => T): T {
+  return correlationStorage.run({}, fn);
 }
 
 export type { Span };

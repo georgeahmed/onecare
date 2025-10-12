@@ -25,6 +25,7 @@ Service Platform Checklist Template
   - CorrelationId propagation; structured logs (no PHI), metrics (counters/histograms), and OpenTelemetry traces configured.
 - Security
   - SSRF allowlists for outbound calls; TLS verification; header/input sanitation; deny-by-default for missing consent.
+  - Outbound client adapters (CPCS, GP Connect, ICS) must redact secrets from logs, propagate correlation IDs, and reuse shared guard rails (timeouts, retries, circuit breakers).
 - Backpressure & Rate Limits
   - Concurrency caps (semaphore) and per-tenant token-bucket limits; 429/503 envelopes; pressure metrics.
 - Health & Shutdown

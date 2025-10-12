@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PortalSubmission } from '@onecare/events';
 
 export interface FhirBundle {
@@ -21,7 +22,7 @@ export function normalizeToFhir(submission: PortalSubmission): FhirBundle {
   const entries: BundleEntry[] = [];
 
   const patientId = submission.patient?.id;
-  const bundleId = `urn:uuid:${cryptoRandom()}`;
+  const bundleId = randomUUID();
 
   if (patientId) {
     entries.push({
@@ -77,10 +78,6 @@ export function normalizeToFhir(submission: PortalSubmission): FhirBundle {
     type: 'transaction',
     entry: entries,
   };
-}
-
-function cryptoRandom(): string {
-  return Math.random().toString(36).slice(2, 10);
 }
 
 export async function validateProfiles(_bundle: FhirBundle): Promise<void> {

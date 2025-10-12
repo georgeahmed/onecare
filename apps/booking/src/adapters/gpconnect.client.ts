@@ -9,6 +9,7 @@ export interface GpConnectClientOptions {
   timeoutMs?: number;
   appointmentExecutor?: AppointmentExecutor;
   practiceId?: string;
+  authHeaders?: Record<string, string>;
 }
 
 export interface SearchSlotsParams {
@@ -18,7 +19,7 @@ export interface SearchSlotsParams {
   endDate?: string;
 }
 
-export interface SlotSummary {
+export interface Slot {
   slotId: string;
   start: string;
   end: string;
@@ -33,7 +34,7 @@ export interface AppointmentRequest {
   performerId?: string;
 }
 
-export interface AppointmentConfirmation {
+export interface AppointmentRef {
   appointmentId: string;
   slotId: string;
   start: string;
@@ -48,7 +49,7 @@ export interface SlotView {
   serviceType?: string;
 }
 
-export type AppointmentExecutor = (request: AppointmentRequest) => Promise<AppointmentConfirmation>;
+export type AppointmentExecutor = (request: AppointmentRequest) => Promise<AppointmentRef>;
 
 export type GpConnectErrorCode = 'conflict' | 'unavailable' | 'unknown';
 
@@ -67,12 +68,18 @@ const createSuccessCounter = createCounter('gp_connect_create_success_total');
 const createErrorCounter = createCounter('gp_connect_create_error_total');
 const createConflictCounter = createCounter('gp_connect_create_conflict_total');
 
-export class GpConnectClient {
+export interface GpConnectClient {
+  searchSlots(params: SearchSlotsParams): Promise<Slot[]>;
+  createAppointment(request: AppointmentRequest): Promise<AppointmentRef>;
+}
+
+export class GpConnectHttpClient implements GpConnectClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
   private readonly appointmentExecutor?: AppointmentExecutor;
   private readonly practiceId?: string;
+  private readonly authHeaders: Record<string, string>;
 
   constructor(options: GpConnectClientOptions) {
     this.baseUrl = options.baseUrl;
@@ -80,22 +87,30 @@ export class GpConnectClient {
     this.timeoutMs = options.timeoutMs ?? 5_000;
     this.appointmentExecutor = options.appointmentExecutor;
     this.practiceId = options.practiceId;
+    this.authHeaders = buildAuthHeaders(options.apiKey, options.authHeaders);
   }
 
-  static fromEnv(): GpConnectClient {
+  static fromEnv(): GpConnectHttpClient {
     const baseUrl = process.env.GP_CONNECT_URL?.trim();
     const apiKey = process.env.GP_CONNECT_API_KEY?.trim();
     if (!baseUrl) throw new Error('gp_connect_url_missing');
     if (!apiKey) throw new Error('gp_connect_api_key_missing');
     const timeoutMs = Number(process.env.GP_CONNECT_TIMEOUT_MS ?? '5000');
-    return new GpConnectClient({
+    const headerName = process.env.GP_CONNECT_AUTH_HEADER_NAME?.trim();
+    const headerValue = process.env.GP_CONNECT_AUTH_HEADER_VALUE?.trim();
+    const authHeaders =
+      headerName && headerValue ? { [headerName]: headerValue } : undefined;
+    const practiceId = process.env.GP_CONNECT_PRACTICE_ID?.trim();
+    return new GpConnectHttpClient({
       baseUrl,
       apiKey,
       timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 5_000,
+      authHeaders,
+      practiceId: practiceId || undefined,
     });
   }
 
-  async searchSlots(params: SearchSlotsParams): Promise<SlotSummary[]> {
+  async searchSlots(params: SearchSlotsParams): Promise<Slot[]> {
     const attributes = buildMetricAttributes('search', this.practiceId, params.organisationId);
     const span = startSpan('gpconnect.search', {
       attributes: {
@@ -108,7 +123,7 @@ export class GpConnectClient {
     const start = performance.now();
     try {
       await delay(5);
-      const result = [
+      const result: Slot[] = [
         {
           slotId: 'demo-slot-1',
           start: new Date().toISOString(),
@@ -143,7 +158,7 @@ export class GpConnectClient {
     }
   }
 
-  async createAppointment(request: AppointmentRequest): Promise<AppointmentConfirmation> {
+  async createAppointment(request: AppointmentRequest): Promise<AppointmentRef> {
     const executor = this.appointmentExecutor ?? defaultAppointmentExecutor;
     let attempt = 0;
     let lastError: unknown;
@@ -224,9 +239,13 @@ export class GpConnectClient {
   getApiKey(): string {
     return this.apiKey;
   }
+
+  getAuthHeaders(): Record<string, string> {
+    return { ...this.authHeaders };
+  }
 }
 
-export function mapSlotsToView(slots: SlotSummary[]): SlotView[] {
+export function mapSlotsToView(slots: Slot[]): SlotView[] {
   if (!Array.isArray(slots) || slots.length === 0) return [];
   return slots.map((slot) => ({
     id: slot.slotId,
@@ -237,7 +256,20 @@ export function mapSlotsToView(slots: SlotSummary[]): SlotView[] {
   }));
 }
 
-async function defaultAppointmentExecutor(request: AppointmentRequest): Promise<AppointmentConfirmation> {
+function buildAuthHeaders(apiKey: string, overrides?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers['Ssp-Api-Key'] = apiKey;
+  }
+  if (overrides) {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value) headers[key] = value;
+    }
+  }
+  return headers;
+}
+
+async function defaultAppointmentExecutor(request: AppointmentRequest): Promise<AppointmentRef> {
   await delay(5);
   return {
     appointmentId: `appt-${request.slotId}`,

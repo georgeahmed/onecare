@@ -1,7 +1,7 @@
 import type { IdempotencyStore } from './idempotency';
 
 export interface RedisLike {
-  set(key: string, value: string, mode?: string, ttlMode?: string, ttl?: number): Promise<'OK' | null> | 'OK' | null;
+  set(key: string, value: string, ...args: Array<string | number>): Promise<'OK' | null> | 'OK' | null;
   exists(key: string): Promise<number> | number;
 }
 
@@ -17,7 +17,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   async put(key: string, ttlSeconds: number): Promise<void> {
     // Non-atomic put (used only as fallback by helper)
-    await this.client.set(this.k(key), '1', 'EX', 'EX', ttlSeconds);
+    await this.client.set(this.k(key), '1', 'EX', ttlSeconds);
   }
 
   async reserve(key: string, ttlSeconds: number): Promise<'reserved' | 'exists'> {

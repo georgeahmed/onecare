@@ -6,7 +6,7 @@ import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
-import { initTracing, logger, setCorrelationId } from '@onecare/observability';
+import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
 import { deriveIdempotencyKey, reserveIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
@@ -409,7 +409,7 @@ function classifyErrorCode(err: unknown): string | undefined {
   return code ? String(code).toLowerCase() : undefined;
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req, res) => withCorrelationContext(() => {
   if (!req.url) {
     res.statusCode = 400;
     res.end('Bad Request');
@@ -598,7 +598,7 @@ const server = http.createServer((req, res) => {
   }
   res.statusCode = 200;
   res.end('orchestrator skeleton');
-});
+}));
 
 if (process.env.NODE_ENV !== 'test') {
   server.listen(port, () => {
