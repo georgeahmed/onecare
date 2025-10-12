@@ -55,4 +55,10 @@ export const Topics = {
   },
 } as const;
 
-export type Topic = typeof Topics[keyof typeof Topics];
+type TopicValue<T> = T extends string
+  ? T
+  : T extends Record<string, unknown>
+    ? TopicValue<T[keyof T]>
+    : never;
+
+export type Topic = TopicValue<typeof Topics>;

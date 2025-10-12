@@ -5,3 +5,4 @@ export * from './feature-store';
 export * from './queue';
 export * from './idempotency';
 export * from './deferrals';
+export * from './capacity';

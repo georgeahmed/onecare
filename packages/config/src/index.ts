@@ -1071,7 +1071,7 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   const practicePath = safeBuildLayerPath(configRoot, PRACTICES_DIR, trimmedPracticeId, 'practice');
   const practiceLayer = practicePath ? loadLayer(practicePath) : undefined;
 
-  let pcnId = normaliseIdentifier(practiceLayer?.meta.pcn);
+  const pcnId = normaliseIdentifier(practiceLayer?.meta.pcn);
   let icsId = normaliseIdentifier(practiceLayer?.meta.ics);
 
   let pcnLayer: ConfigLayer | undefined;

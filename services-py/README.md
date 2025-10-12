@@ -12,3 +12,5 @@ Run (example)
 - uvicorn safety_gate_service.main:app --reload --port 8081
 - uvicorn scribe_service.main:app --reload --port 8082
 
+Developer Workflow
+- Tests: `./run-tests.sh` (creates/uses `.venv`, installs `[dev]` extras, then runs `pytest`)

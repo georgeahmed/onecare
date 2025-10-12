@@ -33,7 +33,7 @@ Lint, Format, Test
 - Lint (TS): npm run lint
 - Format (Prettier): npm run format
 - Test (TS via Vitest): npm run test
-- Test (Python via Pytest): pytest -q services-py/tests
+- Test (Python via Pytest): ./services-py/run-tests.sh
 
 Codegen (Contracts)
 - TS contracts from JSON Schemas: npm run codegen

@@ -2,7 +2,7 @@
 GENERATED from schemas/ (v0.1). Replace via codegen.
 """
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel
 
 
@@ -30,7 +30,7 @@ class PortalSubmission(BaseModel):
     patient: PortalSubmissionPatient
     narrative: str
     attachments: Optional[List[AttachmentRef]] = None
-    channel: str  # 'web' | 'ivr'
+    channel: Literal["web", "ivr"]
 
 
 class TriageInput(BaseModel):
@@ -55,7 +55,7 @@ class PharmacyReferral(BaseModel):
     patientId: str
     condition: str
     pharmacyOrg: str
-    slot: Optional[PharmacySlot | None] = None
+    slot: Optional[PharmacySlot] = None
 
 
 class ScribeAudio(BaseModel):
@@ -66,6 +66,5 @@ class ScribeAudio(BaseModel):
 
 
 class SafetyDecision(BaseModel):
-    outcome: str  # 'DIVERTED' | 'SAFE_TO_CONTINUE'
+    outcome: Literal["DIVERTED", "SAFE_TO_CONTINUE"]
     reason: Optional[str] = None
-

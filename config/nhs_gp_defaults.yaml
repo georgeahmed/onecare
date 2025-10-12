@@ -42,6 +42,11 @@ sla_targets:
   soon_same_day: "PT12H"
   routine_initial_response: "P2D"
 hold_back_fraction: 0.10
+release_max_fraction: 0.05
+release_delta_threshold: 4
+release_confidence_threshold: 0.65
+release_min_hold_fraction: 0.04
+forecast_horizon_minutes: 180
 fairness_floors:
   telephone_min_fraction: 0.15
   interpreter_support: true

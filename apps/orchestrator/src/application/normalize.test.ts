@@ -34,28 +34,37 @@ describe('normalizeToFhir', () => {
   });
 
   it('adds DocumentReference entries for attachments', () => {
-    const submission = {
-      practiceId: 'practice-1',
-      patient: { id: 'pat-123' },
-      narrative: 'Sample narrative',
-      channel: 'web',
-      attachments: [
-        { contentType: 'text/plain', url: 'https://example.com/a.txt' },
-        { contentType: 'image/png', url: 'https://example.com/b.png' },
-      ],
-    } as PortalSubmission;
+  const submission = {
+    practiceId: 'practice-1',
+    patient: { id: 'pat-123' },
+    narrative: 'Sample narrative',
+    channel: 'web',
+    attachments: [
+      { contentType: 'text/plain', url: 'https://example.com/a.txt' },
+      { contentType: 'image/png', url: 'https://example.com/b.png' },
+      { contentType: undefined as unknown as string, url: 'https://example.com/invalid' },
+      { contentType: 'image/jpeg' },
+      { contentType: '  ', url: '   ' },
+    ],
+  } as PortalSubmission;
 
     const bundle = validateBundle(normalizeToFhir(submission));
-    const docEntries = bundle.entry.filter((e) => e.resource.resourceType === 'DocumentReference');
-    expect(docEntries).toHaveLength(2);
-    docEntries.forEach((entry, idx) => {
-      expect(entry.resource).toMatchObject({ resourceType: 'DocumentReference' });
-      const content = entry.resource.content as unknown;
-      const attachmentUrl = Array.isArray(content)
-        ? (content[0] as { attachment?: { url?: string } }).attachment?.url
-        : undefined;
-      expect(attachmentUrl).toBe(submission.attachments?.[idx]?.url);
-    });
+  const docEntries = bundle.entry.filter((e) => e.resource.resourceType === 'DocumentReference');
+  expect(docEntries).toHaveLength(2);
+  docEntries.forEach((entry, idx) => {
+    expect(entry.resource).toMatchObject({ resourceType: 'DocumentReference' });
+    const content = entry.resource.content as unknown;
+    const attachmentUrl = Array.isArray(content)
+      ? (content[0] as { attachment?: { url?: string } }).attachment?.url
+      : undefined;
+    expect(attachmentUrl).toBe(submission.attachments?.[idx]?.url);
+  });
+  expect(
+    docEntries.every((entry) => {
+      const att = (entry.resource.content as Array<{ attachment?: { url?: string } }>)[0]?.attachment?.url ?? '';
+      return typeof att === 'string' && att.trim().length > 0;
+    }),
+  ).toBe(true);
   });
 
   it('omits optional fields when absent', () => {
@@ -79,8 +88,12 @@ function validateBundle(bundle: ReturnType<typeof normalizeToFhir>) {
     type: 'transaction',
   });
   expect(Array.isArray(bundle.entry)).toBe(true);
+  const seen = new Set<string>();
   bundle.entry.forEach((entry) => {
     expect(typeof entry.fullUrl).toBe('string');
+    expect(entry.fullUrl).toMatch(/^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(seen.has(entry.fullUrl)).toBe(false);
+    seen.add(entry.fullUrl);
     expect(entry.resource).toHaveProperty('resourceType');
   });
   return bundle;

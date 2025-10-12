@@ -15,6 +15,7 @@ const correlationAttribute = 'onecare.correlation_id';
 let tracingEnabled = false;
 let sdkInstance: NodeSDK | undefined;
 let sdkInitPromise: Promise<void> | undefined;
+const globalInitKey = Symbol.for('onecare.observability.initTracing');
 
 const truthy = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
 const falsy = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
@@ -43,14 +44,20 @@ function ensureDiagLogger(): void {
 
 export function initTracing(serviceName: string): Promise<void> {
   if (sdkInitPromise) return sdkInitPromise;
+  const globalInit = (globalThis as Record<string | symbol, unknown>)[globalInitKey] as Promise<void> | undefined;
+  if (globalInit) {
+    sdkInitPromise = globalInit;
+    return globalInit;
+  }
 
   tracingEnabled = shouldEnableTracing();
   if (!tracingEnabled) {
     sdkInitPromise = Promise.resolve();
+    (globalThis as Record<string | symbol, unknown>)[globalInitKey] = sdkInitPromise;
     return sdkInitPromise;
   }
 
-  sdkInitPromise = Promise.resolve().then(() => {
+  sdkInitPromise = (async () => {
     ensureDiagLogger();
 
     const baseResource = defaultResource();
@@ -65,13 +72,15 @@ export function initTracing(serviceName: string): Promise<void> {
     try {
       const traceExporter = new OTLPTraceExporter();
       sdkInstance = new NodeSDK({ resource, traceExporter });
-      sdkInstance.start();
+      await sdkInstance.start();
       diag.info(`OpenTelemetry tracing initialized for ${serviceName}`);
     } catch (err) {
       tracingEnabled = false;
+      sdkInstance = undefined;
       console.error('Failed to start OpenTelemetry tracing', err);
     }
-  });
+  })();
+  (globalThis as Record<string | symbol, unknown>)[globalInitKey] = sdkInitPromise;
 
   return sdkInitPromise;
 }
@@ -102,7 +111,11 @@ export function setCorrelationId(id: string | undefined) {
   const normalized = normalizeCorrelationId(id);
   const store = correlationStorage.getStore();
   if (store) {
-    store.correlationId = normalized;
+    if (normalized) {
+      store.correlationId = normalized;
+    } else {
+      delete store.correlationId;
+    }
   } else {
     correlationStorage.enterWith(normalized ? { correlationId: normalized } : {});
   }
@@ -119,7 +132,9 @@ export function isTracingEnabled(): boolean {
 }
 
 export function withCorrelationContext<T>(fn: () => T): T {
-  return correlationStorage.run({}, fn);
+  const seed = correlationStorage.getStore();
+  const initial = seed ? { ...seed } : {};
+  return correlationStorage.run(initial, fn);
 }
 
 export type { Span };

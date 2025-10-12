@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { AppointmentRequest, AppointmentRef, Slot } from '../src/adapters/gpconnect.client';
+import type { AppointmentRequest, Slot } from '../src/adapters/gpconnect.client';
 import { GpConnectHttpClient, GpConnectClientError } from '../src/adapters/gpconnect.client';
 import type { EnhancedAccessPolicy } from '../src/application/enhancedAccess';
 import { applyEnhancedAccessFilters } from '../src/application/enhancedAccess';
@@ -13,14 +13,6 @@ import {
 import type { FhirRepository, QueueNotifier } from '@onecare/ports';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import { Topics } from '@onecare/events';
-
-function buildClient(slots: Slot[], executor: (req: AppointmentRequest) => Promise<AppointmentRef>) {
-  return new GpConnectHttpClient({
-    baseUrl: 'https://gp-connect.example',
-    apiKey: 'key',
-    appointmentExecutor: executor,
-  });
-}
 
 function createBusMock() {
   const publish = vi.fn().mockResolvedValue(undefined);
@@ -155,6 +147,29 @@ describe('Booking state machine integration', () => {
       { 'x-correlation-id': 'corr-123' },
     );
   });
+
+  it('throws invalid params when organisation id is missing', async () => {
+    const searchClient = new GpConnectHttpClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+    });
+    const ctx: BookingContext = {
+      id: 'search-invalid-org',
+      client: searchClient,
+      patientId: 'patient-1',
+      searchParams: {
+        serviceType: 'GP',
+        windowStart: '2025-10-13T17:00:00Z',
+        windowEnd: '2025-10-13T22:00:00Z',
+      },
+      correlationId: 'corr-invalid-org',
+    };
+    const search = new SearchState();
+    await expect(search.handle(ctx, { type: 'booking.search' })).rejects.toThrow(
+      'booking.search.invalid_params',
+    );
+    expect(ctx.slots).toBeUndefined();
+  });
 });
 
 describe('SearchState error handling', () => {
@@ -203,6 +218,29 @@ describe('SearchState error handling', () => {
     await expect(search.handle(ctx, { type: 'booking.search' })).rejects.toThrow(
       'booking.search.invalid_params',
     );
+  });
+
+  it('throws invalid params when organisation id is missing', async () => {
+    const searchClient = new GpConnectHttpClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+    });
+    const ctx: BookingContext = {
+      id: 'search-invalid-org',
+      client: searchClient,
+      patientId: 'patient-1',
+      searchParams: {
+        serviceType: 'GP',
+        windowStart: '2025-10-13T17:00:00Z',
+        windowEnd: '2025-10-13T22:00:00Z',
+      },
+      correlationId: 'corr-invalid-org',
+    };
+    const search = new SearchState();
+    await expect(search.handle(ctx, { type: 'booking.search' })).rejects.toThrow(
+      'booking.search.invalid_params',
+    );
+    expect(ctx.slots).toBeUndefined();
   });
 });
 

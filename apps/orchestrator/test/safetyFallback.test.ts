@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import { Topics, type TypedEnvelope, type TriageInput } from '@onecare/events';
+import { Topics, type TriageInput } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 
 vi.mock('../src/adapters/services/callWithGuard', async () => {

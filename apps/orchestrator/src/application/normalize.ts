@@ -22,11 +22,11 @@ export function normalizeToFhir(submission: PortalSubmission): FhirBundle {
   const entries: BundleEntry[] = [];
 
   const patientId = submission.patient?.id;
-  const bundleId = randomUUID();
+  const createFullUrl = () => `urn:uuid:${randomUUID()}`;
 
   if (patientId) {
     entries.push({
-      fullUrl: `urn:uuid:patient-${patientId}`,
+      fullUrl: createFullUrl(),
       request: { method: 'PUT', url: `Patient/${patientId}` },
       resource: {
         resourceType: 'Patient',
@@ -36,7 +36,7 @@ export function normalizeToFhir(submission: PortalSubmission): FhirBundle {
   }
 
   const communicationEntry: BundleEntry = {
-    fullUrl: `urn:uuid:communication-${bundleId}`,
+    fullUrl: createFullUrl(),
     request: { method: 'POST', url: 'Communication' },
     resource: {
       resourceType: 'Communication',
@@ -52,25 +52,33 @@ export function normalizeToFhir(submission: PortalSubmission): FhirBundle {
   entries.push(communicationEntry);
 
   if (Array.isArray(submission.attachments)) {
-    submission.attachments.forEach((attachment, idx) => {
-      entries.push({
-        fullUrl: `urn:uuid:docref-${bundleId}-${idx}`,
-        request: { method: 'POST', url: 'DocumentReference' },
-        resource: {
-          resourceType: 'DocumentReference',
-          status: 'current',
-          subject: patientId ? { reference: `Patient/${patientId}` } : undefined,
-          content: [
-            {
-              attachment: {
-                contentType: attachment.contentType,
-                url: attachment.url,
+    submission.attachments
+      .filter(
+        (attachment) =>
+          typeof attachment?.contentType === 'string' &&
+          attachment.contentType.trim().length > 0 &&
+          typeof attachment?.url === 'string' &&
+          attachment.url.trim().length > 0
+      )
+      .forEach((attachment) => {
+        entries.push({
+          fullUrl: createFullUrl(),
+          request: { method: 'POST', url: 'DocumentReference' },
+          resource: {
+            resourceType: 'DocumentReference',
+            status: 'current',
+            subject: patientId ? { reference: `Patient/${patientId}` } : undefined,
+            content: [
+              {
+                attachment: {
+                  contentType: attachment.contentType,
+                  url: attachment.url,
+                },
               },
-            },
-          ],
-        },
+            ],
+          },
+        });
       });
-    });
   }
 
   return {

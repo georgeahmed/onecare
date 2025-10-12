@@ -12,9 +12,9 @@ import {
   type PortalDecisionReason,
   type PortalIntent,
   type PortalState,
+  type DeferralFlushContext,
 } from './application/portal.state';
 import type { DeferralStore, DeferralRecord } from '@onecare/ports';
-import type { DeferralFlushContext } from './application/portal.state';
 
 export type Task = () => Promise<void> | void;
 export interface ScheduleOptions {
@@ -89,16 +89,44 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
   const nowFn = deps.now ?? (() => new Date());
   const correlationFactory = deps.correlationIdFactory ?? defaultCorrelationId;
   const ttl = deps.singleflightTtlMs ?? DEFAULT_SINGLEFLIGHT_TTL_MS;
+  const intervalMs = 60_000;
+  const jitterMs = 5_000;
   let inFlight = false;
-  let lastStartedAt = 0;
+  let lastRunCompletedAt = 0;
+  let timer: NodeJS.Timeout | undefined;
 
-  const tick = async () => {
+  const schedule = (baseDelay: number, opts: { applyJitter?: boolean } = {}): void => {
+    const applyJitter = opts.applyJitter ?? true;
+    const jitter = applyJitter && jitterMs > 0
+      ? Math.floor((Math.random() * 2 - 1) * jitterMs)
+      : 0;
+    const delay = Math.max(0, baseDelay + jitter);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => {
+      void tick();
+    }, delay);
+  };
+
+  const tick = async (): Promise<void> => {
+    if (inFlight) {
+      schedule(intervalMs);
+      return;
+    }
+
     const now = nowFn();
-    const startedAt = now.valueOf();
-    if (inFlight) return;
-    if (startedAt - lastStartedAt < ttl) return;
+    const nowMs = now.valueOf();
+    if (lastRunCompletedAt > 0) {
+      const elapsed = nowMs - lastRunCompletedAt;
+      if (elapsed < ttl) {
+        schedule(ttl - elapsed, { applyJitter: false });
+        return;
+      }
+    }
+
     inFlight = true;
-    lastStartedAt = startedAt;
+    let ran = false;
     const correlationId = correlationFactory();
     try {
       portalTickCounter.add(1, { practiceId });
@@ -114,22 +142,30 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
       } else {
         portalStateUnchangedCounter.add(1, attributes);
       }
+      ran = true;
     } catch (error) {
       logger.error('portal.guard.tick_failed', {
         practiceId,
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      if (ran) {
+        lastRunCompletedAt = nowMs;
+      }
       inFlight = false;
+      schedule(intervalMs);
     }
   };
 
-  const scheduled = everyWithJitter(60_000, 5_000, () => {
-    void tick();
-  });
+  schedule(0, { applyJitter: false });
 
   return {
-    cancel: () => scheduled.cancel(),
+    cancel: () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    },
   };
 }
 
@@ -207,7 +243,7 @@ function defaultCorrelationId(): string {
 }
 
 export interface DeferralPublisher {
-  publish(record: DeferralRecord, context: DeferralPublishContext): Promise<void>;
+  publish(record: DeferralRecord, context: DeferralFlushContext): Promise<void>;
 }
 
 async function processDeferrals(

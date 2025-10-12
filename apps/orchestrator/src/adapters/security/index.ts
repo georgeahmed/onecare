@@ -1,10 +1,12 @@
 import { logger } from '@onecare/observability';
 import type { SecurityServices, AuthContext } from '@onecare/security';
 
-const DEFAULT_REPLAY_WINDOW_MS = Math.max(
-  Number(process.env.SECURITY_REPLAY_WINDOW_MS ?? 300_000),
-  1_000
-);
+function resolveReplayWindowMs(): number {
+  const raw = process.env.SECURITY_REPLAY_WINDOW_MS;
+  const parsed = typeof raw === 'string' ? Number(raw) : NaN;
+  const base = Number.isFinite(parsed) && parsed > 0 ? parsed : 300_000;
+  return Math.max(base, 1_000);
+}
 
 function normalizeActionScope(action: string, scope?: string[]): boolean {
   if (!scope || scope.length === 0) return false;
@@ -14,10 +16,11 @@ function normalizeActionScope(action: string, scope?: string[]): boolean {
 
 function createDefaultSecurityServices(): SecurityServices {
   const seenRequests = new Map<string, number>();
+  const replayWindowMs = resolveReplayWindowMs();
 
   function gc(now: number): void {
     for (const [key, expiry] of seenRequests.entries()) {
-      if (expiry <= now) {
+      if (Number.isFinite(expiry) && expiry <= now) {
         seenRequests.delete(key);
       }
     }
@@ -37,7 +40,7 @@ function createDefaultSecurityServices(): SecurityServices {
         logger.warn('zero-trust replay guard blocked duplicate request', { requestId: reqId });
         return false;
       }
-      seenRequests.set(key, now + DEFAULT_REPLAY_WINDOW_MS);
+      seenRequests.set(key, now + replayWindowMs);
       if (seenRequests.size > 1024) {
         gc(now);
       }

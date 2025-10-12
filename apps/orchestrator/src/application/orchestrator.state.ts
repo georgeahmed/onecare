@@ -1,4 +1,4 @@
-import { BaseState } from '../../../../packages/statekit/src/BaseState';
+import { BaseState } from '@onecare/statekit';
 import { OrchestratorContext, OrchestratorEvent } from '../types';
 
 export class ReceivedState extends BaseState<OrchestratorContext, OrchestratorEvent> {
@@ -45,4 +45,3 @@ export class AuditedState extends BaseState<OrchestratorContext, OrchestratorEve
   constructor() { super('Audited'); }
   async handle(): Promise<string> { return 'Audited'; } // terminal
 }
-

@@ -117,8 +117,10 @@ function normalizeSearchParams(raw: Record<string, unknown> | undefined): Normal
   if (!serviceType || !windowStart || !windowEnd) {
     throw new BookingSearchError('booking.search.invalid_params');
   }
-  const organisation =
-    readString(source, ['organisationId', 'organisation_id', 'location']) ?? 'demo-org';
+  const organisation = readString(source, ['organisationId', 'organisation_id', 'location']);
+  if (!organisation) {
+    throw new BookingSearchError('booking.search.invalid_params');
+  }
   return {
     organisationId: organisation,
     serviceType,

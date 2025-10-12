@@ -1,8 +1,43 @@
+vi.mock('@onecare/observability', async () => {
+  const actual = await vi.importActual<typeof import('@onecare/observability')>('@onecare/observability');
+  const spanStub = {
+    setAttribute: vi.fn(),
+    setStatus: vi.fn(),
+    recordException: vi.fn(),
+    addEvent: vi.fn(),
+    end: vi.fn(),
+    isRecording: () => true,
+  };
+  return {
+    ...actual,
+    startSpan: vi.fn(() => spanStub),
+    __spanStub: spanStub,
+  };
+});
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { IcsHttpClient, IcsClientError } from '../src/adapters/ics.client';
 import type { ResolvedConfig, IcsConfig } from '@onecare/config';
 import type { IcsReferralRequest, IcsReferralAck } from '@onecare/events';
-import { resetMetrics, getCounterRecords, getHistogramRecords, logger } from '@onecare/observability';
+import * as observability from '@onecare/observability';
+
+type SpanStub = {
+  setAttribute: ReturnType<typeof vi.fn>;
+  setStatus: ReturnType<typeof vi.fn>;
+  recordException: ReturnType<typeof vi.fn>;
+  addEvent: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+  isRecording: () => boolean;
+};
+
+const {
+  resetMetrics,
+  getCounterRecords,
+  getHistogramRecords,
+  logger,
+  startSpan,
+  __spanStub: spanStub,
+} = observability as typeof observability & { __spanStub: SpanStub };
 
 const baseReferral: IcsReferralRequest = {
   referralId: 'ref-1',
@@ -32,9 +67,15 @@ function buildConfig(): ResolvedConfig {
 
 describe('IcsHttpClient', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     resetMetrics();
     vi.useRealTimers();
+    startSpan.mockClear();
+    spanStub.setAttribute.mockClear();
+    spanStub.setStatus.mockClear();
+    spanStub.recordException.mockClear();
+    spanStub.addEvent.mockClear();
+    spanStub.end.mockClear();
   });
 
   it('sends referral successfully with mapping and TLS context', async () => {
@@ -109,6 +150,91 @@ describe('IcsHttpClient', () => {
     );
   });
 
+  it('requires organisation override when no default route is configured for ack', async () => {
+    const client = IcsHttpClient.fromConfig(buildConfig());
+    await expect(
+      client.acknowledge('ref-1', { referralId: 'ref-1', accepted: true }),
+    ).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+
+  it('falls back to default route for ack when override absent', async () => {
+    const ackDispatcher = vi.fn(async (route, refId: string, ack: IcsReferralAck) => {
+      expect(route.key).toBe('default');
+      expect(refId).toBe('ref-1');
+      return ack;
+    });
+    const client = new IcsHttpClient({
+      routes: {},
+      defaultRoute: {
+        endpoint: 'https://ics.example/default',
+        headers: { Authorization: 'Bearer token' },
+        timeoutMs: 100,
+        retry: { attempts: 0 },
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000 },
+      },
+      ackDispatcher,
+    });
+
+    const result = await client.acknowledge('ref-1', { referralId: 'ref-1', accepted: true });
+    expect(result).toEqual({ referralId: 'ref-1', accepted: true });
+    expect(ackDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults correlation header when config provides blank value', async () => {
+    const dispatcher = vi.fn(async (_route, request: IcsReferralRequest, context) => {
+      expect(context.headers['x-correlation-id']).toBe('corr-blank');
+      expect(Object.keys(context.headers)).not.toContain('');
+      return { referralId: request.referralId, accepted: true };
+    });
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1',
+          headers: {},
+          timeoutMs: 100,
+          retry: { attempts: 0 },
+          circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000 },
+          correlationHeader: '   ',
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    await client.sendReferral(baseReferral, { correlationId: 'corr-blank' });
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries when provider responds with rate limit status', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    let attempts = 0;
+    const dispatcher = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error: any = new Error('429');
+        error.response = { status: 429 };
+        throw error;
+      }
+      return { referralId: 'ref-1', accepted: true };
+    });
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1',
+          headers: {},
+          timeoutMs: 200,
+          retry: { attempts: 1, baseDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+          circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000 },
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    const ack = await client.sendReferral(baseReferral);
+    expect(ack).toEqual({ referralId: 'ref-1', accepted: true });
+    expect(dispatcher).toHaveBeenCalledTimes(2);
+    expect(warnSpy.mock.calls.some(([msg]) => msg === 'integration.call.retry')).toBe(true);
+  });
+
   it('throws forbidden when organisation not configured', async () => {
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const client = IcsHttpClient.fromConfig(buildConfig());
@@ -148,6 +274,7 @@ describe('IcsHttpClient', () => {
 
     await expect(client.sendReferral(baseReferral)).rejects.toMatchObject({ code: 'upstream_timeout' });
     expect(dispatcher).toHaveBeenCalledTimes(2);
+    expect(attempts).toBe(2);
     const retryCall = warnSpy.mock.calls.find(([msg]) => msg === 'integration.call.retry');
     expect(retryCall?.[1]).toMatchObject({ provider: 'ics', operation: 'referral', code: 'upstream_timeout' });
     const timeoutRecords = getCounterRecords('integration.call.timeout_total');
@@ -222,6 +349,73 @@ describe('IcsHttpClient', () => {
         expect.objectContaining({ attributes: expect.objectContaining({ provider: 'ics', operation: 'referral' }) }),
       ]),
     );
+  });
+
+  it('supports default-only configuration when explicit routes absent', async () => {
+    const dispatcher = vi.fn(async (route, request: IcsReferralRequest, context) => {
+      expect(route.key).toBe('default');
+      expect(context.endpoint).toBe('https://ics.example/default');
+      return { referralId: request.referralId, accepted: true };
+    });
+    const client = new IcsHttpClient({
+      routes: {},
+      defaultRoute: {
+        endpoint: 'https://ics.example/default',
+        headers: { Authorization: 'Bearer token' },
+        timeoutMs: 100,
+        retry: { attempts: 0 },
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000 },
+        correlationHeader: 'x-cid',
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    const ack = await client.sendReferral({ ...baseReferral, org: 'NEW' }, { correlationId: 'cid-1' });
+
+    expect(ack).toEqual({ referralId: 'ref-1', accepted: true });
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds from config with only default route defined', async () => {
+    const dispatcher = vi.fn(async (_route, request: IcsReferralRequest) => ({
+      referralId: request.referralId,
+      accepted: true,
+    }));
+    const config = {
+      practiceId: 'demo',
+      ics: {
+        default: {
+          endpoint: 'https://ics.example/default',
+          apiKey: 'secret',
+          timeoutMs: 100,
+          retry: { attempts: 0 },
+          circuitBreaker: { failureThreshold: 2, cooldownMs: 500 },
+        },
+      },
+    } as unknown as ResolvedConfig;
+
+    const client = IcsHttpClient.fromConfig(config, { referralDispatcher: dispatcher });
+    const ack = await client.sendReferral({ ...baseReferral, org: 'unknown' });
+
+    expect(ack).toEqual({ referralId: 'ref-1', accepted: true });
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('records organisation id attribute on spans', async () => {
+    const dispatcher = vi.fn(async () => ({ referralId: 'ref-1', accepted: true }));
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1',
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    await client.sendReferral({ ...baseReferral, org: 'ORG1' });
+
+    expect(startSpan).toHaveBeenCalled();
+    expect(spanStub.setAttribute).toHaveBeenCalledWith('integration.organisation_id', 'org1');
   });
 
   it('enforces simple rate limit stub per organisation', async () => {

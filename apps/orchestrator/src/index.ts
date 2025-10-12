@@ -7,7 +7,7 @@ import { getBus, markNatsBusConnected } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
 import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
-import { deriveIdempotencyKey, reserveIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
+import { deriveIdempotencyKey, reserveIdempotency, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
@@ -16,8 +16,9 @@ import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import type { IdempotencyStore } from '@onecare/ports';
 import { normalizeToFhir, validateProfiles } from './application/normalize';
+import { resolveServerPort } from './support/port';
 
-const port = Number(process.env.PORT || process.env.PORT_ORCHESTRATOR || 3001);
+const port = resolveServerPort();
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
 const practiceId = process.env.PRACTICE_ID?.trim() || 'demo';
 const practiceConfig: ResolvedConfig = loadConfig(practiceId);
@@ -51,7 +52,7 @@ let bus: MessageBus = getBus();
 markNatsBusConnected(bus, !wantsNats);
 let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
-let natsConn: NatsConnection | null = null;
+let _natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
@@ -151,7 +152,7 @@ async function establishBusConnection(): Promise<void> {
     const options = buildConnectionOptions();
     logger.info('Connecting to NATS', { servers: options.servers });
     const conn = await connect(options);
-    natsConn = conn;
+    _natsConn = conn;
     bus = getBus({ connection: conn });
     markNatsBusConnected(bus, true);
     busReady = true;
@@ -172,6 +173,30 @@ function cidFromHeaders(headers: http.IncomingHttpHeaders): string {
   if (Array.isArray(h)) return h[0];
   if (typeof h === 'string') return h;
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveMaxBodyBytes(): number {
+  const parsed = parseByteSize(process.env.MAX_BODY_BYTES);
+  if (!parsed) {
+    return 256 * 1024;
+  }
+  return parsed;
+}
+
+function parseByteSize(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const match = /^([0-9]+(?:\.[0-9]+)?)([kKmMgG]?)(?:[bB])?$/.exec(trimmed);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  const unit = match[2]?.toLowerCase();
+  const multiplier =
+    unit === 'k' ? 1024 : unit === 'm' ? 1024 ** 2 : unit === 'g' ? 1024 ** 3 : 1;
+  const bytes = value * multiplier;
+  if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
+  return Math.floor(bytes);
 }
 
 type RequestOutcome = ErrorCode | 'ok';
@@ -279,14 +304,22 @@ function readRequestBody(req: http.IncomingMessage, maxBytes: number): Promise<B
     let received = 0;
     let settled = false;
 
+    const cleanup = () => {
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onError);
+    };
+
     const abort = (err: HttpError) => {
       if (settled) return;
       settled = true;
-      req.destroy();
+      cleanup();
+      req.on('data', () => {});
+      req.resume();
       reject(err);
     };
 
-    req.on('data', (chunk) => {
+    const onData = (chunk: Buffer | string) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       received += buffer.length;
       if (received > maxBytes) {
@@ -294,19 +327,25 @@ function readRequestBody(req: http.IncomingMessage, maxBytes: number): Promise<B
         return;
       }
       chunks.push(buffer);
-    });
+    };
 
-    req.on('end', () => {
+    const onEnd = () => {
       if (settled) return;
       settled = true;
+      cleanup();
       resolve(Buffer.concat(chunks));
-    });
+    };
 
-    req.on('error', (err) => {
+    const onError = (err: Error) => {
       if (settled) return;
       settled = true;
+      cleanup();
       reject(new HttpError('internal_error', 'Failed to read request body', { reason: err.message }));
-    });
+    };
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
   });
 }
 
@@ -441,7 +480,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         return;
       }
 
-      const maxBytes = Number(process.env.MAX_BODY_BYTES || 256 * 1024);
+      const maxBytes = resolveMaxBodyBytes();
       const rawBuf = await readRequestBody(req, maxBytes);
 
       const ctype = (req.headers['content-type'] || '').toString().toLowerCase();
@@ -475,6 +514,26 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
       const authHeader = getHeader(req.headers, 'authorization');
       const authContext = buildAuthContext(req.headers);
+      const explicitKeyHeader = req.headers['x-idempotency-key'];
+      const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
+      const idemKey = deriveIdempotencyKey(submission, authContext?.actor?.id, explicitKey);
+      const replayFingerprint = `${requestId}:${idemKey}`;
+      let reservationActive = false;
+      const releaseReservation = async () => {
+        if (!reservationActive) return;
+        try {
+          await releaseIdempotency(idempotencyStore, idemKey);
+          logger.info('idempotency.released', { key: idemKey, correlationId: corr });
+        } catch (releaseError) {
+          logger.warn('idempotency.release_failed', {
+            key: idemKey,
+            correlationId: corr,
+            reason: releaseError instanceof Error ? releaseError.message : releaseError,
+          });
+        } finally {
+          reservationActive = false;
+        }
+      };
       type DenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
       const deny = async (reason: DenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
         logger.warn('zero-trust gate denied request', {
@@ -496,7 +555,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
       };
 
-      if (!(await security.verifySignatureAndReplayGuard(authHeader, requestId))) {
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, replayFingerprint))) {
         await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
         return;
       }
@@ -519,9 +578,6 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         return;
       }
 
-      const explicitKeyHeader = req.headers['x-idempotency-key'];
-      const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
-      const idemKey = deriveIdempotencyKey(submission, actor.id, explicitKey);
       res.setHeader('x-idempotency-key', idemKey);
       logger.info('idempotency.key.derived', { key: idemKey, correlationId: corr });
 
@@ -534,65 +590,73 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         respondError(res, 'conflict', 'Duplicate request', corr, setOutcome, { idempotencyKey: idemKey });
         return;
       }
+      reservationActive = true;
       recordIdempotencyMiss(idemKey, corr);
       recordIdempotencyTtl(idempotencyTtlSeconds, corr);
       logger.info('idempotency.reserved', { key: idemKey, correlationId: corr, ttlSeconds: idempotencyTtlSeconds });
 
-      let decision: Awaited<ReturnType<typeof analyzePortalSubmission>>;
       try {
-        decision = await callWithGuard(
-          'safety_gate',
-          (signal) =>
-            analyzePortalSubmission(submission, undefined, {
-              correlationId: corr,
-              signal,
-            }),
-          {
-            timeoutMs: safetyGateTimeoutMs,
-            maxRetries: 1,
-            baseDelayMs: 10,
-            correlationId: corr,
-          }
-        );
-      } catch (err) {
-        const code = classifyErrorCode(err);
-        if (code === 'circuit_open' && safetyGateFallbackMode === 'rules') {
-          logger.warn('safety.fallback.rules', { correlationId: corr });
-          recordAudit('orchestrator.safety.fallback', corr, { mode: 'rules' });
-          decision = { outcome: 'SAFE_TO_CONTINUE', reason: 'FALLBACK_RULES' };
-        } else {
-          throw err;
-        }
-      }
-
-      if (decision.outcome === 'SAFE_TO_CONTINUE') {
-        const bundle = normalizeToFhir(submission);
+        let decision: Awaited<ReturnType<typeof analyzePortalSubmission>>;
         try {
-          await validateProfiles(bundle);
+          decision = await callWithGuard(
+            'safety_gate',
+            (signal) =>
+              analyzePortalSubmission(submission, undefined, {
+                correlationId: corr,
+                signal,
+              }),
+            {
+              timeoutMs: safetyGateTimeoutMs,
+              maxRetries: 1,
+              baseDelayMs: 10,
+              correlationId: corr,
+            }
+          );
         } catch (err) {
-          const reason = err instanceof Error ? err.message : String(err);
-          recordAudit('orchestrator.validation.failure', corr, { reason });
-          respondError(res, 'invalid_fhir', 'FHIR validation failed', corr, setOutcome);
-          return;
+          const code = classifyErrorCode(err);
+          if (code === 'circuit_open' && safetyGateFallbackMode === 'rules') {
+            logger.warn('safety.fallback.rules', { correlationId: corr });
+            recordAudit('orchestrator.safety.fallback', corr, { mode: 'rules' });
+            decision = { outcome: 'SAFE_TO_CONTINUE', reason: 'FALLBACK_RULES' };
+          } else {
+            throw err;
+          }
         }
-        logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
-        const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
-        const envelope = createEnvelope(Topics.triage.input, tri, corr);
-        await bus.publish(envelope.topic, envelope);
-        logger.info('published triage.input', { topic: envelope.topic, correlationId: corr });
-        const successAuditDetails = {
-          outcome: decision.outcome,
-          patientId: tri.patientId,
-          practiceId: practiceConfig.practiceId,
-          topic: envelope.topic,
-        } satisfies Record<string, unknown>;
-        recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
-        await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
-      } else {
-        logger.info('safety diverted submission', { correlationId: corr });
-      }
 
-      respondJson(res, 200, decision, corr, setOutcome, 'ok');
+        if (decision.outcome === 'SAFE_TO_CONTINUE') {
+          const bundle = normalizeToFhir(submission);
+          try {
+            await validateProfiles(bundle);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            recordAudit('orchestrator.validation.failure', corr, { reason });
+            await releaseReservation();
+            respondError(res, 'invalid_fhir', 'FHIR validation failed', corr, setOutcome);
+            return;
+          }
+          logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
+          const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
+          const envelope = createEnvelope(Topics.triage.input, tri, corr);
+          await bus.publish(envelope.topic, envelope);
+          logger.info('published triage.input', { topic: envelope.topic, correlationId: corr });
+          const successAuditDetails = {
+            outcome: decision.outcome,
+            patientId: tri.patientId,
+            practiceId: practiceConfig.practiceId,
+            topic: envelope.topic,
+          } satisfies Record<string, unknown>;
+          recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
+          await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
+        } else {
+          logger.info('safety diverted submission', { correlationId: corr });
+        }
+
+        reservationActive = false;
+        respondJson(res, 200, decision, corr, setOutcome, 'ok');
+      } catch (err) {
+        await releaseReservation();
+        throw err;
+      }
     });
     return;
   }

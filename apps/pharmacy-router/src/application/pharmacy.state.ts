@@ -292,17 +292,6 @@ function mergeRules(
   return merged;
 }
 
-function normaliseFlagList(flags: string[] | undefined): Set<string> {
-  const set = new Set<string>();
-  if (!flags) return set;
-  for (const flag of flags) {
-    if (typeof flag !== 'string') continue;
-    const trimmed = flag.trim().toLowerCase();
-    if (trimmed) set.add(trimmed);
-  }
-  return set;
-}
-
 export interface PatientNotifier {
   notifyReferral(details: PatientNotification): Promise<void>;
 }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { IdempotencyStore } from '@onecare/ports';
+import { logger } from '@onecare/observability';
 import type { PortalSubmission } from '@onecare/events';
 
 export function deriveIdempotencyKey(
@@ -8,35 +9,39 @@ export function deriveIdempotencyKey(
   explicitKey?: string
 ): string {
   if (explicitKey) return explicitKey;
-  const h = createHash('sha256');
-  const components: Array<string | undefined> = [
-    submission.practiceId,
-    submission.patient?.id,
-    submission.channel,
-    submission.narrative,
-  ];
+  const hash = createHash('sha256');
+  const base = {
+    practiceId: submission.practiceId,
+    patientId: submission.patient?.id,
+    narrativeLength: submission.narrative?.length ?? 0,
+    channel: submission.channel,
+    attachmentsCount: Array.isArray(submission.attachments) ? submission.attachments.length : 0,
+  };
+  hash.update(JSON.stringify(base));
 
-  for (const component of components) {
-    h.update('\u0000');
-    if (component) h.update(component);
+  if (submission.narrative) {
+    const narrativeDigest = createHash('sha256').update(submission.narrative).digest('hex');
+    hash.update(narrativeDigest);
   }
 
   if (Array.isArray(submission.attachments) && submission.attachments.length > 0) {
-    const normalized = submission.attachments
-      .map((attachment) => `${attachment.contentType ?? ''}::${attachment.url ?? ''}`)
+    const attachmentDigests = submission.attachments
+      .map((attachment) => {
+        const attHash = createHash('sha256');
+        attHash.update(String(attachment?.contentType ?? ''));
+        attHash.update('\u0000');
+        attHash.update(String(attachment?.url ?? ''));
+        return attHash.digest('hex');
+      })
       .sort();
-    for (const value of normalized) {
-      h.update('\u0001');
-      h.update(value);
+
+    for (const digest of attachmentDigests) {
+      hash.update(digest);
     }
   }
 
-  if (actorId) {
-    h.update('\u0002');
-    h.update(actorId);
-  }
-
-  return h.digest('hex');
+  if (actorId) hash.update(`:${actorId}`);
+  return hash.digest('hex');
 }
 
 // Simple in-process single-flight locks to complement a non-atomic store
@@ -74,6 +79,24 @@ export async function reserveIdempotency(
   }
 }
 
+export async function releaseIdempotency(
+  store: IdempotencyStore,
+  key: string
+): Promise<void> {
+  if (typeof store.delete === 'function') {
+    await store.delete(key);
+    return;
+  }
+  try {
+    await store.put(key, 0);
+  } catch (err) {
+    logger.warn('idempotency.release_fallback_failed', {
+      key,
+      reason: err instanceof Error ? err.message : err,
+    });
+  }
+}
+
 export class InMemoryIdempotencyStore implements IdempotencyStore {
   private readonly map = new Map<string, number>();
 
@@ -91,6 +114,11 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     this.map.set(key, Date.now() + ttlSeconds * 1000);
     return 'reserved';
   }
+
+  async delete(key: string): Promise<void> {
+    this.map.delete(key);
+  }
+
   private gc() {
     const now = Date.now();
     for (const [k, exp] of this.map.entries()) if (exp <= now) this.map.delete(k);

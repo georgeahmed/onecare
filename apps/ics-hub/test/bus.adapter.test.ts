@@ -7,13 +7,29 @@ class FlakyBus implements MessageBus {
   public publishes: { topic: string; payload: unknown }[] = [];
   constructor(private failTimes: number) {}
   async publish<T>(topic: string, payload: T): Promise<void> {
-    // Allow DLQ publishes to succeed to assert fallback behavior
     if (topic !== Topics.broker.deadLetter && this.failTimes > 0) {
       this.failTimes -= 1;
       throw new Error('transient');
     }
     this.publishes.push({ topic, payload });
   }
+  async subscribe() {
+    return { unsubscribe: async () => {} };
+  }
+}
+
+class HangingBus implements MessageBus {
+  public publishes: { topic: string; payload: unknown }[] = [];
+
+  async publish<T>(topic: string, payload: T): Promise<void> {
+    if (topic === Topics.broker.deadLetter) {
+      this.publishes.push({ topic, payload });
+      return;
+    }
+    this.publishes.push({ topic, payload });
+    await new Promise(() => { /* never resolves */ });
+  }
+
   async subscribe() {
     return { unsubscribe: async () => {} };
   }
@@ -34,5 +50,13 @@ describe('publishWithGuard', () => {
     expect(dlq).toBeTruthy();
     expect((dlq!.payload as any).originalTopic).toBe('ics.referral.ack');
     expect((dlq!.payload as any).correlationId).toBe('cid-2');
+  });
+
+  it('respects publish timeouts and falls back to DLQ', async () => {
+    const bus = new HangingBus();
+    await publishWithGuard(bus, 'ics.referral.ack', { ok: true }, 'cid-timeout', { timeoutMs: 5, maxRetries: 1, baseDelayMs: 1 });
+    const dlq = bus.publishes.find((p) => p.topic === Topics.broker.deadLetter);
+    expect(dlq).toBeTruthy();
+    expect((dlq!.payload as any).error).toBe('publish_timeout');
   });
 });

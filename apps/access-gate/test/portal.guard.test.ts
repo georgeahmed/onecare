@@ -15,6 +15,86 @@ import type { ResolvedConfig } from '@onecare/config';
 import type { DeferralStore, DeferralRecord } from '@onecare/ports';
 import type { DeferralPublisher } from '../src/scheduler';
 
+class MemoryPortalAdapter implements PortalAdapter {
+  public state: PortalState = {
+    portalOpen: false,
+    acceptsSubmissions: false,
+  };
+
+  public getState = vi.fn(async () => ({ ...this.state }));
+
+  public applyIntents = vi.fn(async (intents: PortalIntent[], context: PortalIntentContext) => {
+    for (const intent of intents) {
+      switch (intent.type) {
+        case 'OPEN_PORTAL':
+          this.state.portalOpen = true;
+          break;
+        case 'CLOSE_PORTAL':
+          this.state.portalOpen = false;
+          break;
+        case 'SET_SUBMISSION_MODE':
+          this.state.acceptsSubmissions = intent.acceptsSubmissions;
+          break;
+        case 'SET_BANNER':
+          this.state.bannerMessage = intent.message;
+          break;
+        case 'CLEAR_BANNER':
+          delete this.state.bannerMessage;
+          break;
+        default:
+          break;
+      }
+    }
+    // Apply final desired state to keep adapter idempotent.
+    this.state = { ...context.desiredState };
+  });
+}
+
+class MemoryDeferralStore implements DeferralStore {
+  private readonly items = new Map<string, { record: DeferralRecord; expiresAt: number }>();
+
+  constructor(private readonly nowFn: () => number = Date.now) {}
+
+  async enqueue(record: DeferralRecord, ttlMs: number) {
+    const expiresAt = this.nowFn() + ttlMs;
+    this.items.set(record.id, { record, expiresAt });
+    return { record, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  async flushReady(practiceId: string, untilIsoTs: string) {
+    const cutoff = Date.parse(untilIsoTs);
+    const records: DeferralRecord[] = [];
+    for (const [key, value] of this.items) {
+      if (value.record.practiceId !== practiceId) continue;
+      const deferUntil = Date.parse(value.record.deferUntil);
+      if (!Number.isFinite(deferUntil) || deferUntil > cutoff) continue;
+      records.push(value.record);
+      this.items.delete(key);
+    }
+    return { records, deletedCount: records.length };
+  }
+
+  async expireStale(nowIsoTs: string) {
+    const now = Date.parse(nowIsoTs);
+    let removed = 0;
+    for (const [key, value] of this.items) {
+      if (value.expiresAt <= now) {
+        this.items.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+}
+
+class FakeDeferralPublisher implements DeferralPublisher {
+  public published: DeferralRecord[] = [];
+
+  async publish(record: DeferralRecord, _context: DeferralFlushContext): Promise<void> {
+    this.published.push(record);
+  }
+}
+
 const BASE_CONFIG = {
   practiceId: 'demo',
   timezone: 'Europe/London',
@@ -84,6 +164,51 @@ describe('ensurePortalState', () => {
     expect(decision.reason).toBe('config_missing');
     expect(decision.changed).toBe(false);
     expect(decision.intents).toHaveLength(0);
+  });
+});
+
+describe('deferral queue helpers', () => {
+  beforeEach(() => {
+    resetMetrics();
+  });
+
+  it('enqueues submission when outside hours and deferral enabled', async () => {
+    const config = {
+      ...BASE_CONFIG,
+      ooh_policy: { accept_submissions: true, patient_message: 'We will respond soon' },
+    } as ResolvedConfig;
+    const store = new MemoryDeferralStore(() => Date.parse('2025-01-01T20:00:00Z'));
+    const outcome = await enqueueOutOfHoursSubmission({
+      practiceId: 'practice-1',
+      submissionId: 'sub-1',
+      summaryCode: 'summary',
+      receivedAt: new Date('2025-01-01T20:00:00Z'),
+      config,
+      store,
+      correlationId: 'corr-enqueue',
+    });
+    expect(outcome.enqueued).toBe(true);
+    expect(outcome.record?.deferUntil).toBeDefined();
+    const enqueueRecords = getCounterRecords('deferral.enqueue');
+    expect(enqueueRecords[0].attributes?.practiceId).toBe('practice-1');
+  });
+
+  it('skips enqueue when within core hours', async () => {
+    const config = {
+      ...BASE_CONFIG,
+      ooh_policy: { accept_submissions: true, patient_message: 'We will respond soon' },
+    } as ResolvedConfig;
+    const store = new MemoryDeferralStore(() => Date.parse('2025-01-01T09:00:00Z'));
+    const outcome = await enqueueOutOfHoursSubmission({
+      practiceId: 'practice-1',
+      submissionId: 'sub-2',
+      summaryCode: 'summary',
+      receivedAt: new Date('2025-01-01T09:00:00Z'),
+      config,
+      store,
+    });
+    expect(outcome.enqueued).toBe(false);
+    expect(getCounterRecords('deferral.enqueue')).toHaveLength(0);
   });
 });
 
@@ -168,39 +293,83 @@ describe('portal uptime guard scheduler', () => {
     expect(loadConfig).toHaveBeenCalledTimes(2);
     guard.cancel();
   });
-});
 
-class MemoryPortalAdapter implements PortalAdapter {
-  public state: PortalState = {
-    portalOpen: false,
-    acceptsSubmissions: false,
-  };
+  it('flushes deferrals when entering core hours', async () => {
+    Math.random = vi.fn(() => 0);
+    vi.useFakeTimers();
 
-  public getState = vi.fn(async () => ({ ...this.state }));
+    const config = {
+      ...BASE_CONFIG,
+      ooh_policy: { accept_submissions: true, patient_message: 'We will respond soon' },
+    } as ResolvedConfig;
+    const store = new MemoryDeferralStore(() => Date.parse('2025-01-01T20:00:00Z'));
+    await enqueueOutOfHoursSubmission({
+      practiceId: 'practice-1',
+      submissionId: 'sub-flush',
+      summaryCode: 'symptom',
+      receivedAt: new Date('2025-01-01T20:00:00Z'),
+      config,
+      store,
+      correlationId: 'corr-enqueue',
+    });
 
-  public applyIntents = vi.fn(async (intents: PortalIntent[], context: PortalIntentContext) => {
-    for (const intent of intents) {
-      switch (intent.type) {
-        case 'OPEN_PORTAL':
-          this.state.portalOpen = true;
-          break;
-        case 'CLOSE_PORTAL':
-          this.state.portalOpen = false;
-          break;
-        case 'SET_SUBMISSION_MODE':
-          this.state.acceptsSubmissions = intent.acceptsSubmissions;
-          break;
-        case 'SET_BANNER':
-          this.state.bannerMessage = intent.message;
-          break;
-        case 'CLEAR_BANNER':
-          delete this.state.bannerMessage;
-          break;
-        default:
-          break;
-      }
-    }
-    // Apply final desired state to keep adapter idempotent.
-    this.state = { ...context.desiredState };
+    const publisher = new FakeDeferralPublisher();
+    const loadConfig = vi.fn(async () => config);
+    const times = [
+      new Date('2025-01-01T20:00:00Z'),
+      new Date('2025-01-02T08:01:00Z'),
+    ];
+    let i = 0;
+
+    const guard = startPortalUptimeGuard('practice-1', {
+      loadConfig,
+      adapter,
+      now: () => times[Math.min(i++, times.length - 1)],
+      deferralStore: store,
+      deferralPublisher: publisher,
+      correlationIdFactory: () => 'corr-flush',
+      singleflightTtlMs: 5_000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.runOnlyPendingTimersAsync();
+    guard.cancel();
+
+    expect(publisher.published).toHaveLength(1);
+    const flushMetrics = getCounterRecords('deferral.flush.count');
+    expect(flushMetrics[0].attributes?.practiceId).toBe('practice-1');
   });
-}
+
+  it('records expired deferrals', async () => {
+    Math.random = vi.fn(() => 0);
+    vi.useFakeTimers();
+
+    const store = new MemoryDeferralStore(() => Date.parse('2025-01-01T21:00:00Z'));
+    const record: DeferralRecord = {
+      id: 'practice-1:sub-expire',
+      practiceId: 'practice-1',
+      submissionId: 'sub-expire',
+      createdAt: '2025-01-01T20:00:00Z',
+      summaryCode: 'symptom',
+      deferUntil: '2025-01-02T08:00:00Z',
+    };
+    await store.enqueue(record, 1_000); // expire quickly
+
+    const loadConfig = vi.fn(async () => BASE_CONFIG);
+    const guard = startPortalUptimeGuard('practice-1', {
+      loadConfig,
+      adapter,
+      now: () => new Date('2025-01-01T21:02:00Z'),
+      deferralStore: store,
+      correlationIdFactory: () => 'corr-expire',
+      singleflightTtlMs: 5_000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    guard.cancel();
+
+    const expiredMetrics = getCounterRecords('deferral.expired');
+    expect(expiredMetrics[0].value).toBe(1);
+  });
+});

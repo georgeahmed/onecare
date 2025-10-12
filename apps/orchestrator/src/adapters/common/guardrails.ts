@@ -4,6 +4,8 @@ export interface GuardOptions {
   timeoutMs: number;
   maxRetries: number;
   baseDelayMs?: number; // for backoff
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  random?: () => number;
 }
 
 export class CircuitBreaker {
@@ -45,43 +47,63 @@ export class CircuitBreaker {
 
 export async function callWithGuard<T>(
   name: string,
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   opts: GuardOptions,
   breaker?: CircuitBreaker
 ): Promise<T> {
   const base = opts.baseDelayMs ?? 100;
-  const controller = new AbortController();
-  const { signal } = controller;
-
-  let attempt = 0;
-  const runOnce = async (): Promise<T> => {
-    attempt += 1;
-    if (breaker && !breaker.canPass()) throw new Error(`circuit_open:${name}`);
-    const timeout = setTimeout(() => controller.abort(), opts.timeoutMs);
-    try {
-      const res = await fn();
-      if (breaker) breaker.onSuccess();
-      clearTimeout(timeout);
-      return res;
-    } catch (err) {
-      clearTimeout(timeout);
-      if (breaker) breaker.onFailure();
-      throw err;
-    }
-  };
-
+  const random = opts.random ?? Math.random;
   let lastErr: unknown;
-  for (let i = 0; i <= opts.maxRetries; i++) {
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const maxRetries = opts.maxRetries ?? 0;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const sleep =
+      opts.sleep ??
+      ((ms: number, signal?: AbortSignal) => delay(ms, undefined, { signal }));
+
+    const runOnce = async (): Promise<T> => {
+      if (breaker && !breaker.canPass()) {
+        throw new Error(`circuit_open:${name}`);
+      }
+      const timeoutError = new Error(`timeout:${name}`);
+      let timer: NodeJS.Timeout | undefined;
+      let timedOut = false;
+      const workPromise = fn(controller.signal);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(timeoutError);
+        }, timeoutMs);
+      });
+
+      try {
+        const result = await Promise.race([workPromise, timeoutPromise]);
+        if (breaker) breaker.onSuccess();
+        return result;
+      } catch (err) {
+        if (breaker) breaker.onFailure();
+        if ((err as Error) === timeoutError || timedOut) {
+          workPromise.catch(() => {});
+        }
+        throw err;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
     try {
       return await runOnce();
     } catch (err) {
       lastErr = err;
-      if (i === opts.maxRetries) break;
-      const exp = Math.min(5, i + 1);
-      const jitter = Math.random() * base;
-      await delay(exp * base + jitter, undefined, { signal }).catch(() => {});
+      if (attempt === maxRetries) break;
+      const exp = Math.min(5, attempt + 1);
+      const jitter = random() * base;
+      await sleep(exp * base + jitter, controller.signal).catch(() => {});
     }
   }
+
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
-

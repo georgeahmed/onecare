@@ -3,6 +3,7 @@ import type { IdempotencyStore } from './idempotency';
 export interface RedisLike {
   set(key: string, value: string, ...args: Array<string | number>): Promise<'OK' | null> | 'OK' | null;
   exists(key: string): Promise<number> | number;
+  del(key: string): Promise<number> | number;
 }
 
 export class RedisIdempotencyStore implements IdempotencyStore {
@@ -24,5 +25,9 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     // Atomic reserve using SET NX EX ttl
     const res = await this.client.set(this.k(key), '1', 'NX', 'EX', ttlSeconds);
     return res === 'OK' ? 'reserved' : 'exists';
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.client.del(this.k(key));
   }
 }

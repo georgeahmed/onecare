@@ -2,7 +2,7 @@ import { beforeAll, afterAll, beforeEach, describe, it, expect, vi } from 'vites
 import type { AddressInfo } from 'node:net';
 import { Topics, type TriageInput, type TypedEnvelope } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
-import { InMemoryIdempotencyStore } from '../src/application/idempotency';
+import { InMemoryIdempotencyStore, deriveIdempotencyKey } from '../src/application/idempotency';
 import {
   server,
   setBusReadyForTest,
@@ -10,6 +10,8 @@ import {
   setIdempotencyStoreForTest,
   resetIdempotencyStoreForTest,
 } from '../src/index';
+import { resetSecurityServices } from '../src/adapters/security';
+import * as callGuard from '../src/adapters/services/callWithGuard';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -60,6 +62,32 @@ const authHeaders = {
   'x-auth-scope': 'submit',
 };
 
+describe('deriveIdempotencyKey', () => {
+  it('changes when attachment metadata differs', () => {
+    const baseSubmission = {
+      practiceId: 'p1',
+      patient: { id: 'patient-1' },
+      narrative: 'same length narrative',
+      channel: 'web' as const,
+      attachments: [
+        { contentType: 'application/pdf', url: 'https://files.example/1' },
+        { contentType: 'image/png', url: 'https://files.example/2' },
+      ],
+    };
+    const mutated = {
+      ...baseSubmission,
+      attachments: [
+        { contentType: 'application/pdf', url: 'https://files.example/1' },
+        { contentType: 'image/png', url: 'https://files.example/3' },
+      ],
+    };
+    const actor = 'patient-1';
+    const first = deriveIdempotencyKey(baseSubmission, actor);
+    const second = deriveIdempotencyKey(mutated, actor);
+    expect(first).not.toBe(second);
+  });
+});
+
 describe('idempotency guard', () => {
   beforeAll(async () => {
     delete process.env.NATS_URL;
@@ -80,6 +108,7 @@ describe('idempotency guard', () => {
     base = '';
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
+    resetSecurityServices();
   });
 
   afterEach(() => {
@@ -152,6 +181,32 @@ describe('idempotency guard', () => {
 
     const keys = results.map((r) => r.headers.get('x-idempotency-key'));
     expect(new Set(keys)).toEqual(new Set(['concurrent-key']));
+    expect(events).toHaveLength(1);
+  });
+
+  it('releases reservations after guarded upstream failures', async () => {
+    const events: TypedEnvelope<TriageInput>[] = [];
+    const sub = await subscribeTriage((env) => events.push(env));
+    const original = callGuard.callWithGuard;
+    const timeoutError = Object.assign(new Error('gateway timeout'), { code: 'upstream_timeout' });
+    const guardSpy = vi
+      .spyOn(callGuard, 'callWithGuard')
+      .mockImplementationOnce(async () => {
+        throw timeoutError;
+      })
+      .mockImplementation((name, fn, opts) => original(name, fn, opts));
+
+    const first = await postSafetyCheck(submission, { ...authHeaders, 'x-request-id': 'req-timeout-1' });
+    expect(first.status).toBe(504);
+    const firstKey = first.headers.get('x-idempotency-key');
+    expect(firstKey).toBeTruthy();
+
+    const retry = await postSafetyCheck(submission, { ...authHeaders, 'x-request-id': 'req-timeout-2' });
+    expect(retry.status).toBe(200);
+    expect(retry.headers.get('x-idempotency-key')).toBe(firstKey);
+
+    await sub.unsubscribe();
+    guardSpy.mockRestore();
     expect(events).toHaveLength(1);
   });
 });

@@ -120,7 +120,19 @@ export function withFhirValidation(repository: FhirRepository, options?: FhirVal
   const profiles = options?.profiles;
 
   return {
-    upsertBundle: async (bundle) => repository.upsertBundle(bundle),
+    upsertBundle: async (bundle) => {
+      const entries = Array.isArray((bundle as { entry?: unknown })?.entry)
+        ? ((bundle as { entry: Array<{ resource?: unknown }> }).entry)
+        : [];
+      for (const entry of entries) {
+        const resource = entry?.resource;
+        if (!resource) continue;
+        const resourceType = (resource as { resourceType?: string }).resourceType;
+        const profile = typeof resourceType === 'string' ? pickProfile(profiles, resourceType) : undefined;
+        ensureValid(resource, { profile });
+      }
+      return repository.upsertBundle(bundle);
+    },
 
     createTask: async (task) =>
       createTaskResource(repository, task, { profile: pickProfile(profiles, 'Task') }),
@@ -130,5 +142,11 @@ export function withFhirValidation(repository: FhirRepository, options?: FhirVal
 
     createDocumentReference: async (document) =>
       createDocumentReferenceResource(repository, document, { profile: pickProfile(profiles, 'DocumentReference') }),
+
+    ...(typeof repository.updateTask === 'function'
+      ? {
+          updateTask: async (taskId: string, patch: unknown) => repository.updateTask!(taskId, patch),
+        }
+      : {}),
   };
 }

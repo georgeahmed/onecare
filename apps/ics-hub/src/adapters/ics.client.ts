@@ -229,15 +229,19 @@ export class IcsHttpClient implements IcsClient {
   private readonly ackDispatcher: IcsAckDispatcher;
 
   constructor(options: IcsClientOptions) {
-    if (!options || Object.keys(options.routes ?? {}).length === 0) {
+    if (
+      !options ||
+      (Object.keys(options.routes ?? {}).length === 0 && !options.defaultRoute)
+    ) {
       throw new Error('ics_routes_missing');
     }
-    this.routes = new Map(
-      Object.entries(options.routes).map(([org, route]) => [
-        normaliseOrgId(org),
-        createRouteState(org, route),
-      ]),
-    );
+    const routeEntries: Array<[string, RouteState]> = options.routes
+      ? Object.entries(options.routes).map(([org, route]): [string, RouteState] => [
+          normaliseOrgId(org),
+          createRouteState(org, route),
+        ])
+      : [];
+    this.routes = new Map<string, RouteState>(routeEntries);
     this.defaultRoute = options.defaultRoute ? createRouteState('default', options.defaultRoute) : undefined;
     this.referralDispatcher = options.referralDispatcher ?? defaultReferralDispatcher;
     this.ackDispatcher = options.ackDispatcher ?? defaultAckDispatcher;
@@ -275,12 +279,13 @@ export class IcsHttpClient implements IcsClient {
     if (!request?.org) {
       throw new IcsClientError('invalid_input', 'Organisation identifier required');
     }
-    const orgId = options?.organisationIdOverride ?? request.org;
+    const rawOrgId = options?.organisationIdOverride ?? request.org;
+    const orgId = rawOrgId.trim();
     const route = this.resolveRoute(orgId);
     try {
       route.rateLimiter.consume();
     } catch (error) {
-      throw this.handleImmediateFailure('referral', route, options?.correlationId, error);
+      throw this.handleImmediateFailure('referral', route, options?.correlationId, orgId, error);
     }
     return this.executeWithGuard('referral', route, orgId, options?.correlationId, async (context) =>
       this.referralDispatcher(route, request, context),
@@ -295,14 +300,18 @@ export class IcsHttpClient implements IcsClient {
     if (!referralId) {
       throw new IcsClientError('invalid_input', 'Referral identifier required');
     }
-    const orgId = options?.organisationIdOverride ?? ack?.referralId ?? '';
-    const route = this.resolveRoute(orgId);
+    const overrideOrg = options?.organisationIdOverride?.trim();
+    const route = overrideOrg ? this.resolveRoute(overrideOrg) : this.defaultRoute;
+    if (!route) {
+      throw new IcsClientError('invalid_input', 'Organisation identifier required for acknowledgement');
+    }
+    const effectiveOrgId = overrideOrg ?? route.key;
     try {
       route.rateLimiter.consume();
     } catch (error) {
-      throw this.handleImmediateFailure('ack', route, options?.correlationId, error);
+      throw this.handleImmediateFailure('ack', route, options?.correlationId, effectiveOrgId, error);
     }
-    return this.executeWithGuard('ack', route, orgId, options?.correlationId, async (context) =>
+    return this.executeWithGuard('ack', route, effectiveOrgId, options?.correlationId, async (context) =>
       this.ackDispatcher(route, referralId, ack, context),
     );
   }
@@ -317,14 +326,14 @@ export class IcsHttpClient implements IcsClient {
     if (!route.circuitBreaker.canExecute()) {
       integrationCircuitCounter.add(1, { provider: PROVIDER, operation });
       logCircuitOpen(operation, route.options.endpoint, correlationId);
-      const span = this.startCallSpan(operation, route, correlationId);
+      const span = this.startCallSpan(operation, route, correlationId, organisationId);
       span.setStatus({ code: SpanStatusCode.ERROR, message: 'Circuit breaker open' });
       span.end();
       throw new IcsClientError('upstream_unavailable', 'ICS circuit breaker open');
     }
 
     const operationStart = performance.now();
-    const span = this.startCallSpan(operation, route, correlationId);
+    const span = this.startCallSpan(operation, route, correlationId, organisationId);
     let attempt = 0;
     let lastError: IcsClientError | undefined;
 
@@ -395,7 +404,12 @@ export class IcsHttpClient implements IcsClient {
     return route;
   }
 
-  private startCallSpan(operation: Operation, route: RouteState, correlationId?: string) {
+  private startCallSpan(
+    operation: Operation,
+    route: RouteState,
+    correlationId?: string,
+    organisationId?: string,
+  ) {
     const span = startSpan('ics.call', {
       attributes: {
         'integration.provider': PROVIDER,
@@ -407,7 +421,8 @@ export class IcsHttpClient implements IcsClient {
     if (correlationId && span.isRecording()) {
       span.setAttribute('integration.correlation_id', correlationId);
     }
-    span.setAttribute('integration.organisation_id', route.key);
+    const orgAttribute = organisationId && organisationId.trim().length > 0 ? normaliseOrgId(organisationId) : route.key;
+    span.setAttribute('integration.organisation_id', orgAttribute);
     return span;
   }
 
@@ -415,6 +430,7 @@ export class IcsHttpClient implements IcsClient {
     operation: Operation,
     route: RouteState,
     correlationId: string | undefined,
+    organisationId: string,
     error: unknown,
   ): IcsClientError {
     const mapped =
@@ -423,7 +439,7 @@ export class IcsHttpClient implements IcsClient {
         : new IcsClientError('upstream_unavailable', 'ICS request failed', error);
     recordFailureMetrics(operation, 0, mapped.code);
     logFailure(operation, route.options.endpoint, correlationId, mapped.code, 0, false);
-    const span = this.startCallSpan(operation, route, correlationId);
+    const span = this.startCallSpan(operation, route, correlationId, organisationId);
     span.recordException(mapped);
     span.setStatus({ code: SpanStatusCode.ERROR, message: mapped.message });
     span.end();
@@ -484,13 +500,16 @@ function normaliseOrgId(orgId: string): string {
 }
 
 function createRouteState(key: string, options: IcsRouteOptions): RouteState {
+  const correlationHeader = typeof options.correlationHeader === 'string'
+    ? options.correlationHeader.trim()
+    : undefined;
   const resolved: RouteOptionsResolved = {
     endpoint: options.endpoint,
     headers: { ...(options.headers ?? {}) },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     retry: normalizeRetryPolicy(options.retry),
     circuitBreaker: normalizeCircuitPolicy(options.circuitBreaker),
-    correlationHeader: options.correlationHeader ?? DEFAULT_CORRELATION_HEADER,
+    correlationHeader: correlationHeader && correlationHeader.length > 0 ? correlationHeader : DEFAULT_CORRELATION_HEADER,
     tls: options.tls,
     rateLimitPerMinute: options.rateLimitPerMinute,
   };
@@ -606,7 +625,8 @@ function shouldRetry(error: IcsClientError): boolean {
     error.code === 'upstream_timeout' ||
     error.code === 'upstream_unavailable' ||
     error.code === 'internal_error' ||
-    error.code === 'unknown'
+    error.code === 'unknown' ||
+    error.code === 'rate_limited'
   );
 }
 

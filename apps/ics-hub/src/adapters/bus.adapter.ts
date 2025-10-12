@@ -26,16 +26,18 @@ export async function publishWithGuard<T>(
   if (correlationId) headers['x-correlation-id'] = correlationId;
   let lastErr: unknown;
   const base = opts.baseDelayMs ?? 10;
-  for (let i = 0; i <= (opts.maxRetries ?? 0); i++) {
+  const timeoutMs = opts.timeoutMs ?? 500;
+  const maxRetries = opts.maxRetries ?? 0;
+  for (let i = 0; i <= maxRetries; i++) {
     try {
-      await bus.publish(topic, payload, headers);
+      await publishWithTimeout(bus, topic, payload, headers, timeoutMs);
       return;
     } catch (err) {
       lastErr = err;
-      if (i === (opts.maxRetries ?? 0)) break;
+      if (i === maxRetries) break;
       const exp = Math.min(5, i + 1);
       const jitter = Math.random() * base;
-      await new Promise(r => setTimeout(r, exp * base + jitter));
+      await new Promise((resolve) => setTimeout(resolve, exp * base + jitter));
     }
   }
   // Fallback to DLQ
@@ -49,3 +51,26 @@ export async function publishWithGuard<T>(
   await bus.publish(Topics.broker.deadLetter, dlqPayload, headers);
 }
 
+async function publishWithTimeout<T>(
+  bus: MessageBus,
+  topic: string,
+  payload: T,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<void> {
+  if (!timeoutMs || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
+    await bus.publish(topic, payload, headers);
+    return;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      bus.publish(topic, payload, headers),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('publish_timeout')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

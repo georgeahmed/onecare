@@ -34,6 +34,11 @@ class FakeRedis implements RedisLike {
     return this.map.has(key) ? 1 : 0;
   }
 
+  async del(key: string) {
+    this.map.delete(key);
+    return 1;
+  }
+
   getExpiry(key: string): number | undefined {
     this.gc();
     const value = this.map.get(key);

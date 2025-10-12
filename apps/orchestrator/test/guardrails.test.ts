@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { callWithGuard, CircuitBreaker } from '../src/adapters/common/guardrails';
 
 describe('guardrails', () => {
@@ -26,5 +26,50 @@ describe('guardrails', () => {
     await expect(callWithGuard('svc', fn, { timeoutMs: 100, maxRetries: 0, baseDelayMs: 5 }, cb)).rejects.toBeInstanceOf(Error);
     expect(attempts).toBeGreaterThanOrEqual(2);
   });
-});
 
+  it('awaits configured sleep between retries', async () => {
+    let attempts = 0;
+    let resolveSleep: (() => void) | undefined;
+    const sleep = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSleep = resolve;
+        }),
+    );
+    const fn = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('fail');
+      return 'ok';
+    });
+
+    const resultPromise = callWithGuard('svc', fn, {
+      timeoutMs: 10,
+      maxRetries: 1,
+      baseDelayMs: 5,
+      sleep,
+      random: () => 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(sleep).toHaveBeenCalledTimes(1);
+    });
+    expect(sleep.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    resolveSleep?.();
+    const result = await resultPromise;
+    expect(result).toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates timeout errors when work exceeds the limit', async () => {
+    const fn = vi.fn(() => new Promise<never>(() => {}));
+    await expect(
+      callWithGuard('svc-timeout', fn, {
+        timeoutMs: 10,
+        maxRetries: 0,
+        baseDelayMs: 5,
+      }),
+    ).rejects.toThrow('timeout:svc-timeout');
+  });
+});

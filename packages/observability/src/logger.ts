@@ -11,7 +11,7 @@ const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
 const KEY_VALUE_SECRET_RE =
   /\b(token|secret|password|key|authorization|bearer)\b\s*([:=])\s*([^\s,;]+)/gi;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const SAFE_ID_KEYS = new Set(['correlationid', 'traceid', 'spanid', 'requestid']);
+const SAFE_ID_KEYS = new Set(['correlationid', 'traceid', 'spanid', 'requestid', 'practiceid', 'practice_id']);
 
 function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
@@ -72,12 +72,25 @@ function now() { return new Date().toISOString(); }
 function scrub(value: unknown): unknown {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  const type = typeof value;
-  if (type === 'string' || type === 'number' || type === 'boolean') return value;
   if (value instanceof Error) {
     return { message: value.message, name: value.name };
   }
-  return '[object redacted]';
+  const type = typeof value;
+  if (type === 'string' || type === 'number' || type === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => scrub(item));
+  }
+  if (type === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+      const cleaned = scrub(inner);
+      if (cleaned !== undefined) {
+        result[key] = cleaned;
+      }
+    }
+    return result;
+  }
+  return String(value);
 }
 
 export function log(level: Level, msg: string, fields?: Record<string, unknown>) {
