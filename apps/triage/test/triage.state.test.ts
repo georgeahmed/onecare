@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { ResolvedConfig } from '@onecare/config';
 import type { MessageBus } from '@onecare/bus';
-import type { FhirRepository } from '@onecare/ports';
+import type { FhirRepository, QueueNotifier } from '@onecare/ports';
 import { Topics } from '@onecare/events';
 import {
   IntakeState,
@@ -235,9 +235,14 @@ describe('TaskCreatedState', () => {
     };
 
     const publish = vi.fn().mockResolvedValue(undefined);
+    const notify = vi.fn().mockResolvedValue(undefined);
     const bus: MessageBus = {
       publish,
       subscribe: vi.fn(),
+    };
+
+    const queueNotifier: QueueNotifier = {
+      notify,
     };
 
     const config: ResolvedConfig = {
@@ -260,6 +265,8 @@ describe('TaskCreatedState', () => {
       correlationId: 'corr-abc',
       fhirRepository,
       bus,
+      queueNotifier,
+      queueName: 'triage.escalations',
       now: 0,
     };
 
@@ -298,5 +305,14 @@ describe('TaskCreatedState', () => {
     expect(ctx.taskId).toBe('task-123');
     expect(ctx.taskEventPublished).toBe(true);
     expect(ctx.priority).toBe('URGENT');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      'triage.escalations',
+      expect.objectContaining({
+        taskId: 'task-123',
+        patientId: 'patient-001',
+        priority: 'URGENT',
+      }),
+    );
   });
 });

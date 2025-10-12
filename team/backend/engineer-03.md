@@ -24,7 +24,7 @@ Contracts & Validation
 - Validate triage.input, tasks.created/updated payloads with Ajv (QA-01.1 harness pattern).
 
 Status: in-progress
-Progress: 19%
+Progress: 24%
 
 Dependencies
 - ml/engineer-02 (Acuity model)
@@ -52,7 +52,7 @@ Tasks
 - [ ] BE-03.3b — Emit tasks.created; contract tests and validators
 - [x] BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [ ] BE-03.4b — Tie-breakers and backpressure-aware assignment
-- [ ] BE-03.5 — Queue notifier adapter (idempotent notify, backoff, minimal payload; metrics)
+- [x] BE-03.5 — Queue notifier adapter (idempotent notify, backoff, minimal payload; metrics)
 - [ ] BE-03.8 — SLA aging and escalation (timer/interval, update Task priority/state; emit tasks.updated; tests)
 - [ ] BE-03.9 — Fallbacks for missing ML (rules-based scoring thresholds; config-driven; consistent outcomes)
 - [ ] BE-03.10 — Observability (correlationId propagation; metrics for scoring, dedup, assignment; spans)

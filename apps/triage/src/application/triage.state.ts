@@ -2,7 +2,7 @@ import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
 import { logger } from '@onecare/observability';
-import type { FhirRepository, FhirResourceRef } from '@onecare/ports';
+import type { FhirRepository, FhirResourceRef, QueueNotifier } from '@onecare/ports';
 import { createTaskResource } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
@@ -32,6 +32,8 @@ export interface TriageContext extends MachineContext {
   taskCreatedAt?: string;
   taskEventPublished?: boolean;
   taskDescription?: string;
+  queueNotifier?: QueueNotifier;
+  queueName?: string;
 }
 
 export interface TriageEvent extends MachineEvent {
@@ -228,6 +230,13 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     await ctx.bus.publish(Topics.tasks.created, envelope, headers);
     ctx.taskEventPublished = true;
 
+    await notifyQueue(ctx, {
+      taskId: reference.id,
+      patientId: ctx.patientId,
+      priority,
+      createdAt: timestamp,
+    });
+
     return 'Notified';
   }
 }
@@ -360,4 +369,24 @@ function buildTaskResource(ctx: TriageContext, priority: PriorityCode, timestamp
   }
 
   return resource;
+}
+
+interface QueueNotificationPayload {
+  taskId: string;
+  patientId: string;
+  priority: PriorityCode;
+  createdAt: string;
+}
+
+async function notifyQueue(ctx: TriageContext, payload: QueueNotificationPayload): Promise<void> {
+  if (!ctx.queueNotifier) {
+    logger.info('queue notifier not configured; skipping', {
+      taskId: payload.taskId,
+      patientIdPresent: Boolean(payload.patientId),
+    });
+    return;
+  }
+
+  const queue = ctx.queueName || ctx.taskOwner || 'triage.default';
+  await ctx.queueNotifier.notify(queue, payload);
 }
