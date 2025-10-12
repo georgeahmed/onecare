@@ -14,15 +14,15 @@ Start Here
 - Algorithm.md: 4) Booking (Local, PCN EA, GP Connect)
 - Config: config/nhs_gp_defaults.yaml (enhanced_access_windows)
 
-Status: active
-Progress: 0%
+Status: in-progress
+Progress: 5%
 
 Dependencies
 - backend/engineer-04 (Booking service)
 - devops-sre/engineer-01 (Network/IAM)
 
 Tasks
-- [ ] IN-02.1a — GP Connect client foundation (HTTPS, mTLS/OAuth, env/config)
+- [x] IN-02.1a — GP Connect client foundation (HTTPS, mTLS/OAuth, env/config)
 - [ ] IN-02.1b — Resilience: timeout/retry/jitter, connection pooling, circuit breaker
 - [ ] IN-02.1c — Security: TLS verification, optional cert pinning, SSRF allowlist
 - [ ] IN-02.2a — Slot search mapping (paging, filters, TZ-safe windows)
