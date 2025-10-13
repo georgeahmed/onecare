@@ -173,6 +173,7 @@ Manual runs
 - E2E booking flow (slot search → appointment write-back): scripts/e2e/booking_flow.sh
 - k6 baseline load for /safety-check: `SAFETY_CHECK_SECRET=<shared secret> k6 run scripts/perf/safety_check.js`
 - Triage flow load (triage.input → tasks.created via memory bus): `node scripts/perf/triage_flow.js`
+- Booking flow load (search → create with conflict simulation): `node scripts/perf/booking_flow.js`
 - Contracts sync check: bash scripts/ci/check_contracts_sync.sh HEAD^ HEAD
 - OpenAPI validation: python scripts/ci/validate_openapi.py
 

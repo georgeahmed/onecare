@@ -10,6 +10,8 @@ import type { EnhancedAccessPolicy, RejectedSlot } from './enhancedAccess';
 import { applyEnhancedAccessFilters } from './enhancedAccess';
 import type { FhirRepository } from '@onecare/ports';
 import type { QueueNotifier } from '@onecare/ports';
+import type { IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 import { logger } from '@onecare/observability';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope, type AppointmentCreated } from '@onecare/events';
@@ -35,6 +37,9 @@ export interface BookingContext extends MachineContext {
   auditPublisher?: BookingAuditPublisher;
   correlationId?: string;
   bus?: MessageBus;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyKey?: string;
+  idempotencyTtlSeconds?: number;
 }
 
 export interface BookingEvent extends MachineEvent {
@@ -239,39 +244,73 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
       throw new Error('patient_id_missing');
     }
 
-    let confirmation;
-    try {
-      confirmation = await ctx.client.createAppointment({
-        slotId: slot.id,
-        patientId: ctx.patientId,
-        reason: ctx.narrative ?? 'booking request',
-      });
-    } catch (error) {
-      const mapped = mapCreateError(error);
-      if (mapped.code === 'booking.create.conflict') {
-        await refreshSlotsAfterConflict(ctx).catch((refreshError) => {
-          logger.warn('booking.conflict.refresh_failed', {
-            reason: (refreshError as Error).message,
+    const idempotencyKey = ctx.idempotencyKey ?? deriveBookingIdempotencyKey(ctx);
+    const ttlSeconds = resolveIdempotencyTtl(ctx);
+
+    const { status } = await executeWithIdempotency({
+      store: ctx.idempotencyStore,
+      key: idempotencyKey,
+      ttlSeconds,
+      execute: async () => {
+        let confirmation;
+        try {
+          confirmation = await ctx.client!.createAppointment({
+            slotId: slot.id,
+            patientId: ctx.patientId!,
+            reason: ctx.narrative ?? 'booking request',
+          });
+        } catch (error) {
+          const mapped = mapCreateError(error);
+          if (mapped.code === 'booking.create.conflict') {
+            await refreshSlotsAfterConflict(ctx).catch((refreshError) => {
+              logger.warn('booking.conflict.refresh_failed', {
+                reason: (refreshError as Error).message,
+                correlationId: ctx.correlationId,
+              });
+            });
+          }
+          logger.warn('booking.create.failed', {
+            code: mapped.code,
+            slotId: slot.id,
             correlationId: ctx.correlationId,
           });
-        });
-      }
-      logger.warn('booking.create.failed', {
-        code: mapped.code,
-        slotId: slot.id,
-        correlationId: ctx.correlationId,
-      });
-      throw mapped;
-    }
+          throw mapped;
+        }
 
-    ctx.appointmentConfirmation = {
-      appointmentId: confirmation.appointmentId,
-      slotId: confirmation.slotId,
-    };
-    await persistAppointment(ctx, confirmation);
-    await notifyQueue(ctx, confirmation);
-    await emitAudit(ctx, confirmation);
-    await publishAppointmentCreated(ctx, confirmation);
+        ctx.appointmentConfirmation = {
+          appointmentId: confirmation.appointmentId,
+          slotId: confirmation.slotId,
+        };
+        await persistAppointment(ctx, confirmation);
+        await notifyQueue(ctx, confirmation);
+        await emitAudit(ctx, confirmation);
+        await publishAppointmentCreated(ctx, confirmation);
+        logger.info('booking.idempotency.executed', {
+          key: idempotencyKey,
+          correlationId: ctx.correlationId,
+        });
+        return confirmation;
+      },
+      onDuplicate: () => {
+        logger.warn('booking.idempotency.duplicate', {
+          key: idempotencyKey,
+          slotId: slot.id,
+          patientId: ctx.patientId,
+          correlationId: ctx.correlationId,
+        });
+      },
+      onError: (error) => {
+        logger.error('booking.idempotency.failed', {
+          key: idempotencyKey,
+          correlationId: ctx.correlationId,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        });
+      },
+    });
+
+    if (status === 'skipped') {
+      return 'WrittenBack';
+    }
     return 'WrittenBack';
   }
 }
@@ -381,4 +420,18 @@ async function emitAudit(
       correlationId: ctx.correlationId,
     },
   });
+}
+
+const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
+
+function deriveBookingIdempotencyKey(ctx: BookingContext): string {
+  const slotId = ctx.selectedSlot?.id ?? ctx.appointmentConfirmation?.slotId ?? 'unknown-slot';
+  const patientId = ctx.patientId ?? 'unknown-patient';
+  const origin = ctx.originatingTaskId ?? ctx.correlationId ?? ctx.id;
+  return `booking:${patientId}:${slotId}:${origin}`;
+}
+
+function resolveIdempotencyTtl(ctx: BookingContext): number {
+  const ttl = ctx.idempotencyTtlSeconds;
+  return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
 }

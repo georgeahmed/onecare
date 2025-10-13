@@ -26,7 +26,7 @@ TEAM STATUS
 | team/mlops/engineer-01.md | in-progress | 86% | 6/7 | 0 | 2 |
 | team/mlops/engineer-02.md | planned | 0% | 0/6 | 0 | 2 |
 | team/qa-automation/engineer-01.md | stable | 100% | 6/6 | 0 | 3 |
-| team/qa-automation/engineer-02.md | in-progress | 29% | 2/7 | 0 | 2 |
+| team/qa-automation/engineer-02.md | in-progress | 43% | 3/7 | 0 | 2 |
 | team/security/engineer-01.md | stable | 100% | 2/2 | 0 | 2 |
 | team/security/engineer-02.md | needs-fixes | 0% | 0/18 | 2 | 2 |
 | team/telephony-voice/engineer-01.md | planned | 0% | 0/4 | 0 | 3 |

@@ -2,8 +2,14 @@ import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
 import { logger } from '@onecare/observability';
-import type { FeatureStore, FhirRepository, FhirResourceRef, QueueNotifier } from '@onecare/ports';
-import { createTaskResource } from '@onecare/ports';
+import type {
+  FeatureStore,
+  FhirRepository,
+  FhirResourceRef,
+  QueueNotifier,
+  IdempotencyStore,
+} from '@onecare/ports';
+import { createTaskResource, executeWithIdempotency } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
@@ -36,6 +42,9 @@ export interface TriageContext extends MachineContext {
   queueNotifier?: QueueNotifier;
   queueName?: string;
   featureStore?: FeatureStore;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyKey?: string;
+  idempotencyTtlSeconds?: number;
 }
 
 export interface TriageEvent extends MachineEvent {
