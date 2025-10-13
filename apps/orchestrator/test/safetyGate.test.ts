@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { promises as dns } from 'node:dns';
 import { analyzePortalSubmission, parseJsonOrThrow } from '../src/adapters/services/safetyGate';
 
 const sample = {
@@ -9,6 +10,10 @@ const sample = {
 };
 
 describe('safetyGate SSRF guard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('blocks localhost/loopback endpoints', async () => {
     await expect(
       analyzePortalSubmission(sample, 'http://localhost:8081', 'corr')
@@ -16,6 +21,21 @@ describe('safetyGate SSRF guard', () => {
     await expect(
       analyzePortalSubmission(sample, 'http://127.0.0.1:8081', 'corr')
     ).rejects.toBeTruthy();
+  });
+
+  it('blocks domains that resolve to private addresses', async () => {
+    vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '10.0.0.4', family: 4 }] as unknown as dns.LookupAddress[]);
+    await expect(
+      analyzePortalSubmission(sample, 'https://intranet.example', 'corr')
+    ).rejects.toThrow(/blocked_private_ip/);
+  });
+
+  it('fails fast when DNS resolution fails', async () => {
+    const error = Object.assign(new Error('not found'), { code: 'ENOTFOUND' });
+    vi.spyOn(dns, 'lookup').mockRejectedValue(error);
+    await expect(
+      analyzePortalSubmission(sample, 'https://unresolvable.example', 'corr')
+    ).rejects.toThrow(/blocked_host_resolution/);
   });
 });
 

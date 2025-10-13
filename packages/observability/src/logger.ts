@@ -43,7 +43,10 @@ function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (SAFE_ID_KEYS.has(lower)) return false;
   if (SAFE_ID_PARTS.some((part) => lower.includes(part))) return false;
-  if (lower.endsWith('id')) return true;
+  if (lower === 'id') return true;
+  const hasDelimitedIdSuffix = ['_', '-', '.', ':'].some((sep) => lower.endsWith(`${sep}id`));
+  const hasCamelIdSuffix = key.endsWith('Id') || key.endsWith('ID');
+  if (hasDelimitedIdSuffix || hasCamelIdSuffix) return true;
   return /(token|secret|password|credential|ssn|phone|email|authorization|bearer)/i.test(lower);
 }
 

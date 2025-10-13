@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { useIntl } from 'react-intl';
 import type { ErrorEnvelope } from '../lib/types';
 
 type ErrorCode =
@@ -15,54 +16,54 @@ type ErrorCode =
   | 'invalid_fhir'
   | 'internal_error';
 
-const COPY: Record<ErrorCode, { title: string; description: string }> = {
+const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: string }> = {
   unauthorized: {
-    title: 'Sign-in required',
-    description: 'Your session expired or was missing. Please sign in again and resubmit the request.'
+    titleId: 'error.title.unauthorized',
+    descriptionId: 'error.description.unauthorized'
   },
   forbidden: {
-    title: 'Request not permitted',
-    description: 'We cannot process this request for security reasons. Contact support if you believe this is an error.'
+    titleId: 'error.title.forbidden',
+    descriptionId: 'error.description.forbidden'
   },
   invalid_input: {
-    title: 'Check the highlighted details',
-    description: 'Some information looks incomplete or invalid. Review the form and try again.'
+    titleId: 'error.title.invalid_input',
+    descriptionId: 'error.description.invalid_input'
   },
   unsupported_media_type: {
-    title: 'Unsupported format',
-    description: 'The submitted file or content type is not supported. Use the recommended format and retry.'
+    titleId: 'error.title.unsupported_media_type',
+    descriptionId: 'error.description.unsupported_media_type'
   },
   payload_too_large: {
-    title: 'Attachment too large',
-    description: 'One or more files exceed the allowed size. Remove large attachments and submit again.'
+    titleId: 'error.title.payload_too_large',
+    descriptionId: 'error.description.payload_too_large'
   },
   conflict: {
-    title: 'Already submitted',
-    description: 'This request appears to have been sent already. If you need to raise it again, contact support.'
+    titleId: 'error.title.conflict',
+    descriptionId: 'error.description.conflict'
   },
   too_many_requests: {
-    title: 'We are receiving a lot of requests',
-    description: 'Please wait a moment before trying again.'
+    titleId: 'error.title.too_many_requests',
+    descriptionId: 'error.description.too_many_requests'
   },
   upstream_timeout: {
-    title: 'Timed out waiting for a response',
-    description: 'It took too long to reach our services. Try again shortly.'
+    titleId: 'error.title.upstream_timeout',
+    descriptionId: 'error.description.upstream_timeout'
   },
   upstream_unavailable: {
-    title: 'Service temporarily unavailable',
-    description: 'We cannot complete the request right now. Try again in a few moments.'
+    titleId: 'error.title.upstream_unavailable',
+    descriptionId: 'error.description.upstream_unavailable'
   },
   busy: {
-    title: 'Please try again soon',
-    description: 'We are handling a high volume of requests. Wait a moment and resubmit.'
+    titleId: 'error.title.busy',
+    descriptionId: 'error.description.busy'
   },
   invalid_fhir: {
-    title: 'Information needs review',
-    description: 'Some clinical details could not be validated. Update the information and try again.'
+    titleId: 'error.title.invalid_fhir',
+    descriptionId: 'error.description.invalid_fhir'
   },
   internal_error: {
-    title: 'We hit a snag',
-    description: 'Something unexpected happened. Try the request again or reach out to support.'
+    titleId: 'error.title.internal_error',
+    descriptionId: 'error.description.internal_error'
   }
 };
 
@@ -85,27 +86,29 @@ const ErrorAlert = ({
   id,
   autoFocus = true
 }: ErrorAlertProps) => {
+  const intl = useIntl();
   const containerRef = useRef<HTMLElement>(null);
 
   const normalized = useMemo(() => {
     if (!error) return null;
     const envelope = error;
     const codeRaw = envelope.error?.code ?? 'internal_error';
-    const normalizedCode = typeof codeRaw === 'string' ? codeRaw.toLowerCase() : 'internal_error';
-    const copy = COPY[normalizedCode as ErrorCode] ?? null;
-    const fallbackMessage =
-      envelope.error?.message && typeof envelope.error.message === 'string'
-        ? envelope.error.message
-        : COPY.internal_error.description;
+    const normalizedCode = (typeof codeRaw === 'string' ? codeRaw.toLowerCase() : 'internal_error') as ErrorCode;
+    const mapping = ERROR_MESSAGE_IDS[normalizedCode] ?? ERROR_MESSAGE_IDS.internal_error;
+
+    const title = intl.formatMessage({ id: mapping.titleId });
+    const fallbackDescription = intl.formatMessage({ id: mapping.descriptionId });
+    const description = mapping === ERROR_MESSAGE_IDS.internal_error && envelope.error?.message
+      ? envelope.error.message
+      : fallbackDescription;
 
     return {
-      title: (copy ?? COPY.internal_error).title,
-      description: copy ? copy.description : fallbackMessage,
-      fallbackMessage,
+      title,
+      description,
       correlationId: envelope.correlationId,
       code: codeRaw
     };
-  }, [error]);
+  }, [error, intl]);
 
   useEffect(() => {
     if (!autoFocus || !normalized) return;
@@ -135,16 +138,16 @@ const ErrorAlert = ({
       <p>{normalized.description}</p>
       {normalized.correlationId ? (
         <p>
-          Support reference: <code>{normalized.correlationId}</code>
+          {intl.formatMessage({ id: 'error.supportReference' })}: <code>{normalized.correlationId}</code>
         </p>
       ) : null}
       <div>
         {onRetry ? (
           <button type="button" onClick={onRetry}>
-            Try again
+            {intl.formatMessage({ id: 'error.retry' })}
           </button>
         ) : null}
-        <a href={supportUrl ?? DEFAULT_SUPPORT_URL}>Contact support</a>
+        <a href={supportUrl ?? DEFAULT_SUPPORT_URL}>{intl.formatMessage({ id: 'error.contactSupport' })}</a>
       </div>
     </section>
   );

@@ -79,6 +79,14 @@ describe('logger redaction', () => {
     expect(payload.practiceId).toBe('demo-practice');
   });
 
+  it('does not redact non-identifier fields that contain id as a suffix', () => {
+    log('info', 'flag valid status', { valid: true, invalid: false });
+
+    const payload = getLastPayload();
+    expect(payload.valid).toBe(true);
+    expect(payload.invalid).toBe(false);
+  });
+
   it('preserves structured fields after redaction', () => {
     log('info', 'structured payload', {
       portal: {

@@ -51,7 +51,7 @@ Makefile Shortcuts
 - make lint / make format / make test
 - make codegen / make codegen-check
 - make check-task-cards — verify required sections in team/*/tasks/*.md
-- make py-test — run Python tests
+- make py-test — run Python tests via ./services-py/run-tests.sh (manages venv + PYTHONPATH)
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082
 - make dev-run — start Safety Gate + Orchestrator (keeps running)
@@ -70,6 +70,10 @@ Justfile Shortcuts (if using just)
 - just demo-docker / just demo-local
 
 Run Locally (Without Docker)
+Ensure booking proxy vars are configured before running the portal:
+- export `BOOKING_AVAILABILITY_URL` to the upstream booking availability base URL (e.g., `https://booking.dev.onecare/api/`).
+- export `VITE_BOOKING_API_URL` to the orchestrator origin (default `http://localhost:3001`).
+
 1) Start Safety Gate (Python)
    - uvicorn services-py/safety_gate_service/main:app --reload --port 8081
 2) Build Orchestrator (TS)
@@ -165,6 +169,8 @@ CI (GitHub Actions)
 - contracts guard (push): fails if schemas changed without contract updates
 
 Manual runs
+- E2E triage flow (memory bus, orchestrator + triage task publish): scripts/e2e/triage_flow.sh
+- E2E booking flow (slot search → appointment write-back): scripts/e2e/booking_flow.sh
 - Contracts sync check: bash scripts/ci/check_contracts_sync.sh HEAD^ HEAD
 - OpenAPI validation: python scripts/ci/validate_openapi.py
 

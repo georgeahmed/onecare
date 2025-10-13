@@ -63,7 +63,6 @@ def test_metadata_latest_fallback(tmp_path):
 
     # Remove version-specific metadata to exercise latest fallback path.
     version_meta = tmp_path / "acuity-v1.0.0.meta.json"
-    latest_meta = tmp_path / "acuity-latest.meta.json"
     version_meta.unlink()
 
     loaded = load_model_artifact("acuity", version="1.0.0", models_dir=tmp_path)

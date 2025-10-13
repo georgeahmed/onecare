@@ -50,7 +50,7 @@ function createDefaultSecurityServices(): SecurityServices {
       }
       const now = Date.now();
       gc(now);
-      const key = `${reqId}:${header}`;
+      const key = reqId;
       if (seenRequests.has(key)) {
         logger.warn('zero-trust replay guard blocked duplicate request', { requestId: reqId });
         return false;
@@ -90,7 +90,7 @@ function resolveSharedSecret(): string | null {
 }
 
 function extractBearerToken(header: string): string | null {
-  const parts = header.split(/	|\s+/).filter(Boolean);
+  const parts = header.split(/\s+/).filter(Boolean);
   if (parts.length !== 2) return null;
   if (parts[0].toLowerCase() !== 'bearer') return null;
   return parts[1];
@@ -98,8 +98,14 @@ function extractBearerToken(header: string): string | null {
 
 function verifySignature(token: string, payload: string, secret: string): boolean {
   const expected = createHmac('sha256', secret).update(payload).digest('base64url');
-  const providedBuf = Buffer.from(token);
-  const expectedBuf = Buffer.from(expected);
+  let providedBuf: Buffer;
+  let expectedBuf: Buffer;
+  try {
+    providedBuf = Buffer.from(token, 'base64url');
+    expectedBuf = Buffer.from(expected, 'base64url');
+  } catch {
+    return false;
+  }
   if (providedBuf.length !== expectedBuf.length) {
     return false;
   }

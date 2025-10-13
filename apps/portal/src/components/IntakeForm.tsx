@@ -1,7 +1,18 @@
 import { FormEvent, useEffect, useId, useRef, useState } from 'react';
+import { useIntl } from 'react-intl';
+import SchemaForm, { type JsonSchema, type SchemaFormHandle } from '../features/schemaForm/SchemaForm';
 import { submitIntake } from '../lib/api';
-import type { ErrorEnvelope, PortalSubmission, SafetyDecision } from '../lib/types';
+import type { ErrorEnvelope, PortalSubmission, PortalSubmissionAttachment, SafetyDecision } from '../lib/types';
 import ErrorAlert from './ErrorAlert';
+import RetryNotice from './RetryNotice';
+import SubmitButton from './SubmitButton';
+import { useLocale, supportedLocales } from '../i18n';
+// Import JSON Schema directly (tsconfig resolves JSON modules)
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import portalSubmissionSchema from '../../../../schemas/ingest/portal-submission.json';
+
+const intakeSchema = portalSubmissionSchema as JsonSchema;
 
 const buildInitialSubmission = (): PortalSubmission => ({
   practiceId: '',
@@ -9,38 +20,131 @@ const buildInitialSubmission = (): PortalSubmission => ({
     id: ''
   },
   channel: 'web',
-  narrative: ''
+  narrative: '',
+  attachments: []
 });
 
+const isSafeAttachmentUrl = (candidate: string): string | null => {
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+type SupportedLocale = (typeof supportedLocales)[number];
+
+const isSupportedPortalLocale = (value: string | null | undefined): value is SupportedLocale =>
+  typeof value === 'string' && supportedLocales.includes(value as SupportedLocale);
+
+const sanitizeAttachments = (
+  attachments: PortalSubmissionAttachment[] | undefined
+): PortalSubmissionAttachment[] =>
+  (attachments ?? []).reduce<PortalSubmissionAttachment[]>((acc, attachment) => {
+    const contentType = (attachment.contentType ?? '').trim();
+    const rawUrl = (attachment.url ?? '').trim();
+    if (!contentType || !rawUrl) {
+      return acc;
+    }
+    const safeUrl = isSafeAttachmentUrl(rawUrl);
+    if (!safeUrl) {
+      return acc;
+    }
+    acc.push({ contentType, url: safeUrl });
+    return acc;
+  }, []);
+
+export const sanitizeSubmission = (submission: PortalSubmission): PortalSubmission => {
+  const practiceId = submission.practiceId.trim();
+  const narrative = submission.narrative.trim();
+  const patientId = submission.patient.id.trim();
+  const dob = submission.patient.dob?.trim();
+  const locale = submission.patient.locale?.trim();
+  const attachments = sanitizeAttachments(submission.attachments);
+
+  const patient: PortalSubmission['patient'] = {
+    id: patientId
+  };
+
+  if (dob) {
+    patient.dob = dob;
+  }
+  if (locale && isSupportedPortalLocale(locale)) {
+    patient.locale = locale;
+  }
+
+  const channel: PortalSubmission['channel'] = submission.channel === 'ivr' ? 'ivr' : 'web';
+
+  const normalized: PortalSubmission = {
+    practiceId,
+    patient,
+    narrative,
+    channel
+  };
+
+  if (attachments.length > 0) {
+    normalized.attachments = attachments;
+  }
+
+  return normalized;
+};
+
 const IntakeForm = () => {
+  const intl = useIntl();
+  const { locale } = useLocale();
   const [formData, setFormData] = useState<PortalSubmission>(() => buildInitialSubmission());
+  const [formResetKey, setFormResetKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<ErrorEnvelope | null>(null);
   const [decision, setDecision] = useState<SafetyDecision | null>(null);
   const [decisionCorrelationId, setDecisionCorrelationId] = useState<string | undefined>();
+  const [retryAttempts, setRetryAttempts] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const schemaFormRef = useRef<SchemaFormHandle>(null);
+  const MAX_RETRIES = 2;
 
-  const practiceIdInputId = useId();
-  const patientIdInputId = useId();
-  const narrativeInputId = useId();
-  const narrativeHintId = useId();
-  const channelFieldsetId = useId();
   const statusMessageId = useId();
+
+  useEffect(() => {
+    setFormData((prev) => {
+      const currentLocale = prev.patient.locale?.trim();
+      if (isSupportedPortalLocale(currentLocale)) {
+        return prev;
+      }
+      if (locale === currentLocale) {
+        return prev;
+      }
+      return {
+        ...prev,
+        patient: {
+          ...prev.patient,
+          locale
+        }
+      };
+    });
+  }, [locale]);
 
   const handleReset = () => {
     setFormData(buildInitialSubmission());
+    setFormResetKey((previous) => previous + 1);
     setHasSubmitted(false);
     setSubmitError(null);
     setDecision(null);
     setDecisionCorrelationId(undefined);
+    setRetryAttempts(0);
   };
 
   const normalizeErrorEnvelope = async (error: unknown): Promise<ErrorEnvelope> => {
+    const fallbackMessage = intl.formatMessage({ id: 'error.description.internal_error' });
     const fallback: ErrorEnvelope = {
       error: {
         code: 'internal_error',
-        message: 'Something went wrong. Please try again.'
+        message: fallbackMessage
       }
     };
 
@@ -48,19 +152,25 @@ const IntakeForm = () => {
       return fallback;
     }
 
-    if (typeof error === 'object' && error !== null) {
-      const withEnvelope = error as { envelope?: ErrorEnvelope };
-      if (withEnvelope.envelope?.error) {
-        const envelope = withEnvelope.envelope;
+    const extractFromObject = (candidate: { envelope?: ErrorEnvelope } | null | undefined) => {
+      if (candidate?.envelope?.error) {
+        const envelope = candidate.envelope;
+        const correlationId = envelope.correlationId;
         return {
-          correlationId: envelope.correlationId,
+          correlationId,
           error: {
             code: envelope.error.code,
-            message: envelope.error.message ?? fallback.error.message,
+            message: envelope.error.message ?? fallbackMessage,
             details: envelope.error.details
           }
-        };
+        } satisfies ErrorEnvelope;
       }
+      return undefined;
+    };
+
+    if (typeof error === 'object' && error !== null) {
+      const fromWrapped = extractFromObject(error as { envelope?: ErrorEnvelope });
+      if (fromWrapped) return fromWrapped;
     }
 
     if (error instanceof Response) {
@@ -69,14 +179,15 @@ const IntakeForm = () => {
         if (payload && typeof payload === 'object' && 'error' in payload) {
           const envelope = payload as ErrorEnvelope;
           if (envelope.error && typeof envelope.error.code === 'string') {
+            const correlationId = envelope.correlationId;
             return {
-              correlationId: envelope.correlationId,
+              correlationId,
               error: {
                 code: envelope.error.code,
-                message: envelope.error.message ?? fallback.error.message,
+                message: envelope.error.message ?? fallbackMessage,
                 details: envelope.error.details
               }
-            };
+            } satisfies ErrorEnvelope;
           }
         }
       } catch {
@@ -95,10 +206,10 @@ const IntakeForm = () => {
           correlationId: candidate.correlationId,
           error: {
             code: candidate.error.code,
-            message: candidate.error.message ?? fallback.error.message,
+            message: candidate.error.message ?? fallbackMessage,
             details: candidate.error.details
           }
-        };
+        } satisfies ErrorEnvelope;
       }
     }
 
@@ -106,9 +217,9 @@ const IntakeForm = () => {
       return {
         error: {
           code: 'internal_error',
-          message: error.message || fallback.error.message
+          message: error.message || fallbackMessage
         }
-      };
+      } satisfies ErrorEnvelope;
     }
 
     return fallback;
@@ -119,10 +230,23 @@ const IntakeForm = () => {
     if (isSubmitting) {
       return;
     }
+
+    const schemaValid = schemaFormRef.current?.validateAll() ?? true;
+    if (!schemaValid) {
+      setSubmitError({
+        error: {
+          code: 'invalid_input',
+          message: intl.formatMessage({ id: 'error.description.invalid_input' })
+        }
+      });
+      return;
+    }
+
     setSubmitError(null);
     setDecision(null);
     setDecisionCorrelationId(undefined);
     setHasSubmitted(false);
+    setRetryAttempts(0);
     setIsSubmitting(true);
 
     abortControllerRef.current?.abort();
@@ -130,13 +254,30 @@ const IntakeForm = () => {
     abortControllerRef.current = controller;
 
     try {
-      const result = await submitIntake(formData, { signal: controller.signal });
+      const payload = sanitizeSubmission(formData);
+      const result = await submitIntake(payload, {
+        signal: controller.signal,
+        locale,
+        retry: {
+          maxRetries: MAX_RETRIES,
+          baseDelayMs: 250,
+          jitter: true
+        },
+        onRetry: ({ attempt }) => setRetryAttempts(attempt)
+      });
       setDecision(result.decision);
       setDecisionCorrelationId(result.correlationId);
+      setRetryAttempts(0);
       setHasSubmitted(true);
     } catch (error) {
+      if ((error as { __clientCancelled?: boolean }).__clientCancelled) {
+        setRetryAttempts(0);
+        setSubmitError(null);
+        return;
+      }
       const envelope = await normalizeErrorEnvelope(error);
       setSubmitError(envelope);
+      setRetryAttempts(0);
     } finally {
       setIsSubmitting(false);
       abortControllerRef.current = null;
@@ -153,11 +294,13 @@ const IntakeForm = () => {
     if (!decision) return null;
 
     const outcomeFriendly =
-      decision.outcome === 'SAFE_TO_CONTINUE' ? 'Safe to continue' : 'Divert for review';
+      decision.outcome === 'SAFE_TO_CONTINUE'
+        ? intl.formatMessage({ id: 'decision.safe.title' })
+        : intl.formatMessage({ id: 'decision.diverted.title' });
     const defaultReason =
       decision.outcome === 'SAFE_TO_CONTINUE'
-        ? 'No immediate safety risks detected.'
-        : 'Our team will be alerted to follow up.';
+        ? intl.formatMessage({ id: 'decision.safe.defaultReason' })
+        : intl.formatMessage({ id: 'decision.diverted.defaultReason' });
 
     return (
       <section aria-labelledby={statusMessageId} role="status">
@@ -165,11 +308,11 @@ const IntakeForm = () => {
         <p>{decision.reason ?? defaultReason}</p>
         {decisionCorrelationId ? (
           <p>
-            Reference: <code>{decisionCorrelationId}</code>
+            {intl.formatMessage({ id: 'decision.reference' })}: <code>{decisionCorrelationId}</code>
           </p>
         ) : null}
         <button type="button" onClick={handleReset}>
-          Submit another response
+          {intl.formatMessage({ id: 'intake.success.cta' })}
         </button>
       </section>
     );
@@ -182,10 +325,10 @@ const IntakeForm = () => {
   if (hasSubmitted) {
     return (
       <section aria-labelledby={statusMessageId} role="status">
-        <h2 id={statusMessageId}>Submission received</h2>
-        <p>Thanks for sharing the details. Our care team will review the information shortly.</p>
+        <h2 id={statusMessageId}>{intl.formatMessage({ id: 'intake.success.title' })}</h2>
+        <p>{intl.formatMessage({ id: 'intake.success.body' })}</p>
         <button type="button" onClick={handleReset}>
-          Submit another response
+          {intl.formatMessage({ id: 'intake.success.cta' })}
         </button>
       </section>
     );
@@ -193,105 +336,13 @@ const IntakeForm = () => {
 
   return (
     <form onSubmit={handleSubmit} aria-describedby={submitError ? statusMessageId : undefined}>
-      <div>
-        <label htmlFor={practiceIdInputId}>
-          Practice ID <span aria-hidden="true">*</span>
-        </label>
-        <input
-          id={practiceIdInputId}
-          name="practiceId"
-          type="text"
-          required
-          value={formData.practiceId}
-          onChange={(event) =>
-            setFormData((previous) => ({
-              ...previous,
-              practiceId: event.target.value
-            }))
-          }
-        />
-      </div>
-
-      <div>
-        <label htmlFor={patientIdInputId}>
-          Patient ID <span aria-hidden="true">*</span>
-        </label>
-        <input
-          id={patientIdInputId}
-          name="patientId"
-          type="text"
-          required
-          value={formData.patient.id}
-          onChange={(event) =>
-            setFormData((previous) => ({
-              ...previous,
-              patient: {
-                ...previous.patient,
-                id: event.target.value
-              }
-            }))
-          }
-        />
-      </div>
-
-      <fieldset id={channelFieldsetId}>
-        <legend>
-          Channel <span aria-hidden="true">*</span>
-        </legend>
-        <div>
-          <input
-            id={`${channelFieldsetId}-web`}
-            type="radio"
-            name="channel"
-            value="web"
-            checked={formData.channel === 'web'}
-            onChange={() =>
-              setFormData((previous) => ({
-                ...previous,
-                channel: 'web'
-              }))
-            }
-          />
-          <label htmlFor={`${channelFieldsetId}-web`}>Web</label>
-        </div>
-        <div>
-          <input
-            id={`${channelFieldsetId}-ivr`}
-            type="radio"
-            name="channel"
-            value="ivr"
-            checked={formData.channel === 'ivr'}
-            onChange={() =>
-              setFormData((previous) => ({
-                ...previous,
-                channel: 'ivr'
-              }))
-            }
-          />
-          <label htmlFor={`${channelFieldsetId}-ivr`}>Phone (IVR)</label>
-        </div>
-      </fieldset>
-
-      <div>
-        <label htmlFor={narrativeInputId}>
-          Narrative <span aria-hidden="true">*</span>
-        </label>
-        <p id={narrativeHintId}>Share a concise description of the concern. Do not include sensitive details you would not want stored.</p>
-        <textarea
-          id={narrativeInputId}
-          name="narrative"
-          required
-          aria-describedby={narrativeHintId}
-          value={formData.narrative}
-          onChange={(event) =>
-            setFormData((previous) => ({
-              ...previous,
-              narrative: event.target.value
-            }))
-          }
-          rows={6}
-        />
-      </div>
+      <SchemaForm
+        key={formResetKey}
+        ref={schemaFormRef}
+        schema={intakeSchema}
+        value={formData}
+        onChange={(next) => setFormData(next)}
+      />
 
       {submitError ? (
         <ErrorAlert
@@ -304,9 +355,16 @@ const IntakeForm = () => {
         <div id={statusMessageId} aria-live="polite" />
       )}
 
-      <button type="submit" disabled={isSubmitting}>
-        {isSubmitting ? 'Submitting…' : 'Submit'}
-      </button>
+      <RetryNotice
+        attempts={isSubmitting ? retryAttempts : 0}
+        maxRetries={MAX_RETRIES}
+        onCancel={() => {
+          abortControllerRef.current?.abort();
+          setRetryAttempts(0);
+        }}
+      />
+
+      <SubmitButton disabled={isSubmitting} />
     </form>
   );
 };

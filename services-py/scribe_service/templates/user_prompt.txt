@@ -1,0 +1,12 @@
+Transcript Summary Request
+Encounter: {{ encounter_id }}
+Patient: {{ patient_name or "Unknown" }}
+
+Transcript:
+{{ transcript }}
+
+Please produce a clinical summary with:
+- Chief complaint and pertinent history.
+- Key examination findings or notable statements.
+- Recommended plan and follow-up actions.
+- Any medications discussed.

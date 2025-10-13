@@ -1,5 +1,6 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
+import { promises as dns } from 'node:dns';
 import { PortalSubmission, SafetyDecision } from '@onecare/events';
 import { logger } from '@onecare/observability';
 import { context, trace } from '@opentelemetry/api';
@@ -20,7 +21,7 @@ function isIpV6LoopbackOrPrivate(host: string): boolean {
   return h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80:');
 }
 
-function enforceAllowlist(url: URL) {
+async function enforceAllowlist(url: URL): Promise<void> {
   const hostname = url.hostname;
   if (!/^https?:$/.test(url.protocol)) throw new Error('blocked_protocol');
   if (hostname === 'localhost' || hostname.endsWith('.local')) throw new Error('blocked_host');
@@ -30,6 +31,20 @@ function enforceAllowlist(url: URL) {
   if (isV6 && isIpV6LoopbackOrPrivate(hostname)) throw new Error('blocked_private_ip');
   const allow = (process.env.PY_SAFETY_GATE_HOST_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (allow.length > 0 && !allow.includes(hostname)) throw new Error('blocked_not_allowlisted');
+  if (!isV4 && !isV6) {
+    let records;
+    try {
+      records = await dns.lookup(hostname, { all: true });
+    } catch (err) {
+      throw new Error('blocked_host_resolution');
+    }
+    for (const entry of records) {
+      const address = entry.address ?? '';
+      if (isIpV4Private(address) || isIpV6LoopbackOrPrivate(address)) {
+        throw new Error('blocked_private_ip');
+      }
+    }
+  }
 }
 
 function postJson<T>(
@@ -124,7 +139,7 @@ export async function analyzePortalSubmission(
   const url = `${endpoint.replace(/\/$/, '')}/analyze`;
   // SSRF allowlist/guards
   try {
-    enforceAllowlist(new URL(url));
+    await enforceAllowlist(new URL(url));
   } catch (e) {
     logger.warn('safety gate endpoint blocked by SSRF guard', { reason: (e as Error).message, endpoint, correlationId });
     throw e;

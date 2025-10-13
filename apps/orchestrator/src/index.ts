@@ -1,4 +1,5 @@
 import * as http from 'http';
+import { randomUUID } from 'node:crypto';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
@@ -28,6 +29,25 @@ const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
 const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
 const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
 const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
+const bookingAvailabilityTimeoutMs = Number(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS ?? '3000');
+const bookingAvailabilityBase = (() => {
+  const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      logger.warn('booking availability upstream rejected - invalid protocol', { value: raw });
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    logger.warn('booking availability upstream rejected - invalid URL', {
+      value: raw,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+})();
 
 function parseBooleanFlag(value: string | undefined): boolean {
   if (!value) return false;
@@ -75,6 +95,80 @@ class HttpError extends Error {
     public readonly details?: Record<string, unknown>
   ) {
     super(message);
+  }
+}
+
+function isPrivateIpv4(host: string): boolean {
+  const octets = host.split('.').map((segment) => Number(segment));
+  if (octets.length !== 4 || octets.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return false;
+  if (octets[0] === 10) return true;
+  if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+  if (octets[0] === 192 && octets[1] === 168) return true;
+  if (octets[0] === 127) return true;
+  if (octets[0] === 169 && octets[1] === 254) return true;
+  return false;
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower === '::1' || lower === '0:0:0:0:0:0:0:1') return true;
+  if (lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:')) return true;
+  return false;
+}
+
+function normalizeAttachmentUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new HttpError('invalid_input', 'Attachment URL is invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new HttpError('invalid_input', 'Attachment URL must use HTTPS');
+  }
+  if (parsed.username || parsed.password) {
+    throw new HttpError('invalid_input', 'Attachment URL must not include credentials');
+  }
+  const hostname = parsed.hostname;
+  if (!hostname) {
+    throw new HttpError('invalid_input', 'Attachment hostname is missing');
+  }
+  if (hostname === 'localhost' || hostname.endsWith('.local')) {
+    throw new HttpError('invalid_input', 'Attachment hostname is not allowed');
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname) && isPrivateIpv4(hostname)) {
+    throw new HttpError('invalid_input', 'Attachment host is not reachable');
+  }
+  if (/^[0-9a-fA-F:]+$/.test(hostname) && isPrivateIpv6(hostname)) {
+    throw new HttpError('invalid_input', 'Attachment host is not reachable');
+  }
+  return parsed.toString();
+}
+
+function sanitizeInboundSubmission(submission: PortalSubmission): void {
+  if (!Array.isArray(submission.attachments) || submission.attachments.length === 0) {
+    if ('attachments' in submission) {
+      delete (submission as { attachments?: PortalSubmission['attachments'] }).attachments;
+    }
+    return;
+  }
+  const sanitized: NonNullable<PortalSubmission['attachments']> = [];
+  for (const raw of submission.attachments) {
+    const contentType = typeof raw?.contentType === 'string' ? raw.contentType.trim() : '';
+    const url = typeof raw?.url === 'string' ? raw.url.trim() : '';
+    if (!contentType || !url) {
+      throw new HttpError('invalid_input', 'Attachment fields are required');
+    }
+    const safeUrl = normalizeAttachmentUrl(url);
+    sanitized.push({
+      contentType,
+      url: safeUrl,
+    });
+  }
+  if (sanitized.length > 0) {
+    submission.attachments = sanitized;
+  } else {
+    delete (submission as { attachments?: PortalSubmission['attachments'] }).attachments;
   }
 }
 
@@ -182,7 +276,7 @@ function cidFromHeaders(headers: http.IncomingHttpHeaders): string {
   const h = headers['x-correlation-id'] || headers['X-Correlation-ID'];
   if (Array.isArray(h)) return h[0];
   if (typeof h === 'string') return h;
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return randomUUID();
 }
 
 function resolveMaxBodyBytes(): number {
@@ -554,7 +648,88 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
     res.end(JSON.stringify(body));
     return;
   }
-  if (req.method === 'POST' && req.url === '/feature-log') {
+  let parsedUrl: URL | null = null;
+  try {
+    parsedUrl = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+  } catch {
+    res.statusCode = 400;
+    res.end('Bad Request');
+    return;
+  }
+
+  if (req.method === 'GET' && parsedUrl.pathname === '/booking/slots') {
+    const routeLabel = 'GET /booking/slots';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      if (!bookingAvailabilityBase) {
+        respondError(res, 'upstream_unavailable', 'Booking availability service not configured', corr, setOutcome);
+        return;
+      }
+
+      const upstreamUrl = new URL('slots', bookingAvailabilityBase);
+      upstreamUrl.search = parsedUrl?.search ?? '';
+
+      const headers: Record<string, string> = {
+        accept: 'application/json',
+        'x-correlation-id': corr,
+      };
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (authHeader) {
+        headers.authorization = authHeader;
+      }
+      const practiceHeader = getHeader(req.headers, 'x-practice-id');
+      if (practiceHeader) {
+        headers['x-practice-id'] = practiceHeader;
+      }
+
+      const controller = new AbortController();
+      const timeoutMs = Number.isFinite(bookingAvailabilityTimeoutMs) && bookingAvailabilityTimeoutMs > 0
+        ? bookingAvailabilityTimeoutMs
+        : 3000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      let upstream: Response;
+      try {
+        upstream = await fetch(upstreamUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError') {
+          throw new HttpError('upstream_timeout', 'Booking availability request timed out');
+        }
+        throw new HttpError('upstream_unavailable', 'Booking availability request failed', {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const bodyText = await upstream.text();
+      res.statusCode = upstream.status;
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const upstreamContentType = upstream.headers.get('content-type');
+      if (upstreamContentType) {
+        res.setHeader('content-type', upstreamContentType);
+      } else {
+        res.setHeader('content-type', 'application/json');
+      }
+      const upstreamCorrelation = upstream.headers.get('x-correlation-id');
+      if (upstreamCorrelation) {
+        res.setHeader('x-upstream-correlation-id', upstreamCorrelation);
+      }
+      res.end(bodyText);
+
+      if (!upstream.ok) {
+        setOutcome(upstream.status >= 500 ? 'upstream_unavailable' : 'invalid_input');
+      } else {
+        setOutcome('ok');
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && parsedUrl.pathname === '/feature-log') {
     const routeLabel = 'POST /feature-log';
     handleHttp(req, res, routeLabel, corr, async () => {
       if (!featureLoggingOn || !featureStore) {
@@ -611,7 +786,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
     });
     return;
   }
-  if (req.method === 'POST' && req.url === '/safety-check') {
+  if (req.method === 'POST' && parsedUrl.pathname === '/safety-check') {
     const routeLabel = 'POST /safety-check';
     handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
       if (!busReady) {
@@ -649,6 +824,8 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         );
         return;
       }
+
+      sanitizeInboundSubmission(submission);
 
       const security = getSecurityServices();
       const requestId = getHeader(req.headers, 'x-request-id') ?? corr;

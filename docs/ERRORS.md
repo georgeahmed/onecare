@@ -29,9 +29,11 @@ Code → Status Mapping
 | `payload_too_large`      | 413  | Body exceeds configured `MAX_BODY_BYTES`                            |
 | `conflict`               | 409  | Idempotency collision/double-submit                                 |
 | `too_many_requests`      | 429  | Future rate-limit/surge control                                     |
+| `rate_limited`           | 429  | Booking surge guard; UI instructs user to pause before retry        |
 | `upstream_timeout`       | 504  | Timed out awaiting upstream dependency                              |
 | `upstream_unavailable`   | 503  | Dependency or event bus unavailable                                 |
 | `busy`                   | 503  | Temporary workstation/service busy (graceful overload)              |
+| `over_capacity`          | 503  | Booking/telephony saturated; UI presents backoff + alternate contact|
 | `invalid_fhir`           | 400  | Payload failed downstream FHIR validation                           |
 | `internal_error`         | 500  | Unexpected failure (kept terse, full detail only in logs)           |
 
@@ -87,3 +89,7 @@ PY
 ```
 
 All responses include the correlation ID for incident triage. Metrics logs (`metric.http.request`) emit the route, outcome code, and latency so dashboards can track error rates alongside success volume.
+
+Portal UX uses these codes to render tailored recovery guidance:
+- `conflict` routes patients back to filtered slot search with nearby time suggestions.
+- `rate_limited` / `over_capacity` surface a retry countdown, preserve inputs, and point to alternative contact channels.

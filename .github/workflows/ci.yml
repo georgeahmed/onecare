@@ -41,6 +41,8 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test --silent
+      - name: Python tests
+        run: make py-test
       - name: Platform checklist check (backend)
         run: bash scripts/ci/check_platform_checklists.sh
       - name: Platform checklist check (integrations)

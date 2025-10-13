@@ -5,7 +5,7 @@ import addFormats from 'ajv-formats';
 // @ts-ignore
 import portalSubmissionSchema from '../../../../schemas/ingest/portal-submission.json';
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
 
 const validate = ajv.compile(portalSubmissionSchema);

@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ErrorAlert from './ErrorAlert';
 import type { ErrorEnvelope } from '../lib/types';
+import { I18nProvider } from '../i18n';
 
 const buildEnvelope = (overrides: Partial<ErrorEnvelope['error']> = {}): ErrorEnvelope => ({
   error: {
@@ -17,10 +18,14 @@ const buildEnvelope = (overrides: Partial<ErrorEnvelope['error']> = {}): ErrorEn
 describe('ErrorAlert', () => {
   it('renders friendly copy for known error codes', () => {
     const html = renderToStaticMarkup(
-      createElement(ErrorAlert, {
-        error: buildEnvelope(),
-        id: 'error-alert'
-      })
+      createElement(
+        I18nProvider,
+        null,
+        createElement(ErrorAlert, {
+          error: buildEnvelope(),
+          id: 'error-alert'
+        })
+      )
     );
 
     expect(html).toContain('Check the highlighted details');
@@ -30,11 +35,15 @@ describe('ErrorAlert', () => {
 
   it('falls back to server message when code is unknown', () => {
     const html = renderToStaticMarkup(
-      createElement(ErrorAlert, {
-        error: {
-          error: { code: 'strange_code', message: 'Unexpected failure' }
-        }
-      })
+      createElement(
+        I18nProvider,
+        null,
+        createElement(ErrorAlert, {
+          error: {
+            error: { code: 'strange_code', message: 'Unexpected failure' }
+          }
+        })
+      )
     );
 
     expect(html).toContain('Unexpected failure');
@@ -42,11 +51,15 @@ describe('ErrorAlert', () => {
 
   it('renders retry button and support link when provided', () => {
     const html = renderToStaticMarkup(
-      createElement(ErrorAlert, {
-        error: buildEnvelope({ code: 'busy' }),
-        onRetry: () => undefined,
-        supportUrl: 'mailto:test@example.com'
-      })
+      createElement(
+        I18nProvider,
+        null,
+        createElement(ErrorAlert, {
+          error: buildEnvelope({ code: 'busy' }),
+          onRetry: () => undefined,
+          supportUrl: 'mailto:test@example.com'
+        })
+      )
     );
 
     expect(html).toContain('Try again');

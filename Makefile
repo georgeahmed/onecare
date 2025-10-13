@@ -26,7 +26,7 @@ codegen-check:
 	npm run codegen:check
 
 py-test:
-	python -m venv .venv && . .venv/bin/activate && pip install -U pip && pip install -r /dev/null fastapi uvicorn pydantic pytest httpx && pytest -q services-py/tests
+	./services-py/run-tests.sh
 
 py-safety:
 	uvicorn services-py/safety_gate_service/main:app --reload --port 8081
