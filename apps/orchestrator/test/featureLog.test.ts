@@ -1,5 +1,6 @@
 import { describe, it, beforeAll, afterAll, expect, beforeEach, afterEach } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import { consentReference, setConsentFixtureEnv } from './consentFixture';
 
 let server: import('http').Server;
 let baseUrl: () => string;
@@ -9,6 +10,7 @@ let setBusReadyForTest: (ready: boolean) => void;
 describe('feature logging endpoint', () => {
   beforeAll(async () => {
     process.env.FEATURE_LOGGING = '1';
+    process.env.FEATURE_LOG_API_KEY = 'feature-test-key';
     process.env.BUS_IMPL = 'memory';
     const mod = await import('../src/index');
     server = mod.server;
@@ -28,6 +30,8 @@ describe('feature logging endpoint', () => {
 
   afterAll(async () => {
     delete process.env.FEATURE_LOGGING;
+    delete process.env.FEATURE_LOG_API_KEY;
+    delete process.env.CONSENT_CACHE;
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
@@ -35,6 +39,7 @@ describe('feature logging endpoint', () => {
 
   beforeEach(() => {
     setBusReadyForTest(true);
+    setConsentFixtureEnv();
   });
 
   afterEach(() => {
@@ -46,15 +51,20 @@ describe('feature logging endpoint', () => {
   });
 
   it('accepts feature log payloads and stores them when enabled', async () => {
+    const consentRef = consentReference('patient-123', 'analytics-lite');
     const res = await fetch(`${baseUrl()}/feature-log`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        'x-api-key': 'feature-test-key',
+        'x-auth-scope': 'analytics:feature:write',
+        'x-consent-reference': consentRef,
         'x-correlation-id': 'corr-123',
       },
       body: JSON.stringify({
         source: 'safety',
         entityId: 'patient-123',
+        patientId: 'patient-123',
         features: { probEmergency: 0.9 },
         metadata: { practiceId: 'demo' },
       }),
@@ -69,7 +79,8 @@ describe('feature logging endpoint', () => {
     expect(record).toMatchObject({
       source: 'safety',
       features: { probEmergency: 0.9 },
-      metadata: { practiceId: 'demo' },
+      metadata: { practiceId: 'demo', consentReference: consentRef },
+      patientId: 'patient-123',
     });
   });
 
@@ -78,9 +89,13 @@ describe('feature logging endpoint', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        'x-api-key': 'feature-test-key',
+        'x-auth-scope': 'analytics:feature:write',
+        'x-consent-reference': consentReference('patient-123', 'analytics-lite'),
       },
       body: JSON.stringify({
         source: 'triage',
+        patientId: 'patient-123',
         features: { nested: { invalid: true } },
       }),
     });
@@ -95,9 +110,13 @@ describe('feature logging endpoint', () => {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        'x-api-key': 'feature-test-key',
+        'x-auth-scope': 'analytics:feature:write',
+        'x-consent-reference': consentReference('patient-123', 'analytics-lite'),
       },
       body: JSON.stringify({
         source: 'triage',
+        patientId: 'patient-123',
         metadata: 42,
       }),
     });

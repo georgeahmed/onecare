@@ -146,10 +146,7 @@ async function main() {
   const durationSeconds = (performance.now() - start) / 1000;
   const summary = buildSummary(durationSeconds);
   printSummary(summary);
-
-  if (process.env.TELEPHONY_PARITY_OUTPUT === 'json') {
-    console.log(JSON.stringify(summary, null, 2));
-  }
+  persistSummary(summary, process.env.TELEPHONY_PARITY_OUTPUT, process.env.TELEPHONY_PARITY_OUTPUT_PATH);
 }
 
 async function runCall(callIndex) {
@@ -324,6 +321,18 @@ function printSummary(summary) {
   printSeries('ASR', summary.latencyMs.asr);
   printSeries('Classify', summary.latencyMs.classify);
   printSeries('Total', summary.latencyMs.total);
+}
+
+function persistSummary(summary, mode, outputPath) {
+  if (mode === 'json' || typeof outputPath === 'string') {
+    if (typeof outputPath === 'string' && outputPath.trim().length > 0) {
+      const path = outputPath.trim();
+      require('node:fs').writeFileSync(path, JSON.stringify(summary, null, 2));
+    }
+  }
+  if (mode === 'json') {
+    console.log(JSON.stringify(summary, null, 2));
+  }
 }
 
 function printSeries(label, series) {

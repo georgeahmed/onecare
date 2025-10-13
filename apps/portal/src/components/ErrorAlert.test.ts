@@ -10,9 +10,9 @@ const buildEnvelope = (overrides: Partial<ErrorEnvelope['error']> = {}): ErrorEn
   error: {
     code: 'invalid_input',
     message: 'Invalid input provided',
+    correlationId: 'corr-123',
     ...overrides
-  },
-  correlationId: 'corr-123'
+  }
 });
 
 describe('ErrorAlert', () => {

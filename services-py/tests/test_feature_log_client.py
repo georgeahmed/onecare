@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from services_py.safety_gate_service import main
+from safety_gate_service import main
 from urllib import error as urllib_error
 
 
@@ -64,6 +64,7 @@ def test_feature_log_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main.urllib_request, "urlopen", fake_urlopen)
     main._emit_feature_log(_payload("corr-xyz"))
     assert captured_headers is not None
-    assert captured_headers.get("authorization") == "Bearer secret-token"
-    assert captured_headers.get("content-type") == "application/json"
-    assert captured_headers.get("x-correlation-id") == "corr-xyz"
+    lowered = {key.lower(): value for key, value in captured_headers.items()}
+    assert lowered.get("authorization") == "Bearer secret-token"
+    assert lowered.get("content-type") == "application/json"
+    assert lowered.get("x-correlation-id") == "corr-xyz"

@@ -1,6 +1,6 @@
 import { appendFile, mkdir, open } from 'fs/promises';
 import { dirname, resolve } from 'path';
-import type { Metric } from '@onecare/events/src/contracts/metric';
+import type { Metric } from '@onecare/events';
 
 /**
  * Overrides where analytics metrics are written. Accepts absolute or relative paths.

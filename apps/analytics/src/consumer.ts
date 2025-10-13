@@ -3,7 +3,7 @@ import { getBus, withMessageGuards } from '@onecare/bus';
 import { Topics, type TypedEnvelope } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import type { Metric } from '@onecare/events/src/contracts/metric';
+import type { Metric } from '@onecare/events';
 import { validate, type ValidationError } from '@onecare/domain';
 import { logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
 import type { AnalyticsSink } from './sink/fileSink';

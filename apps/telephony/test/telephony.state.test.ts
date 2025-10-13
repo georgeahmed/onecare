@@ -10,6 +10,7 @@ import {
 import type { TelephonyContext } from '../src/application/types';
 import { buildCallTranscribed } from '../src/adapters/asr.client';
 import type { MessageBus } from '@onecare/bus';
+import type { IdempotencyStore } from '@onecare/ports';
 import { Topics, type TypedEnvelope, type CallTranscribed, type IntentClassified } from '@onecare/events';
 import {
   applyTelephonyDependencies,
@@ -18,9 +19,27 @@ import {
 } from '../src/application/bootstrap';
 
 describe('Telephony state machine', () => {
-  let publishSpy: ReturnType<typeof vi.fn>;
-  let classifySpy: ReturnType<typeof vi.fn>;
-  let bus: MessageBus;
+let publishSpy: ReturnType<typeof vi.fn>;
+let classifySpy: ReturnType<typeof vi.fn>;
+let bus: MessageBus;
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
+}
 
   beforeEach(() => {
     publishSpy = vi.fn(async () => {});
@@ -158,6 +177,42 @@ describe('Telephony state machine', () => {
       expect(ctx.callTranscribedPublishedAt).toBe(1_725_000_000_000);
     });
 
+    it('prevents duplicate call transcribed publishes when idempotency key repeats', async () => {
+      const store = createIdempotencyStore();
+      const transcribe = vi.fn(async () => ({ text: 'first run' }));
+
+      const ctx = applyTelephonyDependencies({
+        id: 'call-idem',
+        callId: 'call-idem',
+        audioRef: 'memory://call-idem',
+        correlationId: 'corr-idem',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        idempotencyStore: store,
+        callTranscribedIdempotencyKey: 'telephony:call-transcribed:call-idem',
+      } as TelephonyContext);
+
+      const state = new TranscribedState();
+      await state.handle(ctx, { type: 'telephony.call.received' });
+      expect(publishSpy).toHaveBeenCalledTimes(1);
+
+      const duplicateCtx = applyTelephonyDependencies({
+        id: 'call-idem-dup',
+        callId: 'call-idem',
+        audioRef: 'memory://call-idem',
+        correlationId: 'corr-idem',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        idempotencyStore: store,
+        callTranscribedIdempotencyKey: 'telephony:call-transcribed:call-idem',
+      } as TelephonyContext);
+
+      await state.handle(duplicateCtx, { type: 'telephony.call.received' });
+      expect(publishSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('throws when call transcribed event fails to publish', async () => {
       publishSpy.mockRejectedValue(new Error('bus offline'));
 
@@ -254,6 +309,46 @@ describe('Telephony state machine', () => {
       );
       const publishTopics = publishSpy.mock.calls.map((call) => call[0]);
       expect(publishTopics).toContain(Topics.triage.input);
+    });
+
+    it('suppresses duplicate intent publication and triage routing when idempotency key is reused', async () => {
+      const store = createIdempotencyStore();
+      const transcribe = vi.fn(async () => ({ text: 'needs callback' }));
+
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-intent',
+        callId: 'call-intent',
+        audioRef: 'memory://call-intent',
+        correlationId: 'corr-intent',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        idempotencyStore: store,
+        callTranscribedIdempotencyKey: 'telephony:call-transcribed:call-intent',
+        intentClassifiedIdempotencyKey: 'telephony:intent-classified:call-intent',
+        triagePublishIdempotencyKey: 'telephony:triage:call-intent',
+        intentClassifier: { classify: classifySpy },
+      } as TelephonyContext);
+
+      const transcribedState = new TranscribedState();
+      await transcribedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const intentState = new IntentClassifiedState();
+      await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      const publishCount = publishSpy.mock.calls.length;
+
+      const duplicateCtx: TelephonyContext = {
+        ...ctx,
+        id: 'call-intent-dup',
+        intentClassified: undefined,
+        intentClassifiedEnvelope: undefined,
+        triageInputEnvelope: undefined,
+      };
+
+      await intentState.handle(duplicateCtx, { type: 'telephony.intent.classified' });
+
+      expect(publishSpy.mock.calls.length).toBe(publishCount);
     });
 
     it('publishes triage input with narrative when patient present', async () => {

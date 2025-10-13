@@ -62,9 +62,61 @@ jobs:
       - name: SLO guard
         run: bash scripts/ci/slo_guard.sh || echo "::warning title=SLO guard::SLO documentation check failed"
 
+  perf-checks:
+    name: Perf Checks
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Triage flow load smoke
+        run: node scripts/perf/triage_flow.js
+        env:
+          TRIAGE_FLOW_DURATION: '5'
+          TRIAGE_FLOW_RATE: '8'
+          TRIAGE_FLOW_OUTPUT: 'json'
+          TRIAGE_FLOW_OUTPUT_PATH: triage-summary.json
+      - name: Booking flow load smoke
+        run: node scripts/perf/booking_flow.js
+        env:
+          BOOKING_FLOW_DURATION: '5'
+          BOOKING_FLOW_RATE: '8'
+          BOOKING_FLOW_CONFLICT_RATE: '0.15'
+          BOOKING_FLOW_OUTPUT: 'json'
+          BOOKING_FLOW_OUTPUT_PATH: booking-summary.json
+      - name: Telephony parity check
+        run: node scripts/perf/telephony_parity.js
+        env:
+          TELEPHONY_PARITY_CALLS: '200'
+          TELEPHONY_PARITY_CONCURRENCY: '10'
+          TELEPHONY_PARITY_CHUNKS: '3'
+          TELEPHONY_PARITY_OUTPUT: 'json'
+          TELEPHONY_PARITY_OUTPUT_PATH: telephony-summary.json
+      - name: Validate performance thresholds
+        run: node scripts/perf/check_ci_thresholds.js
+        env:
+          TRIAGE_FLOW_OUTPUT_PATH: triage-summary.json
+          BOOKING_FLOW_OUTPUT_PATH: booking-summary.json
+          TELEPHONY_PARITY_OUTPUT_PATH: telephony-summary.json
+      - name: Upload performance summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-summaries
+          path: |
+            triage-summary.json
+            booking-summary.json
+            telephony-summary.json
+
   docker-images:
     name: Build & Publish Docker Images
-    needs: build-and-test
+    needs:
+      - build-and-test
+      - perf-checks
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     env:

@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "npm -ws run build --if-present",
-    "clean": "rimraf \"**/dist\"",
+    "clean": "rimraf \"apps/*/dist\" \"packages/*/dist\" \"services-py/*/dist\" dist",
     "codegen": "node scripts/codegen/generate.js",
     "codegen:check": "DRY_RUN=1 node scripts/codegen/generate.js",
     "typecheck": "tsc -b tsconfig.json --verbose --pretty",

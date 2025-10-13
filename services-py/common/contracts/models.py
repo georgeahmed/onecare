@@ -45,10 +45,10 @@ class TriageInput(BaseModel):
 
 
 class BookingSearchRequest(BaseModel):
-    serviceType: str
-    windowStart: str
-    windowEnd: str
-    location: Optional[str] = None
+    serviceType: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    windowStart: str = Field(..., min_length=1)
+    windowEnd: str = Field(..., min_length=1)
+    location: Optional[str] = Field(default=None, min_length=2, max_length=64, pattern=r"^[-A-Za-z0-9._:\s]+$")
 
 
 class PharmacySlot(BaseModel):

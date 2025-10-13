@@ -31,6 +31,7 @@ const timeoutMs = Number(process.env.TRIAGE_FLOW_TIMEOUT_MS ?? DEFAULT_TIMEOUT_M
 const batchSleepMs = Number(process.env.TRIAGE_FLOW_BATCH_SLEEP_MS ?? DEFAULT_BATCH_SLEEP_MS);
 const practiceId = process.env.TRIAGE_FLOW_PRACTICE_ID ?? 'demo';
 const taskOwner = process.env.TRIAGE_FLOW_TASK_OWNER ?? 'Organization/demo-triage';
+const processDelayMs = Number(process.env.TRIAGE_FLOW_PROCESS_DELAY_MS ?? '0');
 
 if (Number.isNaN(durationSeconds) || durationSeconds <= 0) {
   console.error('Duration must be a positive number of seconds');
@@ -102,6 +103,15 @@ const states = {
 };
 
 const bus = new MemoryBus();
+if (processDelayMs > 0) {
+  const originalPublish = bus.publish.bind(bus);
+  bus.publish = async (topic, payload, headers) => {
+    if (topic === Topics.tasks.created) {
+      await sleep(processDelayMs);
+    }
+    return originalPublish(topic, payload, headers);
+  };
+}
 const inflight = new Map();
 const latencies = [];
 const metrics = {
@@ -148,8 +158,14 @@ const conveyors = {
         case 'Duplicate':
           metrics.duplicate += 1;
           current = await states.Duplicate.handle(baseCtx, event);
-          break;
+          if (processDelayMs > 0) {
+            await sleep(processDelayMs);
+          }
+          return;
         case 'Completed':
+          if (processDelayMs > 0) {
+            await sleep(processDelayMs);
+          }
           return;
         default:
           throw new Error(`Unknown state transition: ${current}`);
@@ -204,10 +220,7 @@ async function main() {
 
   const summary = buildSummary(totalTimeSeconds);
   printSummary(summary);
-
-  if (process.env.TRIAGE_FLOW_OUTPUT === 'json') {
-    console.log(JSON.stringify(summary, null, 2));
-  }
+  persistSummary(summary, process.env.TRIAGE_FLOW_OUTPUT, process.env.TRIAGE_FLOW_OUTPUT_PATH);
 }
 
 async function publishTriageInput() {
@@ -371,6 +384,18 @@ function createId(prefix) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function persistSummary(summary, mode, outputPath) {
+  if (mode === 'json' || typeof outputPath === 'string') {
+    if (typeof outputPath === 'string' && outputPath.trim().length > 0) {
+      const path = outputPath.trim();
+      require('node:fs').writeFileSync(path, JSON.stringify(summary, null, 2));
+    }
+  }
+  if (mode === 'json') {
+    console.log(JSON.stringify(summary, null, 2));
+  }
 }
 
 if (require.main === module) {

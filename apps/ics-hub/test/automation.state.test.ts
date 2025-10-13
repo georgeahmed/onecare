@@ -6,6 +6,7 @@ import type {
 } from '../src/application/automation.rules';
 import type { MessageBus } from '@onecare/bus';
 import { Topics } from '@onecare/events';
+import type { IdempotencyStore } from '@onecare/ports';
 
 const baseConfig: AutomationTriggerConfig = {
   rules: [
@@ -57,6 +58,24 @@ function createContext(): IcsContext {
   return {
     id: 'ctx-1',
     bus: new RecordingBus(),
+  };
+}
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
   };
 }
 
@@ -118,6 +137,27 @@ describe('evaluateAutomation helper', () => {
     const auditPublish = bus.publishes.find((entry) => entry.topic === Topics.audit.event);
     expect(auditPublish).toBeTruthy();
     expect(ctx.automationPublished).toBe(true);
+  });
+
+  it('prevents duplicate automation publish when idempotency key repeats', async () => {
+    const store = createIdempotencyStore();
+    const ctx = createContext();
+    ctx.idempotencyStore = store;
+    ctx.automationPublishIdempotencyKey = 'ics:auto:test';
+
+    evaluateAutomation(ctx, baseEvent, {
+      config: baseConfig,
+      createTaskId: () => 'task-auto',
+      correlationId: 'corr-auto',
+      now: () => '2025-01-02T00:00:00.000Z',
+    });
+
+    await publishAutomationOutputs(ctx, { taskPublish: { timeoutMs: 0 }, auditPublish: { timeoutMs: 0 } });
+    const bus = ctx.bus as RecordingBus;
+    expect(bus.publishes).toHaveLength(2);
+
+    await publishAutomationOutputs(ctx, { taskPublish: { timeoutMs: 0 }, auditPublish: { timeoutMs: 0 } });
+    expect(bus.publishes).toHaveLength(2);
   });
 
   it('throws when publishing without bus configured', async () => {

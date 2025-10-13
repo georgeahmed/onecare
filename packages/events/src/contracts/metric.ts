@@ -1,4 +1,4 @@
-// AUTO-GENERATED from schemas. DO NOT EDIT.\n
+// AUTO-GENERATED from schemas. DO NOT EDIT.
 
 export interface Metric {
   name: string;

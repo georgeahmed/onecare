@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Message, MessageBus, Subscription } from '@onecare/bus';
 import { MemoryBus } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
-import type { Metric } from '@onecare/events/src/contracts/metric';
+import type { Metric } from '@onecare/events';
 import { AnalyticsConsumer, AnalyticsMetricSinkError } from '../src/consumer';
 
 class DlqAwareBus implements MessageBus {

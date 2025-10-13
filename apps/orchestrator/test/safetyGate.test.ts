@@ -91,19 +91,30 @@ describe('safety gate HTTP adapter helpers', () => {
     process.env.PY_SAFETY_GATE_AUTH_HEADER_VALUE = 'legacy-key';
     process.env.PY_SAFETY_GATE_API_KEY = 'should-not-override';
     refreshAuthHeaders();
-    const headers = buildSafetyGateHeaders('corr-7', 'req-19');
+    const headers = buildSafetyGateHeaders({
+      correlationId: 'corr-7',
+      requestId: 'req-19',
+      scope: ['safety:admin'],
+      consentReference: 'consent-abc',
+      actor: { id: 'actor-42', type: 'patient' },
+    });
     expect(headers).toMatchObject({
       'x-api-key': 'legacy-key',
       'x-correlation-id': 'corr-7',
       'x-request-id': 'req-19',
     });
+    expect(headers['x-auth-scope']).toContain('safety:analyze');
+    expect(headers['x-auth-scope']).toContain('safety:admin');
+    expect(headers['x-consent-reference']).toBe('consent-abc');
+    expect(headers['x-actor-id']).toBe('actor-42');
+    expect(headers['x-actor-type']).toBe('patient');
     expect(headers.Authorization).toBeUndefined();
   });
 
   it('adds bearer auth header when configured without explicit override', () => {
     process.env.PY_SAFETY_GATE_API_KEY = 'super-secret';
     refreshAuthHeaders();
-    const headers = buildSafetyGateHeaders(undefined, undefined);
+    const headers = buildSafetyGateHeaders({});
     expect(headers.Authorization).toBe('Bearer super-secret');
   });
 

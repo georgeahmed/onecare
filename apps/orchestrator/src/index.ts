@@ -7,6 +7,7 @@ import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
+import { validate } from '@onecare/domain';
 import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
 import { deriveIdempotencyKey, reserveIdempotency, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
@@ -22,14 +23,27 @@ import { resolveServerPort } from './support/port';
 
 const port = resolveServerPort();
 const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
-const practiceId = process.env.PRACTICE_ID?.trim() || 'demo';
+function resolvePracticeId(): string {
+  const envValue = process.env.PRACTICE_ID?.trim();
+  if (envValue) return envValue;
+  if (process.env.NODE_ENV === 'test') return 'demo';
+  throw new Error('PRACTICE_ID environment variable is required');
+}
+
+const practiceId = resolvePracticeId();
 const practiceConfig: ResolvedConfig = loadConfig(practiceId);
 const safetyGateSettings = practiceConfig.safety_gate ?? {};
 const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
 const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
 const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
 const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
-const bookingAvailabilityTimeoutMs = Number(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS ?? '3000');
+const bookingAvailabilityTimeoutMs = (() => {
+  const parsed = Number(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS ?? '');
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(parsed, 2_000);
+  }
+  return 2_000;
+})();
 const bookingAvailabilityBase = (() => {
   const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
   if (!raw) return null;
@@ -101,6 +115,10 @@ const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const BOOKING_RESOURCES = ['Slot'] as const;
 const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
 const BOOKING_SCOPE = 'booking:read';
+const BOOKING_PARAM_KEYS = ['serviceType', 'windowStart', 'windowEnd', 'location'] as const;
+const BOOKING_ALLOWED_PARAMS = new Set<string>(BOOKING_PARAM_KEYS);
+const BOOKING_QUERY_SCHEMA_ID = 'https://onecare/schemas/booking/booking-search-request.json';
+const MAX_ATTACHMENTS = 10;
 const FEATURE_LOG_SCOPE = 'analytics:feature:write';
 const SAFETY_GATE_SCOPE = 'safety:analyze';
 const FEATURE_LOG_PURPOSE = 'analytics-lite';
@@ -172,24 +190,66 @@ function sanitizeInboundSubmission(submission: PortalSubmission): void {
     }
     return;
   }
-  const sanitized: Array<{ contentType: string; url: string }> = [];
-  for (const raw of submission.attachments) {
+  const sanitized = submission.attachments.map((raw) => {
     const contentType = typeof raw?.contentType === 'string' ? raw.contentType.trim() : '';
     const url = typeof raw?.url === 'string' ? raw.url.trim() : '';
     if (!contentType || !url) {
       throw new HttpError('invalid_input', 'Attachment fields are required');
     }
     const safeUrl = normalizeAttachmentUrl(url);
-    sanitized.push({
+    return {
       contentType,
       url: safeUrl,
-    });
+    } satisfies { contentType: string; url: string };
+  });
+  if (sanitized.length > MAX_ATTACHMENTS) {
+    throw new HttpError('invalid_input', 'Too many attachments');
   }
   if (sanitized.length > 0) {
-    submission.attachments = sanitized;
+    (submission as { attachments: PortalSubmission['attachments'] }).attachments =
+      sanitized as unknown as PortalSubmission['attachments'];
   } else {
     delete (submission as { attachments?: PortalSubmission['attachments'] }).attachments;
   }
+}
+
+function sanitizeBookingQuery(searchParams: URLSearchParams | null): URLSearchParams {
+  if (!searchParams || Array.from(searchParams.keys()).length === 0) {
+    throw new HttpError('invalid_input', 'Missing booking search parameters');
+  }
+
+  const seen = new Set<string>();
+  const candidate: Partial<Record<typeof BOOKING_PARAM_KEYS[number], string>> = {};
+  for (const [rawKey, rawValue] of searchParams.entries()) {
+    if (!BOOKING_ALLOWED_PARAMS.has(rawKey)) {
+      throw new HttpError('invalid_input', `Unexpected query parameter: ${rawKey}`);
+    }
+    if (seen.has(rawKey)) {
+      throw new HttpError('invalid_input', `Duplicate query parameter: ${rawKey}`);
+    }
+    seen.add(rawKey);
+    const value = rawValue.trim();
+    if (!value) {
+      throw new HttpError('invalid_input', `Parameter ${rawKey} must not be empty`);
+    }
+    candidate[rawKey as typeof BOOKING_PARAM_KEYS[number]] = value;
+  }
+
+  const validation = validate(BOOKING_QUERY_SCHEMA_ID, candidate);
+  if (!validation.ok) {
+    throw new HttpError('invalid_input', 'Invalid booking query parameters', {
+      errors: validation.errors.slice(0, 5),
+    });
+  }
+
+  const sanitized = new URLSearchParams();
+  sanitized.set('serviceType', candidate.serviceType!);
+  sanitized.set('windowStart', candidate.windowStart!);
+  sanitized.set('windowEnd', candidate.windowEnd!);
+  if (candidate.location) {
+    sanitized.set('location', candidate.location);
+  }
+  return sanitized;
 }
 
 function parseServers(raw: string | undefined): string[] {
@@ -809,7 +869,8 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       }
 
       const upstreamUrl = new URL('slots', bookingAvailabilityBase);
-      upstreamUrl.search = parsedUrl?.search ?? '';
+      const sanitizedQuery = sanitizeBookingQuery(parsedUrl?.searchParams ?? null);
+      upstreamUrl.search = sanitizedQuery.toString();
 
       const headers: Record<string, string> = {
         accept: 'application/json',
@@ -990,10 +1051,10 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         throw new HttpError('invalid_input', 'Invalid metadata payload');
       }
 
-      const metadata: Record<string, unknown> = {
+      const metadata = {
         ...metadataBag,
         consentReference: consentEvidence.reference,
-      };
+      } as Record<string, FeaturePrimitive>;
 
       let recordedAt: string | number | undefined;
       if (typeof payload.recordedAt === 'string' || typeof payload.recordedAt === 'number') {

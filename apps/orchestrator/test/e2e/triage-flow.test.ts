@@ -7,6 +7,7 @@ import type { AuditEvent as LedgerAuditEvent, AuditLedger } from '@onecare/ports
 import { deriveIdempotencyKey } from '../../src/application/idempotency';
 import { resetSecurityServices } from '../../src/adapters/security';
 import { resetAuditLedger, setAuditLedger } from '../../src/adapters/audit';
+import { setConsentFixtureEnv } from '../consentFixture';
 
 vi.mock('../../src/adapters/services/safetyGate', () => ({
   analyzePortalSubmission: vi.fn(),
@@ -79,6 +80,7 @@ describe('triage flow e2e', () => {
   beforeEach(async () => {
     setBusReadyForTest(true);
     resetIdempotencyStoreForTest();
+    setConsentFixtureEnv();
     resetSecurityServices();
     installAuditStub();
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;

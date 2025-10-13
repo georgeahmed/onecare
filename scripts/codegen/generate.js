@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const os = require('os');
 
 const root = process.cwd();
 const schemaDir = path.join(root, 'schemas');
@@ -37,17 +38,26 @@ function ensureDir(p) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
 }
 
+function resolveJson2tsBinary() {
+  const binName = process.platform === 'win32' ? 'json2ts.cmd' : 'json2ts';
+  const candidate = path.join(root, 'node_modules', '.bin', binName);
+  if (fs.existsSync(candidate)) {
+    return candidate;
+  }
+  console.error('json2ts CLI not found. Run `npm install` to install dev dependencies.');
+  process.exit(1);
+}
+
 function generateTS() {
   if (process.env.DRY_RUN === '1') {
     console.log('DRY_RUN=1 set; skipping TS generation.');
     return 0;
   }
-  const json2ts = spawnSync('npx', ['-y', 'json2ts', '--help'], {
-    stdio: 'ignore',
-    shell: true,
-  });
+  const json2tsBin = resolveJson2tsBinary();
+  const spawnOpts = { stdio: 'ignore', shell: process.platform === 'win32' };
+  const json2ts = spawnSync(json2tsBin, ['--help'], spawnOpts);
   if (json2ts.status !== 0) {
-    console.error('json-schema-to-typescript not available. Ensure devDependency is installed.');
+    console.error('json-schema-to-typescript CLI failed to execute. Ensure devDependency is installed.');
     process.exit(1);
   }
 
@@ -60,13 +70,8 @@ function generateTS() {
     }
     ensureDir(output);
     const banner = '// AUTO-GENERATED from schemas. DO NOT EDIT.\n';
-    const args = [
-      '-y', 'json2ts',
-      '-i', input,
-      '-o', output,
-      '--bannerComment', JSON.stringify(banner),
-    ];
-    const res = spawnSync('npx', args, { stdio: 'inherit', shell: true });
+    const args = ['-i', input, '-o', output, '--bannerComment', banner];
+    const res = spawnSync(json2tsBin, args, { stdio: 'inherit', shell: process.platform === 'win32' });
     if (res.status !== 0) {
       console.error(`Failed generating TS from ${input}`);
       process.exit(res.status || 1);
@@ -84,24 +89,58 @@ function generatePy() {
     console.log('RUN_PY not set; skipping Python model generation.');
     return;
   }
+  const stagingDir = stageSchemas(schemaDir);
   const out = path.join(root, 'services-py/common/contracts/models.py');
   ensureDir(out);
-  const res = spawnSync(
-    'python3',
-    [
-      '-m', 'datamodel_code_generator',
-      '--input', schemaDir,
-      '--input-file-type', 'jsonschema',
-      '--output', out,
-      '--target-python-version', '3.11',
-      '--use-standard-collections',
-      '--collapse-root-models',
-    ],
-    { stdio: 'inherit' }
-  );
-  if (res.status !== 0) {
-    console.error('Failed generating Python models from schemas');
-    process.exit(res.status || 1);
+  try {
+    const res = spawnSync(
+      'python3',
+      [
+        '-m', 'datamodel_code_generator',
+        '--input', stagingDir,
+        '--input-file-type', 'jsonschema',
+        '--output', out,
+        '--target-python-version', '3.11',
+        '--use-standard-collections',
+        '--collapse-root-models',
+      ],
+      { stdio: 'inherit' }
+    );
+    if (res.status !== 0) {
+      console.error('Failed generating Python models from schemas');
+      process.exit(res.status || 1);
+    }
+  } finally {
+    cleanupDir(stagingDir);
+  }
+}
+
+function stageSchemas(sourceDir) {
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'onecare-schemas-'));
+  copyJsonFiles(sourceDir, staging);
+  return staging;
+}
+
+function copyJsonFiles(src, dest) {
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(src, entry.name);
+    const targetPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      fs.mkdirSync(targetPath, { recursive: true });
+      copyJsonFiles(sourcePath, targetPath);
+    } else if (entry.isFile() && entry.name.endsWith('.json')) {
+      ensureDir(targetPath);
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+  }
+}
+
+function cleanupDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn('Failed to clean up staging dir', { dir, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

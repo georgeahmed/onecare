@@ -117,12 +117,17 @@ export const submitIntake = async (
         envelope = {
           error: {
             code: 'internal_error',
-            message: `Request failed with status ${response.status}`
-          }
+            message: `Request failed with status ${response.status}`,
+          },
         };
       }
-      if (!envelope.correlationId && responseCorrelation) {
-        envelope.correlationId = responseCorrelation;
+      if (!envelope.error.correlationId && responseCorrelation) {
+        envelope = {
+          error: {
+            ...envelope.error,
+            correlationId: responseCorrelation,
+          },
+        };
       }
       throw Object.assign(new Error('Request failed'), {
         response,
@@ -139,9 +144,9 @@ export const submitIntake = async (
         const timeoutEnvelope: ErrorEnvelope = {
           error: {
             code: 'upstream_timeout',
-            message: 'The request timed out before completing.'
+            message: 'The request timed out before completing.',
+            correlationId: lastResponseCorrelationId ?? requestCorrelationId,
           },
-          correlationId: lastResponseCorrelationId ?? requestCorrelationId
         };
         const abortError = new Error('Request timed out');
         Object.assign(abortError, { envelope: timeoutEnvelope });
@@ -311,6 +316,7 @@ export interface BookingApiError extends Error {
   code?: string;
   correlationId?: string;
   retryAfterSeconds?: number;
+  envelope?: ErrorEnvelope;
 }
 
 export interface ConfirmBookingPayload {
@@ -370,9 +376,10 @@ const parseRetryAfterSeconds = (headerValue: string | null): number | undefined 
 
 const parseBookingErrorPayload = async (
   response: Response
-): Promise<{ code?: string; message: string }> => {
+): Promise<{ code?: string; message: string; envelope?: ErrorEnvelope }> => {
   let parsedCode: string | undefined;
   let parsedMessage: string | undefined;
+  let parsedEnvelope: ErrorEnvelope | undefined;
 
   try {
     const payload = await response.clone().json();
@@ -383,12 +390,24 @@ const parseBookingErrorPayload = async (
         const errorRecord = rawError as Record<string, unknown>;
         const candidateCode = errorRecord.code;
         const candidateMessage = errorRecord.message;
+        const candidateDetails = errorRecord.details;
+        const candidateCorrelation = errorRecord.correlationId;
         if (typeof candidateCode === 'string' && candidateCode.trim().length > 0) {
           parsedCode = candidateCode;
         }
         if (typeof candidateMessage === 'string' && candidateMessage.trim().length > 0) {
           parsedMessage = candidateMessage;
         }
+        parsedEnvelope = {
+          error: {
+            code: parsedCode ?? 'internal_error',
+            message: parsedMessage ?? '',
+            details: typeof candidateDetails === 'object' && candidateDetails !== null ? (candidateDetails as Record<string, unknown>) : undefined,
+            ...(typeof candidateCorrelation === 'string' && candidateCorrelation.trim().length > 0
+              ? { correlationId: candidateCorrelation }
+              : {}),
+          },
+        };
       }
     }
   } catch {
@@ -396,7 +415,15 @@ const parseBookingErrorPayload = async (
   }
 
   const message = parsedMessage ?? (await extractErrorMessage(response));
-  return { code: parsedCode, message };
+  if (parsedEnvelope) {
+    parsedEnvelope = {
+      error: {
+        ...parsedEnvelope.error,
+        message,
+      },
+    };
+  }
+  return { code: parsedCode, message, envelope: parsedEnvelope };
 };
 
 export const confirmBooking = async (
@@ -448,13 +475,30 @@ export const confirmBooking = async (
     const responseCorrelationId = response.headers.get('x-correlation-id') ?? correlationId;
 
     if (!response.ok) {
-      const { code, message } = await parseBookingErrorPayload(response);
+      const { code, message, envelope } = await parseBookingErrorPayload(response);
       const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get('retry-after'));
+      const normalizedEnvelope: ErrorEnvelope | undefined = envelope
+        ? {
+            error: {
+              ...envelope.error,
+              ...(envelope.error.correlationId ? {} : responseCorrelationId ? { correlationId: responseCorrelationId } : {}),
+            },
+          }
+        : responseCorrelationId
+          ? {
+              error: {
+                code: code ?? 'internal_error',
+                message,
+                correlationId: responseCorrelationId,
+              },
+            }
+          : undefined;
       const error: BookingApiError = Object.assign(new Error(message), {
         status: response.status,
         correlationId: responseCorrelationId,
         code,
-        retryAfterSeconds
+        retryAfterSeconds,
+        envelope: normalizedEnvelope,
       });
       throw error;
     }
@@ -474,9 +518,17 @@ export const confirmBooking = async (
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
       if (abortedByTimeout) {
-        const timeoutError: BookingApiError = Object.assign(new Error('The booking confirmation request timed out.'), {
+        const timeoutEnvelope: ErrorEnvelope = {
+          error: {
+            code: 'upstream_timeout',
+            message: 'The booking confirmation request timed out.',
+            correlationId,
+          },
+        };
+        const timeoutError: BookingApiError = Object.assign(new Error(timeoutEnvelope.error.message), {
           correlationId,
-          code: 'upstream_timeout'
+          code: timeoutEnvelope.error.code,
+          envelope: timeoutEnvelope,
         });
         throw timeoutError;
       }

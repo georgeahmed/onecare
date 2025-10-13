@@ -1,4 +1,4 @@
-// AUTO-GENERATED from schemas. DO NOT EDIT.\n
+// AUTO-GENERATED from schemas. DO NOT EDIT.
 
 /**
  * Notification of portal state change for a practice.

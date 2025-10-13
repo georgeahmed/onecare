@@ -132,8 +132,8 @@ describe('submitIntake', () => {
         error: {
           code: 'internal_error',
           message: 'Request failed with status 500',
+          correlationId: 'cid-fail',
         },
-        correlationId: 'cid-fail',
       },
     });
   });
@@ -163,8 +163,8 @@ describe('submitIntake', () => {
       envelope: {
         error: {
           code: 'upstream_timeout',
+          correlationId: 'corr-attempt-1',
         },
-        correlationId: 'corr-attempt-1',
       },
     });
     expect(abortingFetch).toHaveBeenCalledTimes(1);

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ResolvedConfig } from '@onecare/config';
 import type { MessageBus } from '@onecare/bus';
-import type { FeatureStore, FhirRepository, QueueNotifier } from '@onecare/ports';
+import type { FeatureStore, FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import { Topics } from '@onecare/events';
 import {
   IntakeState,
@@ -26,6 +26,24 @@ function buildContext(scoreWeights: Partial<Record<string, number>>, features: R
     id: 'triage-ctx',
     config,
     features,
+  };
+}
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
   };
 }
 
@@ -435,5 +453,71 @@ describe('TaskCreatedState', () => {
         priority: 'URGENT',
       }),
     );
+  });
+
+  it('suppresses duplicate task creation when idempotency key repeats', async () => {
+    const store = createIdempotencyStore();
+    const createTask = vi.fn().mockResolvedValue({ id: 'task-abc', resourceType: 'Task' });
+    const fhirRepository: FhirRepository = {
+      upsertBundle: vi.fn(),
+      createTask,
+      createAppointment: vi.fn(),
+      createDocumentReference: vi.fn(),
+    };
+
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const bus: MessageBus = {
+      publish,
+      subscribe: vi.fn(),
+    };
+
+    const queueNotifier: QueueNotifier = { notify };
+
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: { score_weights: { acuity: 1 } },
+      priority_thresholds: { stat: 0.9, urgent: 0.7, soon: 0.4, routine: 0 },
+    };
+
+    const ctx: TriageContext = {
+      id: 'task-dup',
+      config,
+      features: { acuity: 0.8 },
+      patientId: 'patient-dup',
+      taskOwner: 'Organization/demo-triage',
+      correlationId: 'corr-dup',
+      fhirRepository,
+      bus,
+      queueNotifier,
+      queueName: 'triage.escalations',
+      idempotencyStore: store,
+      idempotencyKey: 'triage:task:patient-dup',
+    };
+
+    const intake = new IntakeState();
+    await intake.handle(ctx, { type: 'triage.evaluate' });
+    const scored = new ScoredState();
+    await scored.handle(ctx, { type: 'triage.evaluate' });
+
+    const creator = new TaskCreatedState();
+    await creator.handle(ctx, { type: 'triage.evaluate' });
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    const duplicateCtx: TriageContext = {
+      ...ctx,
+      taskReference: undefined,
+      taskId: undefined,
+      taskEventPublished: undefined,
+    };
+
+    await creator.handle(duplicateCtx, { type: 'triage.evaluate' });
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });

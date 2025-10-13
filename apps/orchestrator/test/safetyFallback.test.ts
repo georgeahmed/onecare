@@ -15,6 +15,7 @@ vi.mock('../src/adapters/services/callWithGuard', async () => {
 import { server, setBusReadyForTest, getMessageBusForTest, setIdempotencyStoreForTest, resetIdempotencyStoreForTest } from '../src/index';
 import { InMemoryIdempotencyStore, deriveIdempotencyKey } from '../src/application/idempotency';
 import { resetSecurityServices } from '../src/adapters/security';
+import { setConsentFixtureEnv } from './consentFixture';
 
 let bus: MessageBus;
 let baseUrl: string;
@@ -55,6 +56,7 @@ describe('safety gate fallback', () => {
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
+    setConsentFixtureEnv();
     resetSecurityServices();
   });
 

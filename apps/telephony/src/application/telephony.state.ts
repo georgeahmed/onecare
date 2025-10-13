@@ -991,8 +991,9 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
     }
 
     if (ctx.intentRouteTarget === 'triage' && ctx.triageInput) {
-      const triageEnvelope = createEnvelope(Topics.triage.input, ctx.triageInput, ctx.correlationId);
-      const triageKey = deriveTriagePublishIdempotencyKey(ctx, input.callId, ctx.triageInput.patientId);
+      const triageInput = ctx.triageInput;
+      const triageEnvelope = createEnvelope(Topics.triage.input, triageInput, ctx.correlationId);
+      const triageKey = deriveTriagePublishIdempotencyKey(ctx, input.callId, triageInput.patientId);
 
       const { status: triageStatus } = await executeWithIdempotency({
         store: ctx.idempotencyStore,
@@ -1004,7 +1005,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           } catch (error) {
             logger.error('telephony.triage_input.publish_failed', {
               callId: input.callId,
-              patientId: ctx.triageInput?.patientId,
+              patientId: triageInput.patientId,
               correlationId: ctx.correlationId,
               reason: (error as Error).message,
             });
@@ -1014,7 +1015,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           ctx.triageInputPublishedAt = nowFn();
           logger.info('telephony.triage_input.published', {
             callId: input.callId,
-            patientId: ctx.triageInput.patientId,
+            patientId: triageInput.patientId,
             correlationId: ctx.correlationId,
           });
           return true;
@@ -1024,7 +1025,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
             stage: 'triageInput',
             key: triageKey,
             callId: input.callId,
-            patientId: ctx.triageInput?.patientId,
+            patientId: triageInput.patientId,
             correlationId: ctx.correlationId,
           });
         },

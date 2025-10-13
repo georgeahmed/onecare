@@ -218,10 +218,16 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
         candidate instanceof Error && typeof candidate.message === 'string' && candidate.message.trim().length > 0
           ? candidate.message
           : fallbackMessage;
+      const correlationId =
+        'envelope' in candidate && candidate.envelope?.error?.correlationId
+          ? candidate.envelope.error.correlationId
+          : 'correlationId' in candidate
+            ? candidate.correlationId
+            : undefined;
       const payload: BookingConfirmationError = {
         code: 'code' in candidate ? candidate.code : undefined,
         message,
-        correlationId: 'correlationId' in candidate ? candidate.correlationId : undefined,
+        correlationId,
         retryAfterSeconds: 'retryAfterSeconds' in candidate ? candidate.retryAfterSeconds : undefined,
         status: 'status' in candidate ? candidate.status : undefined
       };

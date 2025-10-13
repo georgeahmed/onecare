@@ -4,6 +4,7 @@ import { promises as dns } from 'node:dns';
 import { PortalSubmission, SafetyDecision } from '@onecare/events';
 import { logger } from '@onecare/observability';
 import { context, trace } from '@opentelemetry/api';
+import type { AuthContext } from '@onecare/security';
 
 type SafetyGateErrorCode =
   | 'invalid_input'
@@ -41,6 +42,7 @@ const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
   accept: 'application/json',
   'user-agent': 'onecare-orchestrator',
 };
+const SAFETY_GATE_SCOPE = 'safety:analyze';
 
 function isIpV4Private(ip: string): boolean {
   const m = ip.split('.').map((s) => Number(s));
@@ -291,17 +293,38 @@ function hasAuthorizationHeader(headers: Record<string, string>): boolean {
   return Object.keys(headers).some((key) => key.toLowerCase() === 'authorization');
 }
 
-function buildSafetyGateHeaders(correlationId?: string, requestId?: string): Record<string, string> {
+function buildSafetyGateHeaders(options: AnalyzePortalSubmissionOptions): Record<string, string> {
   const headers: Record<string, string> = { ...STATIC_AUTH_HEADERS };
-  if (correlationId) {
-    headers['x-correlation-id'] = correlationId;
+  const correlationId = options.correlationId;
+  if (correlationId && correlationId.trim().length > 0) {
+    headers['x-correlation-id'] = correlationId.trim();
   }
   const traceParent = currentTraceParent();
   if (traceParent) {
     headers.traceparent = traceParent;
   }
-  if (requestId) {
-    headers['x-request-id'] = requestId;
+  const requestId = options.requestId;
+  if (requestId && requestId.trim().length > 0) {
+    headers['x-request-id'] = requestId.trim();
+  }
+  const scopes = new Set<string>([SAFETY_GATE_SCOPE]);
+  if (Array.isArray(options.scope)) {
+    for (const entry of options.scope) {
+      if (typeof entry === 'string' && entry.trim().length > 0) {
+        scopes.add(entry.trim());
+      }
+    }
+  }
+  headers['x-auth-scope'] = Array.from(scopes).join(' ');
+  const consentRef = typeof options.consentReference === 'string' ? options.consentReference.trim() : undefined;
+  if (consentRef) {
+    headers['x-consent-reference'] = consentRef;
+  }
+  if (options.actor?.id) {
+    headers['x-actor-id'] = options.actor.id;
+  }
+  if (options.actor?.type) {
+    headers['x-actor-type'] = options.actor.type;
   }
   return headers;
 }
@@ -338,6 +361,9 @@ export interface AnalyzePortalSubmissionOptions {
   correlationId?: string;
   signal?: AbortSignal;
   requestId?: string;
+  consentReference?: string | null;
+  actor?: AuthContext['actor'];
+  scope?: readonly string[];
   client?: SafetyGateClient;
   [key: string]: unknown;
 }
@@ -360,7 +386,11 @@ export async function analyzePortalSubmission(
     throw error;
   }
 
-  const headers = buildSafetyGateHeaders(correlationId, options.requestId);
+  const headerOptions: AnalyzePortalSubmissionOptions = {
+    ...options,
+    correlationId,
+  };
+  const headers = buildSafetyGateHeaders(headerOptions);
   const client: SafetyGateClient =
     options.client ?? ((u, b, h, s) => postJson<SafetyDecision>(u, b, h, s));
   try {

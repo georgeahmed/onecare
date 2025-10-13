@@ -157,10 +157,7 @@ async function main() {
   const elapsedSeconds = (performance.now() - start) / 1000;
   const summary = buildSummary(elapsedSeconds);
   printSummary(summary);
-
-  if (process.env.BOOKING_FLOW_OUTPUT === 'json') {
-    console.log(JSON.stringify(summary, null, 2));
-  }
+  persistSummary(summary, process.env.BOOKING_FLOW_OUTPUT, process.env.BOOKING_FLOW_OUTPUT_PATH);
 }
 
 async function runBookingFlow() {
@@ -256,6 +253,18 @@ function buildSummary(durationSeconds) {
       max: sorted.length === 0 ? 0 : sorted[sorted.length - 1],
     },
   };
+}
+
+function persistSummary(summary, mode, outputPath) {
+  if (mode === 'json' || typeof outputPath === 'string') {
+    if (typeof outputPath === 'string' && outputPath.trim().length > 0) {
+      const path = outputPath.trim();
+      require('node:fs').writeFileSync(path, JSON.stringify(summary, null, 2));
+    }
+  }
+  if (mode === 'json') {
+    console.log(JSON.stringify(summary, null, 2));
+  }
 }
 
 function printSummary(summary) {

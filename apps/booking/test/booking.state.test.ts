@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { AppointmentRequest, Slot } from '../src/adapters/gpconnect.client';
+import type { AppointmentRequest, Slot, GpConnectClient } from '../src/adapters/gpconnect.client';
 import { GpConnectHttpClient, GpConnectClientError } from '../src/adapters/gpconnect.client';
 import type { EnhancedAccessPolicy } from '../src/application/enhancedAccess';
 import { applyEnhancedAccessFilters } from '../src/application/enhancedAccess';
@@ -10,7 +10,7 @@ import {
   BookedState,
   type BookingAuditPublisher,
 } from '../src/application/booking.state';
-import type { FhirRepository, QueueNotifier } from '@onecare/ports';
+import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import { Topics } from '@onecare/events';
 
@@ -19,6 +19,24 @@ function createBusMock() {
   const subscribe = vi.fn(async (): Promise<Subscription> => ({ unsubscribe: vi.fn() }));
   const bus: MessageBus = { publish, subscribe };
   return { bus, publish };
+}
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
 }
 
 describe('Booking state machine integration', () => {
@@ -146,6 +164,69 @@ describe('Booking state machine integration', () => {
       }),
       { 'x-correlation-id': 'corr-123' },
     );
+  });
+
+  it('suppresses duplicate booking side-effects when idempotency key exists', async () => {
+    const idempotencyStore = createIdempotencyStore();
+    const createAppointment = vi
+      .fn()
+      .mockResolvedValue({ appointmentId: 'appt-slot-9', slotId: 'slot-9', start: '2025-01-01T09:00:00Z', end: '2025-01-01T09:15:00Z' });
+    const client = {
+      createAppointment: async (request: AppointmentRequest) => createAppointment(request),
+      searchSlots: vi.fn(),
+    } as unknown as GpConnectClient;
+
+    const createTask = vi.fn().mockResolvedValue({ id: 'Task/1', resourceType: 'Task' });
+    const createFhirAppointment = vi.fn().mockResolvedValue({ id: 'appt-slot-9', resourceType: 'Appointment' });
+    const fhirRepository = {
+      createTask,
+      createAppointment: createFhirAppointment,
+      upsertBundle: vi.fn(),
+      createDocumentReference: vi.fn(),
+      updateTask: vi.fn(),
+    } as unknown as FhirRepository;
+
+    const queueNotify = vi.fn().mockResolvedValue(undefined);
+    const queueNotifier: QueueNotifier = { notify: queueNotify };
+    const auditEmit = vi.fn().mockResolvedValue(undefined);
+    const auditPublisher: BookingAuditPublisher = { emit: auditEmit };
+    const { bus, publish } = createBusMock();
+
+    const baseContext: BookingContext = {
+      id: 'booking-duplicate',
+      client,
+      selectedSlot: { id: 'slot-9', start: '2025-01-01T09:00:00Z', end: '2025-01-01T09:15:00Z', organisationId: 'org-9' },
+      patientId: 'patient-9',
+      narrative: 'checkup',
+      fhirRepository,
+      queueNotifier,
+      queueName: 'booking.queue',
+      auditPublisher,
+      bus,
+      correlationId: 'corr-dup',
+      idempotencyStore,
+      idempotencyKey: 'booking:test:slot-9',
+    };
+
+    const booked = new BookedState();
+    await booked.handle(baseContext, { type: 'booking.book' });
+
+    expect(createAppointment).toHaveBeenCalledTimes(1);
+    expect(queueNotify).toHaveBeenCalledTimes(1);
+    expect(auditEmit).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    const duplicateContext: BookingContext = {
+      ...baseContext,
+      appointmentConfirmation: undefined,
+    };
+
+    await booked.handle(duplicateContext, { type: 'booking.book' });
+
+    expect(createAppointment).toHaveBeenCalledTimes(1);
+    expect(queueNotify).toHaveBeenCalledTimes(1);
+    expect(auditEmit).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it('throws invalid params when organisation id is missing', async () => {

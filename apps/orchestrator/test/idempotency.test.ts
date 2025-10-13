@@ -12,6 +12,7 @@ import {
   resetIdempotencyStoreForTest,
 } from '../src/index';
 import { resetSecurityServices } from '../src/adapters/security';
+import { setConsentFixtureEnv } from './consentFixture';
 import * as callGuard from '../src/adapters/services/callWithGuard';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
@@ -126,6 +127,7 @@ describe('idempotency guard', () => {
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
+    setConsentFixtureEnv();
     resetSecurityServices();
   });
 

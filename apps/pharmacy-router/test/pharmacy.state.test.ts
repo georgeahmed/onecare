@@ -10,7 +10,7 @@ import {
 } from '../src/application/pharmacy.state';
 import type { PharmacyEligibilityRuleset, ResolvedConfig } from '@onecare/config';
 import type { CpcsClient, CpcsServiceRequest, ReferralResult } from '../src/adapters/cpcs.client';
-import type { FhirRepository } from '@onecare/ports';
+import type { FhirRepository, IdempotencyStore } from '@onecare/ports';
 import type { PatientNotifier } from '../src/application/pharmacy.state';
 import { logger } from '@onecare/observability';
 
@@ -92,6 +92,24 @@ function buildContext(overrides: Partial<PharmacyContext> = {}): PharmacyContext
   }
 
   return context;
+}
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
 }
 
 beforeEach(() => {
@@ -263,6 +281,36 @@ describe('ReferredState', () => {
     });
     expect((ctx.notifier as PatientNotifier).notifyReferral).not.toHaveBeenCalled();
   });
+
+  it('suppresses duplicate patient notifications when idempotency key repeats', async () => {
+    const store = createIdempotencyStore();
+    const notifyReferral = vi.fn(async () => {});
+    const sendReferral = vi.fn(async () => ({ status: 'accepted', reference: 'ref-dupe' }));
+    const state = new ReferredState();
+    const ctx = buildContext({
+      notifier: { notifyReferral } as PatientNotifier,
+      cpcsClient: { sendReferral } as unknown as CpcsClient,
+      eligibilityDecision: { ok: true, reason: 'eligible' },
+      idempotencyStore: store,
+      notificationIdempotencyKey: 'pharmacy:notify:test',
+    });
+
+    await state.handle(ctx, baseEvent);
+    expect(notifyReferral).toHaveBeenCalledTimes(1);
+
+    const duplicateCtx = buildContext({
+      notifier: { notifyReferral } as PatientNotifier,
+      cpcsClient: { sendReferral } as unknown as CpcsClient,
+      eligibilityDecision: { ok: true, reason: 'eligible' },
+      idempotencyStore: store,
+      notificationIdempotencyKey: 'pharmacy:notify:test',
+      serviceRequest: ctx.serviceRequest,
+      referralSummary: ctx.referralSummary,
+    });
+
+    await state.handle(duplicateCtx, baseEvent);
+    expect(notifyReferral).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OutcomeRecordedState', () => {
@@ -296,5 +344,36 @@ describe('OutcomeRecordedState', () => {
     });
     await state.handle(ctx, baseEvent);
     expect((ctx.fhirRepository as FhirRepository).createTask).toHaveBeenCalled();
+  });
+
+  it('avoids duplicate outcome persistence when idempotency key matches', async () => {
+    const store = createIdempotencyStore();
+    const upsertBundle = vi.fn(async (bundle) => bundle);
+    const createTask = vi.fn(async () => ({ id: 'task-escalation', resourceType: 'Task' }));
+    const repo = createFhirRepo({ upsertBundle, createTask });
+    const state = new OutcomeRecordedState();
+    const ctx = buildContext({
+      fhirRepository: repo,
+      idempotencyStore: store,
+      outcomeIdempotencyKey: 'pharmacy:outcome:test',
+      referralResult: { status: 'accepted', reference: 'ref' },
+      eligibilityDecision: { ok: true, reason: 'eligible' },
+    });
+
+    await state.handle(ctx, baseEvent);
+    expect(upsertBundle).toHaveBeenCalledTimes(1);
+
+    const duplicateCtx = buildContext({
+      fhirRepository: repo,
+      idempotencyStore: store,
+      outcomeIdempotencyKey: 'pharmacy:outcome:test',
+      referralResult: { status: 'accepted', reference: 'ref' },
+      eligibilityDecision: { ok: true, reason: 'eligible' },
+      serviceRequest: ctx.serviceRequest,
+      referralSummary: ctx.referralSummary,
+    });
+
+    await state.handle(duplicateCtx, baseEvent);
+    expect(upsertBundle).toHaveBeenCalledTimes(1);
   });
 });

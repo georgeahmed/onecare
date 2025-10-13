@@ -1,34 +1,14 @@
-export type PortalChannel = 'web' | 'ivr';
+import type {
+  PortalSubmission as ContractPortalSubmission,
+  SafetyDecision as ContractSafetyDecision,
+  ErrorEnvelope as ContractErrorEnvelope,
+} from '@onecare/events';
 
-export interface PortalSubmissionAttachment {
-  contentType: string;
-  url: string;
-}
+export type PortalSubmission = ContractPortalSubmission;
+export type SafetyDecision = ContractSafetyDecision;
+export type ErrorEnvelope = ContractErrorEnvelope;
+export type PortalChannel = PortalSubmission['channel'];
+export type PortalPatient = PortalSubmission['patient'];
 
-export interface PortalPatient {
-  id: string;
-  dob?: string;
-  locale?: string;
-}
-
-export interface PortalSubmission {
-  practiceId: string;
-  patient: PortalPatient;
-  narrative: string;
-  attachments?: PortalSubmissionAttachment[];
-  channel: PortalChannel;
-}
-
-export interface ErrorEnvelope {
-  error: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
-  correlationId?: string;
-}
-
-export interface SafetyDecision {
-  outcome: 'SAFE_TO_CONTINUE' | 'DIVERTED';
-  reason?: string | null;
-}
+type AttachmentArray = NonNullable<PortalSubmission['attachments']>;
+export type PortalSubmissionAttachment = AttachmentArray extends Array<infer Item> ? Item : never;

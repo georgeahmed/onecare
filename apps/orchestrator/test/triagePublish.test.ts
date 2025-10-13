@@ -6,6 +6,7 @@ import { Topics } from '@onecare/events';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
 import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
+import { setConsentFixtureEnv } from './consentFixture';
 import { resetSecurityServices } from '../src/adapters/security';
 import { deriveIdempotencyKey } from '../src/application/idempotency';
 
@@ -83,6 +84,7 @@ describe('triage input publishing', () => {
     setBusReadyForTest(true);
     installAuditStub();
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
+    setConsentFixtureEnv();
     resetSecurityServices();
   });
 

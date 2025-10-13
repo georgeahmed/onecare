@@ -5,6 +5,7 @@ import type { MessageBus, Subscription } from '@onecare/bus';
 import type { SecurityServices } from '@onecare/security';
 import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
 import { resetSecurityServices, setSecurityServices } from '../src/adapters/security';
+import { setConsentFixtureEnv } from './consentFixture';
 import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
 
 const submission = {
@@ -64,6 +65,7 @@ describe('zero-trust gate', () => {
 
   beforeEach(() => {
     setBusReadyForTest(true);
+    setConsentFixtureEnv();
     resetSecurityServices();
     installAuditStub();
   });

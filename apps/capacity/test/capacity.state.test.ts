@@ -12,12 +12,31 @@ import type {
   TelemetrySnapshot,
 } from '../src/application/types';
 import type { ResolvedConfig } from '@onecare/config';
+import type { IdempotencyStore } from '@onecare/ports';
 
 const tickEvent: CapacityEvent = { type: 'capacity.tick' };
 
 beforeEach(() => {
   vi.restoreAllMocks();
 });
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, boolean>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string) => {
+      keys.set(key, true);
+    },
+    reserve: async (key: string) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, true);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
+}
 
 describe('TelemetryState', () => {
   it('collects telemetry snapshot from source', async () => {
@@ -261,6 +280,64 @@ describe('Capacity micro-release decision', () => {
     expect(ctx.capacityWindow.heldSlots).toBe(8);
   });
 
+  it('suppresses duplicate release execution and audit when idempotency keys repeat', async () => {
+    const releaseApply = vi.fn(async () => {});
+    const auditorRecord = vi.fn(async () => {});
+    const store = createIdempotencyStore();
+
+    const ctx = buildContext({
+      releaseExecutor: { apply: releaseApply },
+      auditor: { record: auditorRecord },
+      capacityWindow: { totalSlots: 40, heldSlots: 10 },
+      idempotencyStore: store,
+      releaseIdempotencyKey: 'capacity:release:demo',
+      auditIdempotencyKey: 'capacity:audit:demo',
+    });
+
+    ctx.forecast = {
+      delta: 6,
+      confidence: 0.8,
+      band: { lower: 4, upper: 8 },
+      horizonMinutes: 120,
+      need: 32,
+      supply: 26,
+    };
+    ctx.decision = {
+      outcome: 'release',
+      reason: 'release_authorized',
+      plan: {
+        slotsToRelease: 4,
+        releaseFraction: 0.2,
+        heldSlotsBefore: 10,
+        heldSlotsAfter: 6,
+        maxFractionSlots: 4,
+        minReserveSlots: 2,
+        cappedBy: ['delta'],
+      },
+      deltaThreshold: 3,
+      confidenceThreshold: 0.6,
+      forecastDelta: 6,
+      forecastConfidence: 0.8,
+    };
+
+    const applied = new AppliedState();
+    await applied.handle(ctx, tickEvent);
+
+    expect(releaseApply).toHaveBeenCalledTimes(1);
+    expect(auditorRecord).toHaveBeenCalledTimes(1);
+
+    const duplicateCtx: CapacityContext = {
+      ...ctx,
+      id: 'run-duplicate',
+      capacityWindow: { ...ctx.capacityWindow },
+    };
+
+    await applied.handle(duplicateCtx, tickEvent);
+
+    expect(releaseApply).toHaveBeenCalledTimes(1);
+    expect(auditorRecord).toHaveBeenCalledTimes(1);
+  });
+
   it('skips release when telemetry health is unhealthy', async () => {
     const scheduler = new InMemoryCapacityScheduler({ totalSlots: 100, heldSlots: 12 });
     const executor = new SchedulerReleaseExecutor(scheduler, { reason: 'forecast_delta' });
@@ -359,6 +436,10 @@ function buildContext(overrides: Partial<CapacityContext> = {}): CapacityContext
     telemetry: overrides.telemetry,
     forecast: overrides.forecast,
     decision: overrides.decision,
+    idempotencyStore: overrides.idempotencyStore,
+    idempotencyTtlSeconds: overrides.idempotencyTtlSeconds,
+    releaseIdempotencyKey: overrides.releaseIdempotencyKey,
+    auditIdempotencyKey: overrides.auditIdempotencyKey,
   };
 
   context.config.practiceId = context.practiceId;

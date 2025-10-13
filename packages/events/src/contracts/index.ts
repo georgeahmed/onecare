@@ -15,3 +15,4 @@ export * from './dlq-event';
 export * from './call-transcribed';
 export * from './intent-classified';
 export * from './task-created';
+export * from './metric';

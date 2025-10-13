@@ -51,6 +51,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
       runId: ctx.id,
       ok: health.ok,
       reason: health.reason,
+      correlationId: ctx.correlationId,
     });
 
     if (!health.ok) {
@@ -58,6 +59,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
         practiceId: ctx.practiceId,
         runId: ctx.id,
         reason: health.reason ?? 'unknown',
+        correlationId: ctx.correlationId,
       });
     }
 
@@ -79,6 +81,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
         practiceId: ctx.practiceId,
         runId: ctx.id,
         reason,
+        correlationId: ctx.correlationId,
       };
 
       logger.error('capacity.telemetry.collect_failed', {
@@ -92,6 +95,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
           runId: ctx.id,
           ok: false,
           reason,
+          correlationId: ctx.correlationId,
         });
         logger.warn('capacity.telemetry.unhealthy', logMetadata);
       }
@@ -106,6 +110,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
       arrivalsPerHour: snapshot.arrivalsPerHour,
       queueDepth: snapshot.queueDepth,
       staffingLevel: snapshot.staffingLevel,
+      correlationId: ctx.correlationId,
     });
     return 'Forecast';
   }
@@ -180,6 +185,7 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
         confidence: forecast.confidence,
         releaseSlots: 0,
         dryRun: Boolean(ctx.dryRun),
+        correlationId: ctx.correlationId,
       });
       return 'Applied';
     }
@@ -258,6 +264,7 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
       confidence: forecast.confidence,
       releaseSlots,
       dryRun: Boolean(ctx.dryRun),
+      correlationId: ctx.correlationId,
     });
 
     return 'Applied';

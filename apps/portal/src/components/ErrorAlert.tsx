@@ -2,19 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useIntl } from 'react-intl';
 import type { ErrorEnvelope } from '../lib/types';
 
-type ErrorCode =
-  | 'unauthorized'
-  | 'forbidden'
-  | 'invalid_input'
-  | 'unsupported_media_type'
-  | 'payload_too_large'
-  | 'conflict'
-  | 'upstream_timeout'
-  | 'upstream_unavailable'
-  | 'too_many_requests'
-  | 'busy'
-  | 'invalid_fhir'
-  | 'internal_error';
+type ErrorCode = ErrorEnvelope['error']['code'];
 
 const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: string }> = {
   unauthorized: {
@@ -105,7 +93,7 @@ const ErrorAlert = ({
     return {
       title,
       description,
-      correlationId: envelope.correlationId,
+      correlationId: envelope.error?.correlationId,
       code: codeRaw
     };
   }, [error, intl]);

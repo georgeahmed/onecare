@@ -17,11 +17,12 @@ from uuid import uuid4
 from urllib import error as urllib_error, request as urllib_request
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from common.contracts.models import PortalSubmission, SafetyDecision
 from common.otel import instrument_fastapi
+from common.security import AuthzContext, require_service_auth
 from .acuity import AcuityModel
 from .analyzer import AnalysisOutcome, analyze_submission
 from .classifier import EmergencyClassifier
@@ -53,6 +54,11 @@ _SENSITIVE_ID_KEYS = {"patientid", "entityid"}
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+", re.IGNORECASE)
 _PHONE_RE = re.compile(r"\b(?:\+?\d[\d\s\-]{7,}\d)\b")
 _DIGIT_RE = re.compile(r"\b\d{6,}\b")
+_FEATURE_LOG_SCOPE_HEADER = "analytics:feature:write"
+_FEATURE_LOG_API_KEY_ENV = "FEATURE_LOG_API_KEY"
+
+_ANALYZE_AUTH = require_service_auth(env_var="SAFETY_GATE_API_KEY", required_scope="safety:analyze")
+_PREDICT_AUTH = require_service_auth(env_var="SAFETY_GATE_API_KEY", required_scope="safety:predict")
 
 
 def _extract_correlation_id(request: Request) -> str:
@@ -83,6 +89,12 @@ def _feature_log_endpoint() -> Optional[str]:
     return trimmed
 
 
+def _feature_log_api_key() -> Optional[str]:
+    candidate = os.getenv(_FEATURE_LOG_API_KEY_ENV, "")
+    trimmed = candidate.strip()
+    return trimmed or None
+
+
 def _clamp_rate(value: Any) -> float:
     try:
         rate = float(value)
@@ -97,12 +109,17 @@ def _clamp_rate(value: Any) -> float:
     return rate
 
 
-def _emit_feature_log(payload: dict[str, Any]) -> None:
+def _emit_feature_log(payload: dict[str, Any], consent_reference: Optional[str]) -> None:
     if not _feature_logging_enabled():
         return
 
     endpoint = _feature_log_endpoint()
     if not endpoint:
+        return
+
+    api_key = _feature_log_api_key()
+    if not api_key:
+        LOGGER.debug("Feature logging skipped: API key missing")
         return
 
     try:
@@ -114,7 +131,7 @@ def _emit_feature_log(payload: dict[str, Any]) -> None:
     request_obj = urllib_request.Request(
         endpoint,
         data=data,
-        headers=_feature_log_headers(payload.get("correlationId")),
+        headers=_feature_log_headers(payload.get("correlationId"), consent_reference, api_key),
         method="POST",
     )
     attempts, base_delay = _feature_log_retry_policy()
@@ -137,11 +154,21 @@ def _emit_feature_log(payload: dict[str, Any]) -> None:
             _feature_log_sleep(delay)
 
 
-def _feature_log_headers(correlation_id: Optional[str]) -> dict[str, str]:
-    headers = {"content-type": "application/json"}
-    headers.update(_feature_log_auth_headers())
+def _feature_log_headers(
+    correlation_id: Optional[str],
+    consent_reference: Optional[str],
+    api_key: str,
+) -> dict[str, str]:
+    headers: dict[str, str] = {
+        "content-type": "application/json",
+        "x-api-key": api_key,
+    }
     if correlation_id and isinstance(correlation_id, str) and correlation_id.strip():
-        headers.setdefault("x-correlation-id", correlation_id.strip())
+        headers["x-correlation-id"] = correlation_id.strip()
+    if consent_reference and isinstance(consent_reference, str) and consent_reference.strip():
+        headers["x-consent-reference"] = consent_reference.strip()
+    headers.update(_feature_log_auth_headers())
+    headers.setdefault("x-auth-scope", _FEATURE_LOG_SCOPE_HEADER)
     return headers
 
 
@@ -152,18 +179,12 @@ def _feature_log_auth_headers() -> dict[str, str]:
     if name and value:
         headers[name] = value
 
-    bearer = os.getenv("FEATURE_LOG_BEARER_TOKEN") or os.getenv("FEATURE_LOG_AUTH_TOKEN")
-    api_key = os.getenv("FEATURE_LOG_API_KEY")
-    token = bearer or api_key
-    if token:
-        token = token.strip()
-        if token and all(key.lower() != "authorization" for key in headers):
-            if bearer and not token.lower().startswith("bearer "):
-                headers["Authorization"] = f"Bearer {token}"
-            elif bearer:
-                headers["Authorization"] = token
-            else:
-                headers["Authorization"] = token
+    bearer = (os.getenv("FEATURE_LOG_BEARER_TOKEN") or os.getenv("FEATURE_LOG_AUTH_TOKEN") or "").strip()
+    if bearer and all(key.lower() != "authorization" for key in headers):
+        if bearer.lower().startswith("bearer "):
+            headers["Authorization"] = bearer
+        else:
+            headers["Authorization"] = f"Bearer {bearer}"
 
     extras = os.getenv("FEATURE_LOG_EXTRA_HEADERS")
     if extras:
@@ -227,6 +248,7 @@ def _log_safety_features(
     nlp_payload: Mapping[str, Any],
     decision_result,
     lexical_hits: list[str],
+    consent_reference: Optional[str],
 ) -> None:
     feature_packet: dict[str, Any] = {
         "classifier": {
@@ -256,6 +278,7 @@ def _log_safety_features(
             "channel": submission.channel,
             "analysisId": str(uuid4()),
             "recordedAt": datetime.now(timezone.utc).isoformat(),
+            "consentReference": consent_reference,
         }
     )
 
@@ -275,7 +298,7 @@ def _log_safety_features(
         "metadata": sanitized_metadata,
     }
 
-    _emit_feature_log(payload)
+    _emit_feature_log(payload, consent_reference)
 
 
 def get_classifier(force_reload: bool = False) -> EmergencyClassifier:
@@ -478,7 +501,12 @@ def ready() -> dict[str, str]:
 
 
 @app.post("/analyze", response_model=SafetyDecision)
-async def analyze(request: Request, submission: PortalSubmission, response: Response) -> SafetyDecision:
+async def analyze(
+    request: Request,
+    submission: PortalSubmission,
+    response: Response,
+    auth: AuthzContext = Depends(_ANALYZE_AUTH),
+) -> SafetyDecision:
     start_time = time.perf_counter()
     narrative_raw = submission.narrative or ""
     classifier = getattr(app.state, "classifier", None) or get_classifier()
@@ -488,6 +516,8 @@ async def analyze(request: Request, submission: PortalSubmission, response: Resp
 
     correlation_id = _extract_correlation_id(request)
     response.headers["x-correlation-id"] = correlation_id
+    if auth.consent_reference:
+        response.headers["x-consent-reference"] = auth.consent_reference
 
     outcome: AnalysisOutcome = await analyze_submission(
         narrative=narrative_raw,
@@ -525,6 +555,7 @@ async def analyze(request: Request, submission: PortalSubmission, response: Resp
             nlp_payload=_sanitize_payload(nlp_payload),
             decision_result=outcome.decision,
             lexical_hits=[_redact_pii(str(item)) for item in red_flags],
+            consent_reference=auth.consent_reference,
         )
 
     return SafetyDecision(outcome=outcome.decision.outcome, reason=outcome.decision.rationale.get("reason"))
@@ -547,9 +578,16 @@ def metrics_endpoint() -> Response:
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict_endpoint(request: Request, payload: PredictRequest, response: Response) -> PredictResponse:
+def predict_endpoint(
+    request: Request,
+    payload: PredictRequest,
+    response: Response,
+    auth: AuthzContext = Depends(_PREDICT_AUTH),
+) -> PredictResponse:
     correlation_id = _extract_correlation_id(request)
     response.headers["x-correlation-id"] = correlation_id
+    if auth.consent_reference:
+        response.headers["x-consent-reference"] = auth.consent_reference
     try:
         return predict_outcome(payload)
     except FileNotFoundError:
@@ -571,9 +609,16 @@ def predict_endpoint(request: Request, payload: PredictRequest, response: Respon
 
 
 @app.post("/predict_proba", response_model=PredictProbaResponse)
-def predict_proba_endpoint(request: Request, payload: PredictRequest, response: Response) -> PredictProbaResponse:
+def predict_proba_endpoint(
+    request: Request,
+    payload: PredictRequest,
+    response: Response,
+    auth: AuthzContext = Depends(_PREDICT_AUTH),
+) -> PredictProbaResponse:
     correlation_id = _extract_correlation_id(request)
     response.headers["x-correlation-id"] = correlation_id
+    if auth.consent_reference:
+        response.headers["x-consent-reference"] = auth.consent_reference
     try:
         return predict_proba(payload)
     except FileNotFoundError:

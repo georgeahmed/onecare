@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl';
 import SchemaForm, { type JsonSchema, type SchemaFormHandle } from '../features/schemaForm/SchemaForm';
 import { submitIntake } from '../lib/api';
 import type { ErrorEnvelope, PortalSubmission, PortalSubmissionAttachment, SafetyDecision } from '../lib/types';
+import type { ErrorObject } from '@onecare/events/src/contracts/error-envelope';
 import ErrorAlert from './ErrorAlert';
 import RetryNotice from './RetryNotice';
 import SubmitButton from './SubmitButton';
@@ -15,6 +16,24 @@ import { useAccessibilityConfig } from '../hooks/useAccessibilityConfig';
 import portalSubmissionSchema from '../../../../schemas/ingest/portal-submission.json';
 
 const intakeSchema = portalSubmissionSchema as JsonSchema;
+const MAX_ATTACHMENTS = 10;
+const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
+  'unauthorized',
+  'forbidden',
+  'invalid_input',
+  'unsupported_media_type',
+  'payload_too_large',
+  'conflict',
+  'upstream_timeout',
+  'upstream_unavailable',
+  'internal_error',
+  'too_many_requests',
+  'busy',
+  'invalid_fhir',
+] as const;
+
+const isKnownErrorCode = (code: string): code is ErrorObject['code'] =>
+  (KNOWN_ERROR_CODES as readonly string[]).includes(code);
 
 const buildInitialSubmission = (): PortalSubmission => ({
   practiceId: '',
@@ -165,9 +184,18 @@ const IntakeForm = () => {
     const fallback: ErrorEnvelope = {
       error: {
         code: 'internal_error',
-        message: fallbackMessage
-      }
+        message: fallbackMessage,
+      },
     };
+
+    const coerceEnvelope = (envelope: ErrorEnvelope): ErrorEnvelope => ({
+      error: {
+        code: envelope.error.code,
+        message: envelope.error.message ?? fallbackMessage,
+        details: envelope.error.details,
+        ...(envelope.error.correlationId ? { correlationId: envelope.error.correlationId } : {}),
+      },
+    });
 
     if (!error) {
       return fallback;
@@ -175,16 +203,7 @@ const IntakeForm = () => {
 
     const extractFromObject = (candidate: { envelope?: ErrorEnvelope } | null | undefined) => {
       if (candidate?.envelope?.error) {
-        const envelope = candidate.envelope;
-        const correlationId = envelope.correlationId;
-        return {
-          correlationId,
-          error: {
-            code: envelope.error.code,
-            message: envelope.error.message ?? fallbackMessage,
-            details: envelope.error.details
-          }
-        } satisfies ErrorEnvelope;
+        return coerceEnvelope(candidate.envelope);
       }
       return undefined;
     };
@@ -200,15 +219,7 @@ const IntakeForm = () => {
         if (payload && typeof payload === 'object' && 'error' in payload) {
           const envelope = payload as ErrorEnvelope;
           if (envelope.error && typeof envelope.error.code === 'string') {
-            const correlationId = envelope.correlationId;
-            return {
-              correlationId,
-              error: {
-                code: envelope.error.code,
-                message: envelope.error.message ?? fallbackMessage,
-                details: envelope.error.details
-              }
-            } satisfies ErrorEnvelope;
+            return coerceEnvelope(envelope);
           }
         }
       } catch {
@@ -219,17 +230,16 @@ const IntakeForm = () => {
 
     if (typeof error === 'object' && error !== null) {
       const candidate = error as {
-        error?: { code?: string; message?: string; details?: Record<string, unknown> };
-        correlationId?: string;
+        error?: { code?: string; message?: string; details?: Record<string, unknown>; correlationId?: string };
       };
       if (candidate.error && typeof candidate.error.code === 'string') {
         return {
-          correlationId: candidate.correlationId,
           error: {
             code: candidate.error.code,
             message: candidate.error.message ?? fallbackMessage,
-            details: candidate.error.details
-          }
+            details: candidate.error.details,
+            ...(candidate.error.correlationId ? { correlationId: candidate.error.correlationId } : {}),
+          },
         } satisfies ErrorEnvelope;
       }
     }
@@ -238,7 +248,7 @@ const IntakeForm = () => {
       return {
         error: {
           code: 'internal_error',
-          message: error.message || fallbackMessage
+          message: error.message ?? fallbackMessage,
         }
       } satisfies ErrorEnvelope;
     }

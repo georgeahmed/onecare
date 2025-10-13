@@ -7,10 +7,11 @@ from typing import Any, Optional
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from common.contracts.models import ScribeAudio
 from common.otel import instrument_fastapi
+from common.security import AuthzContext, require_service_auth
 from .asr_runner import load_model, transcribe as run_transcription
 from .audio_store import create_audio_store
 from .quality import evaluate_quality
@@ -108,6 +109,10 @@ app = FastAPI(title="Scribe Service", version="0.1.0", lifespan=lifespan)
 instrument_fastapi(app)
 
 
+_TRANSCRIBE_AUTH = require_service_auth(env_var="SCRIBE_SERVICE_API_KEY", required_scope="scribe:transcribe")
+_DRAFT_AUTH = require_service_auth(env_var="SCRIBE_SERVICE_API_KEY", required_scope="scribe:draft")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -137,7 +142,7 @@ class Draft(BaseModel):
 
 
 @app.post("/transcribe", response_model=Transcript)
-def transcribe(audio: ScribeAudio) -> Transcript:
+def transcribe(audio: ScribeAudio, _auth: AuthzContext = Depends(_TRANSCRIBE_AUTH)) -> Transcript:
     model = getattr(app.state, "asr_model", None)
     if model is None:
         model = load_model()
@@ -171,7 +176,7 @@ def transcribe(audio: ScribeAudio) -> Transcript:
 
 
 @app.post("/draft", response_model=Draft)
-def draft(transcript: Transcript) -> Draft:
+def draft(transcript: Transcript, _auth: AuthzContext = Depends(_DRAFT_AUTH)) -> Draft:
     client = _get_llm_client()
     max_tokens = _resolve_max_summary_tokens()
     summary_text = client.summarize(

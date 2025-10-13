@@ -13,6 +13,7 @@
     { "path": "apps/orchestrator" },
     { "path": "apps/triage" },
     { "path": "apps/booking" },
+    { "path": "apps/billing" },
     { "path": "apps/pharmacy-router" },
     { "path": "apps/capacity" },
     { "path": "apps/access-gate" },

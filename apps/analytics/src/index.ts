@@ -1,4 +1,4 @@
-export type { Metric as AnalyticsMetric } from '@onecare/events/src/contracts/metric';
+export type { Metric as AnalyticsMetric } from '@onecare/events';
 
 export {
   ANALYTICS_SINK_PATH_ENV,
