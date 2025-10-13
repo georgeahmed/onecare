@@ -1,9 +1,9 @@
 import { Fragment, useId } from 'react';
 import { useIntl } from 'react-intl';
-import type { AccessibilityConfig } from '../lib/config';
+import type { TransformedAccessibilityConfig } from '../lib/config';
 
 export interface InterpreterPreferencesProps {
-  config: AccessibilityConfig | null;
+  config: TransformedAccessibilityConfig;
   value: InterpreterPreferencesValue;
   onChange: (value: InterpreterPreferencesValue) => void;
 }

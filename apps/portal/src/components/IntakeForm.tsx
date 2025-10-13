@@ -98,6 +98,7 @@ export const sanitizeSubmission = (submission: PortalSubmission): PortalSubmissi
 const IntakeForm = () => {
   const intl = useIntl();
   const { locale } = useLocale();
+  const accessibilityConfig = useAccessibilityConfig();
   const [formData, setFormData] = useState<PortalSubmission>(() => buildInitialSubmission());
   const [formResetKey, setFormResetKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,6 +110,7 @@ const IntakeForm = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const schemaFormRef = useRef<SchemaFormHandle>(null);
   const MAX_RETRIES = 2;
+  const [interpreterPreferences, setInterpreterPreferences] = useState<InterpreterPreferencesValue>({ requiresInterpreter: false });
 
   const statusMessageId = useId();
 
@@ -131,6 +133,22 @@ const IntakeForm = () => {
     });
   }, [locale]);
 
+  useEffect(() => {
+    if (!accessibilityConfig.enabled) {
+      setInterpreterPreferences((prev) => (prev.requiresInterpreter ? { requiresInterpreter: false } : prev));
+      return;
+    }
+    if (!interpreterPreferences.requiresInterpreter) {
+      return;
+    }
+    if (interpreterPreferences.preferredLanguage) {
+      return;
+    }
+    if (accessibilityConfig.interpreterLanguages?.includes(locale)) {
+      setInterpreterPreferences((prev) => ({ ...prev, preferredLanguage: locale }));
+    }
+  }, [accessibilityConfig, locale, interpreterPreferences.requiresInterpreter, interpreterPreferences.preferredLanguage]);
+
   const handleReset = () => {
     setFormData(buildInitialSubmission());
     setFormResetKey((previous) => previous + 1);
@@ -139,6 +157,7 @@ const IntakeForm = () => {
     setDecision(null);
     setDecisionCorrelationId(undefined);
     setRetryAttempts(0);
+    setInterpreterPreferences({ requiresInterpreter: false });
   };
 
   const normalizeErrorEnvelope = async (error: unknown): Promise<ErrorEnvelope> => {
@@ -345,6 +364,14 @@ const IntakeForm = () => {
         value={formData}
         onChange={(next) => setFormData(next)}
       />
+
+      {accessibilityConfig.enabled ? (
+        <InterpreterPreferences
+          config={accessibilityConfig}
+          value={interpreterPreferences}
+          onChange={setInterpreterPreferences}
+        />
+      ) : null}
 
       {submitError ? (
         <ErrorAlert

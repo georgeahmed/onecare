@@ -194,6 +194,42 @@ main {
   flex-wrap: wrap;
 }
 
+.interpreter-preferences {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  margin-top: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.interpreter-preferences header h2 {
+  margin-top: 0;
+  margin-bottom: 0.25rem;
+}
+
+.interpreter-field {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.interpreter-field--confirm {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.interpreter-field textarea {
+  min-height: 5rem;
+}
+
+.field-hint {
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
 .booking-confirm-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

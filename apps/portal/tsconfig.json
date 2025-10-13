@@ -12,6 +12,6 @@
     "emitDeclarationOnly": true,
     "types": ["vite/client"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "src/config/accessibility.defaults.json"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
