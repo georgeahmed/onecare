@@ -1,0 +1,32 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-triage-minimal",
+      "topic": "triage.input",
+      "timestamp": "2025-01-01T12:00:00.000Z",
+      "correlationId": "corr-triage-min",
+      "payload": {
+        "patientId": "patient-001",
+        "narrative": "Minimal triage event"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-triage-maximal",
+      "topic": "triage.input",
+      "timestamp": "2025-01-02T13:15:30.123Z",
+      "correlationId": "corr-triage-max",
+      "payload": {
+        "patientId": "patient-987",
+        "narrative": "Full triage event with features",
+        "features": {
+          "severity": "high",
+          "riskScore": 0.87,
+          "followUp": true,
+          "notes": null
+        }
+      }
+    }
+  }
+}

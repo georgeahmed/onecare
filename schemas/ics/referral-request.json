@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/ics/referral-request.json",
+  "title": "IcsReferralRequest",
+  "type": "object",
+  "properties": {
+    "referralId": { "type": "string" },
+    "patientId": { "type": "string" },
+    "org": { "type": "string" },
+    "reason": { "type": "string" }
+  },
+  "required": ["referralId", "patientId", "org", "reason"],
+  "additionalProperties": false
+}
+

@@ -1,0 +1,41 @@
+{
+  "name": "onecare-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm -ws run build --if-present",
+    "clean": "rimraf \"apps/*/dist\" \"packages/*/dist\" \"services-py/*/dist\" dist",
+    "codegen": "node scripts/codegen/generate.js",
+    "codegen:check": "DRY_RUN=1 node scripts/codegen/generate.js",
+    "typecheck": "tsc -b tsconfig.json --verbose --pretty",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "test": "vitest --run",
+    "metrics:rollup": "node scripts/metrics_rollup.js",
+    "metrics:quality": "node scripts/analytics_quality.js",
+    "feature:backfill": "node scripts/feature_backfill.js",
+    "drift:report": "node scripts/drift_report.js",
+    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci"
+  },
+  "devDependencies": {
+    "@types/minimatch": "^5.1.2",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "husky": "^9.1.6",
+    "json-schema-to-typescript": "^13.1.1",
+    "prettier": "^3.2.5",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.5.0"
+  },
+  "prepare": "husky install",
+  "dependencies": {
+    "pg": "^8.11.5",
+    "yaml": "^2.8.1"
+  }
+}

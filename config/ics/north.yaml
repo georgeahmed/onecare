@@ -1,0 +1,17 @@
+__meta:
+  arrayMerge:
+    enhanced_access_windows: additive
+    red_flag_set: additive
+    accessibility_and_language.interpreter_languages: additive
+
+enhanced_access_windows:
+  - sunday
+red_flag_set:
+  - "altered vision"
+safety_gate:
+  red_flag_threshold: 0.6
+  acuity_threshold_emergency: 0.8
+ooh_policy:
+  accept_submissions: true
+  patient_message: >
+    Outside core hours for North ICS practices. Contact NHS 111 or 999 in an emergency.

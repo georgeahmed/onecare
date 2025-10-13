@@ -1,0 +1,55 @@
+# Template: Scribe backlog growth alerts
+# Purpose: Detect sustained backlog growth in the scribe pipeline to protect turnaround time.
+# Replace the {{ ... }} placeholders with deployment-specific values (metric names, labels, thresholds).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{RULE_NAME}}
+  labels:
+    team: "{{TEAM_LABEL}}"
+    service: "{{SERVICE_LABEL}}"
+    env: "{{ENVIRONMENT_LABEL}}"
+spec:
+  groups:
+    - name: scribe-backlog.health
+      rules:
+        - alert: ScribeBacklogWarning
+          expr: |
+            sum(
+              avg_over_time({{BACKLOG_GAUGE_METRIC}}{service="{{SERVICE_LABEL}}", queue="{{QUEUE_LABEL}}"}[{{WARNING_WINDOW}}])
+            ) > {{WARNING_THRESHOLD}}
+          for: {{WARNING_FOR}}
+          labels:
+            severity: "{{WARNING_SEVERITY}}"
+            component: "scribe-backlog"
+            env: "{{ENVIRONMENT_LABEL}}"
+            team: "{{TEAM_LABEL}}"
+          annotations:
+            summary: "Scribe backlog exceeded {{WARNING_THRESHOLD}} items ({{WARNING_WINDOW}} avg)"
+            description: |-
+              The scribe backlog (queue={{QUEUE_LABEL}}) averaged above {{WARNING_THRESHOLD}} items across {{WARNING_WINDOW}}.
+              Investigate upstream ingestion, transcription throughput, and worker availability before SLAs slip.
+            runbook: "{{RUNBOOK_URL}}"
+            dashboard: "{{DASHBOARD_URL}}"
+        - alert: ScribeBacklogCritical
+          expr: |
+            sum(
+              avg_over_time({{BACKLOG_GAUGE_METRIC}}{service="{{SERVICE_LABEL}}", queue="{{QUEUE_LABEL}}"}[{{CRITICAL_WINDOW}}])
+            ) > {{CRITICAL_THRESHOLD}}
+            or
+            sum(
+              predict_linear({{BACKLOG_GAUGE_METRIC}}{service="{{SERVICE_LABEL}}", queue="{{QUEUE_LABEL}}"}[{{CRITICAL_WINDOW}}], {{PREDICTION_SECONDS}})
+            ) > {{CRITICAL_THRESHOLD}}
+          for: {{CRITICAL_FOR}}
+          labels:
+            severity: "{{CRITICAL_SEVERITY}}"
+            component: "scribe-backlog"
+            env: "{{ENVIRONMENT_LABEL}}"
+            team: "{{TEAM_LABEL}}"
+          annotations:
+            summary: "Scribe backlog critical breach sustained above {{CRITICAL_THRESHOLD}} items"
+            description: |-
+              Backlog has remained above {{CRITICAL_THRESHOLD}} items for {{CRITICAL_WINDOW}} or is projected to exceed that level soon.
+              Add capacity, pause new intake, or switch to transcript-only fallback to protect user commitments.
+            runbook: "{{RUNBOOK_URL}}"
+            dashboard: "{{DASHBOARD_URL}}"

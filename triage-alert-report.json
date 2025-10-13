@@ -1,0 +1,28 @@
+{
+  "timestamp": "2025-10-13T17:41:52.559Z",
+  "thresholdMs": 25,
+  "observedP95Ms": 28.971958,
+  "triggered": true,
+  "parameters": {
+    "durationSeconds": 10,
+    "ratePerSecond": 12,
+    "processDelayMs": 25
+  },
+  "summary": {
+    "totalRequests": 120,
+    "successes": 120,
+    "failures": 0,
+    "duplicateDetected": 0,
+    "durationSeconds": 10.546753708,
+    "throughputPerSecond": 11.377908626895945,
+    "latencyMs": {
+      "count": 120,
+      "average": 27.31030031666665,
+      "p50": 27.239291999999296,
+      "p90": 28.145583000000443,
+      "p95": 28.971958,
+      "p99": 29.585167000000013,
+      "max": 29.597166000000016
+    }
+  }
+}

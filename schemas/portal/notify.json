@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/portal/notify.json",
+  "title": "PortalNotify",
+  "description": "Notification of portal state change for a practice.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "practiceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-zA-Z0-9._:-]+$",
+      "description": "Stable practice identifier (no PHI)."
+    },
+    "state": {
+      "type": "string",
+      "enum": ["UP", "DOWN", "OOH"],
+      "description": "Resulting portal availability state."
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_]{1,64}$",
+      "description": "Machine-readable reason (e.g., CORE_HOURS, MAINTENANCE, CONFIG_INVALID)."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp for the observed state change (UTC)."
+    }
+  },
+  "required": ["practiceId", "state", "at"]
+}

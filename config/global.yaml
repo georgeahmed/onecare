@@ -1,0 +1,19 @@
+__meta:
+  arrayMerge:
+    enhanced_access_windows: additive
+    red_flag_set: additive
+    accessibility_and_language.interpreter_languages: additive
+    accessibility_and_language.collect_patient_prefs: additive
+
+hold_back_fraction: 0.12
+enhanced_access_windows:
+  - bank_holiday_cover
+red_flag_set:
+  - "visual disturbance"
+safety_gate:
+  emergency_confidence: 0.72
+accessibility_and_language:
+  interpreter_languages: ["so"]
+  collect_patient_prefs: ["neurodivergent_support"]
+idempotency:
+  ttl_seconds: 900

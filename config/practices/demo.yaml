@@ -1,0 +1,28 @@
+__meta:
+  pcn: "north-1"
+  arrayMerge:
+    enhanced_access_windows: additive
+    red_flag_set: additive
+    accessibility_and_language.interpreter_languages: additive
+    accessibility_and_language.collect_patient_prefs: additive
+
+core_hours:
+  start: "08:15"
+  end: "18:00"
+enhanced_access_windows:
+  - same_day_evenings
+red_flag_set:
+  - "vision loss"
+safety_gate:
+  red_flag_threshold: 0.57
+  emergency_confidence: 0.68
+  acuity_threshold_emergency: 0.82
+triage:
+  score_weights:
+    risk: 0.6
+    capacity: 0.25
+idempotency:
+  ttl_seconds: 720
+accessibility_and_language:
+  interpreter_languages: ["bn", "ps"]
+  collect_patient_prefs: ["hearing_loop"]

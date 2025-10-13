@@ -1,0 +1,230 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Cache npm artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cache pip artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('services-py/pyproject.toml', 'services-py/pdm.lock', 'services-py/poetry.lock', 'services-py/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install
+        run: npm ci
+      - name: Codegen check (no write)
+        run: npm run codegen:check
+      - name: Verify schema contracts in sync
+        if: github.event_name == 'pull_request'
+        run: bash scripts/ci/check_contracts_sync.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test --silent
+      - name: Portal accessibility audit
+        run: npm run a11y:portal
+      - name: Python tests
+        run: make py-test
+      - name: Platform checklist check (backend)
+        run: bash scripts/ci/check_platform_checklists.sh
+      - name: Platform checklist check (integrations)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/integrations
+      - name: Platform checklist check (devops-sre)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/devops-sre
+      - name: Platform checklist check (ml)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/ml
+      - name: Platform checklist check (frontend)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/frontend
+      - name: Platform checklist check (data-engineering)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/data-engineering
+      - name: Platform checklist check (qa-automation)
+        run: STRICT=1 bash scripts/ci/check_platform_checklists_team.sh team/qa-automation
+      - name: SLO guard
+        run: bash scripts/ci/slo_guard.sh || echo "::warning title=SLO guard::SLO documentation check failed"
+
+  perf-checks:
+    name: Perf Checks
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Triage flow load smoke
+        run: node scripts/perf/triage_flow.js
+        env:
+          TRIAGE_FLOW_DURATION: '5'
+          TRIAGE_FLOW_RATE: '8'
+          TRIAGE_FLOW_OUTPUT: 'json'
+          TRIAGE_FLOW_OUTPUT_PATH: triage-summary.json
+      - name: Booking flow load smoke
+        run: node scripts/perf/booking_flow.js
+        env:
+          BOOKING_FLOW_DURATION: '5'
+          BOOKING_FLOW_RATE: '8'
+          BOOKING_FLOW_CONFLICT_RATE: '0.15'
+          BOOKING_FLOW_OUTPUT: 'json'
+          BOOKING_FLOW_OUTPUT_PATH: booking-summary.json
+      - name: Telephony parity check
+        run: node scripts/perf/telephony_parity.js
+        env:
+          TELEPHONY_PARITY_CALLS: '200'
+          TELEPHONY_PARITY_CONCURRENCY: '10'
+          TELEPHONY_PARITY_CHUNKS: '3'
+          TELEPHONY_PARITY_OUTPUT: 'json'
+          TELEPHONY_PARITY_OUTPUT_PATH: telephony-summary.json
+      - name: Validate performance thresholds
+        run: node scripts/perf/check_ci_thresholds.js
+        env:
+          TRIAGE_FLOW_OUTPUT_PATH: triage-summary.json
+          BOOKING_FLOW_OUTPUT_PATH: booking-summary.json
+          TELEPHONY_PARITY_OUTPUT_PATH: telephony-summary.json
+      - name: Upload performance summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-summaries
+          path: |
+            triage-summary.json
+            booking-summary.json
+            telephony-summary.json
+
+  docker-images:
+    name: Build & Publish Docker Images
+    needs:
+      - build-and-test
+      - perf-checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    env:
+      REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+      REGISTRY_USER: ${{ secrets.DOCKER_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Read package version
+        id: version
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+          else
+            VERSION=""
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Determine push mode
+        id: push
+        run: |
+          if [ -n "${REGISTRY}" ] && [ -n "${REGISTRY_USER}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Registry push disabled::Docker registry secrets not configured; images will be built but not pushed."
+          fi
+
+      - name: Log in to registry
+        if: steps.push.outputs.enabled == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      - name: Prepare image tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          IMAGE_PREFIX="${REGISTRY:+${REGISTRY}/}"
+          SAFETY_TAGS="${IMAGE_PREFIX}onecare-safety-gate:${GITHUB_SHA}"
+          SCRIBE_TAGS="${IMAGE_PREFIX}onecare-scribe:${GITHUB_SHA}"
+          if [ -n "${VERSION}" ]; then
+            SAFETY_TAGS="${SAFETY_TAGS}"$'\n'"${IMAGE_PREFIX}onecare-safety-gate:${VERSION}"
+            SCRIBE_TAGS="${SCRIBE_TAGS}"$'\n'"${IMAGE_PREFIX}onecare-scribe:${VERSION}"
+          fi
+          {
+            echo "safety<<'EOF'"
+            echo "${SAFETY_TAGS}"
+            echo "EOF"
+            echo "scribe<<'EOF'"
+            echo "${SCRIBE_TAGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build safety-gate image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services-py/safety_gate_service/Dockerfile
+          platforms: linux/amd64
+          push: ${{ steps.push.outputs.enabled == 'true' }}
+          tags: ${{ steps.tags.outputs.safety }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build scribe image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services-py/scribe_service/Dockerfile
+          platforms: linux/amd64
+          push: ${{ steps.push.outputs.enabled == 'true' }}
+          tags: ${{ steps.tags.outputs.scribe }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  security-scans:
+    name: Security Scans
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Trivy filesystem scan (informational)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          format: table
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+        continue-on-error: true
+
+      - name: gitleaks secrets scan (informational)
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source . --redact
+        continue-on-error: true

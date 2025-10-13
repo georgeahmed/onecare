@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/telephony/intent-classified.json",
+  "title": "IntentClassified",
+  "type": "object",
+  "properties": {
+    "callId": { "type": "string" },
+    "intent": { "type": "string" },
+    "confidence": { "type": "number" }
+  },
+  "required": ["callId", "intent"],
+  "additionalProperties": false
+}
+

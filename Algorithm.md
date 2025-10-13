@@ -1,9 +1,4 @@
 # ONECARE (Maqbool) — AI‑Powered Clinical Operating System
-**Modern Access Edition (NHS & FHIR‑Native)**  
-**Version 1.2 — Updated 2025**
-
-> This document converts the attached *Maqbool_report* into a software‑ready, algorithmic Markdown specification. It preserves all essential logic and flows while structuring them into explicit initialization, processing, and output stages with concrete data models, event topics, and pseudocode suitable for implementation. It fully embeds all meaningful and important information from the report so this file is self‑contained (safe to remove the original report if needed).
-
 ---
 
 ## Table of Contents
@@ -72,55 +67,164 @@ ACCESSIBILITY_AND_LANGUAGE = {       # used in search/rank + fairness
   offer_bsl: true,
   collect_patient_prefs: ["female_clinician", "wheelchair_access", "language_preference"]
 }
+SAFETY_GATE = {                      # transformer-based pre-triage safety gate
+  MODEL_NER: "bioclinicalbert",     # bio/clinical BERT variant for NER
+  MODEL_CLASSIFIER: "medalpaca-sm", # emergency classifier model id
+  MULTILINGUAL_MODE: "native",      # native | translate
+  TRANSLATE_ENGINE: "none",         # if MULTILINGUAL_MODE=translate
+  RED_FLAG_THRESHOLD: 0.65,          # entity-based risk threshold
+  EMERGENCY_CONFIDENCE: 0.70,        # classifier confidence for emergency
+  ACUITY_MODEL: "xgboost",          # ensemble model for acuity
+  ACUITY_THRESHOLD_EMERGENCY: 0.75,  # emergency cut-off
+  TIMEOUT_MS: 800,                   # fail-fast budget for gate
+  FALLBACK: "rules"                  # rules | none
+}
+SCRIBE = {                           # ambient scribe controls
+  ENABLED: true,
+  ASR_MODEL: "whisper-large-v3-medical",
+  ASR_DIARIZATION: true,
+  LLM_MODEL: "medpalm2",
+  MAX_SUMMARY_TOKENS: 2048,
+  UNCERTAINTY_HIGHLIGHT: true,
+  REQUIRE_CLINICIAN_APPROVAL: true,
+  STORE_AUDIO: "binary",             # Binary/DocumentReference
+  TERMINOLOGY: { condition: "SNOMED-CT", medication: "dm+d" },
+  TIMEOUT_MS: 30000,
+  FALLBACK_MODE: "transcript"        # transcript | template | none
+}
 ```
 
 ### 0.5.1 Config (YAML Example)
 ```yaml
 core_hours:
-  start: "08:00"
-  end: "18:30"
+  start: "08:00"            # Core hours start (local time)
+  end: "18:30"              # Core hours end (local time)
 enhanced_access_windows:
   - weekdays_evening
   - saturday
 red_flag_set:
-  - chest pain
-  - severe bleeding
-  - shortness of breath
+  - "chest pain"
+  - "shortness of breath"
+  - "severe bleeding"
+  - "unresponsive"
+  - "suicidal ideation"
 priority_thresholds:
   stat: 0.9
   urgent: 0.7
   soon: 0.4
   routine: 0.0
 sla_targets:
-  urgent_first_contact: "PT2H"
-  routine_initial_response: "P2D"
-hold_back_fraction: 0.1
+  stat_immediate: "PT0M"               # STAT: immediate action (no delay)
+  urgent_first_contact: "PT2H"         # URGENT: within 2 hours
+  soon_same_day: "PT12H"               # SOON: within 12 hours (same working day)
+  routine_initial_response: "P2D"      # ROUTINE: within 2 days
+hold_back_fraction: 0.10               # 10% slots initially held for urgent/micro-release
 fairness_floors:
-  telephone_min_fraction: 0.15
-  interpreter_support: true
+  telephone_min_fraction: 0.15         # At least 15% of appts for telephone requests
+  interpreter_support: true            # Interpreter/language support available
 privacy_policy:
-  retention_days: 3650
-  minimize_data: true
+  retention_days: 3650                 # Retain audit data ~10 years
+  minimize_data: true                  # Store only necessary data
 ooh_policy:
-  accept_submissions: true
-  patient_message: "Outside core hours. For urgent needs call NHS 111, emergencies 999. We will triage next day."
+  accept_submissions: true             # Allow OOH submissions (deferred triage)
+  patient_message: >
+    Outside core hours. For urgent medical help, contact NHS 111 (24/7)
+    or call 999 for emergencies. You may submit your issue now and we
+    will review it when we re-open.
 callback_windows_by_priority:
-  stat: immediate
-  urgent: within_2h
-  soon: same_day
-  routine: initial_response_within_48h
+  stat: "immediate"
+  urgent: "within_2h"
+  soon: "same_day"
+  routine: "within_48h"
 accessibility_and_language:
-  interpreter_languages: [en, ur, pa, ar]
+  interpreter_languages: ["en", "ur", "pa", "pl", "ar"]
   offer_bsl: true
-  collect_patient_prefs: [female_clinician, wheelchair_access, language_preference]
+  collect_patient_prefs: ["female_clinician", "wheelchair_access", "language_preference"]
+safety_gate:
+  model_ner: "bioclinicalbert"
+  model_classifier: "medalpaca-sm"
+  multilingual_mode: "native"
+  translate_engine: "none"
+  red_flag_threshold: 0.65
+  emergency_confidence: 0.70
+  acuity_model: "xgboost"
+  acuity_threshold_emergency: 0.75
+  timeout_ms: 800
+  fallback: "rules"
+triage:
+  score_weights:
+    acuity: 1.0
+    risk: 0.5
+    complexity: 0.2
+    time: 0.5
+    capacity: 0.2
+  aging_interval: "PT5M"
+  sim_threshold: 0.8
+  dedup_window: "PT72H"
+provider_assignment:
+  weights:
+    availability: 1.0
+    workload: 1.0
+    continuity: 0.5
+    resolution_rate: 0.2
+    distance: 0.2
+    fairness: 0.5
+telephony:
+  ivr_intent_classifier: "default"
+  max_callback_retries: 3
+  emergency_transfer_enabled: true
+ambient_scribe:
+  enabled: true
+  asr_model: "whisper-large-v3-medical"
+  asr_diarization: true
+  llm_model: "medpalm2"
+  max_summary_tokens: 2048
+  uncertainty_highlight: true
+  require_clinician_approval: true
+  store_audio: "binary"                # Binary/DocumentReference
+  terminology:
+    condition: "SNOMED-CT"
+    medication: "dm+d"                  # UK meds coding
+  timeout_ms: 30000
+  fallback_mode: "transcript"
+security:
+  audit_all_events: true
+  worm_audit_store: true
+  auth_required: true
+  encryption: "TLS1.2+"
+observability:
+  metrics_collection: true
+  slo:
+    triage_p95_ms: 2000
+    scribe_draft_p95_s: 60
+    portal_core_uptime: 0.999
+    audit_coverage: 1.0
+  alerts:
+    triage_latency_breach:
+      threshold_ms: 2000
+      duration: "PT5M"
+    scribe_backlog:
+      threshold_queue_length: 5
+      duration: "PT1M"
+    portal_downtime:
+      threshold_minutes: 5
+    fairness_monitor:
+      telephone_fraction_floor: 0.15
+      check_window: "P1D"
 ```
+### 0.5.2 Config Hierarchy & Overrides
+- Layers: global → ICS → PCN → practice (most specific wins).
+- Merge: maps shallow-merge; arrays replace unless marked additive.
+- Safety floors/ceilings: emergency thresholds, priority floors, and audit requirements may only become stricter downstream.
+- Provenance: defaults derived from “AI Triage System Configuration for NHS GP Deployment”; practices can override within allowed bounds.
+
 ### 0.6 Global Invariants
 1) **FHIR‑centric** persistence; 2) **Event = side‑effect** (correlation/causation IDs);  
 3) **Zero‑trust security** (authN/Z + consent for every call); 4) **Human in the loop** for clinical/irreversible actions; 5) **Safety > convenience** (red‑flag overrides).
 
 ### 0.7 Coverage & Provenance
-- Incorporates all meaningful content from `Maqbool_report.docx` (Updated Version 1.2, 2025): telephony parity, red‑flag diversion, unified triage and SLA aging, Pharmacy First routing, federated booking via GP Connect, capacity shaping, ambient scribe with explicit consent, cross‑org exchange, safety/compliance, fairness, accessibility and language considerations, and operational KPIs.
-- Narrative examples in the report (e.g., “urgent within 2 hours”, “routine initial response within 48 hours”) are reflected as configurable defaults under `CALLBACK_WINDOWS_BY_PRIORITY` and `SLA_TARGETS`.
+- Incorporates content from `AI Triage System Configuration for NHS GP Deployment.pdf` (NHS GP baseline, thresholds, model choices) and `Maqbool_report.docx` (Updated Version 1.2, 2025): telephony parity, red‑flag diversion, unified triage and SLA aging, Pharmacy First routing, federated booking via GP Connect, capacity shaping, ambient scribe with explicit consent, cross‑org exchange, safety/compliance, fairness, accessibility and language considerations, and operational KPIs.
+- Narrative examples (e.g., “urgent within 2 hours”, “routine initial response within 48 hours”) are reflected as configurable defaults under `CALLBACK_WINDOWS_BY_PRIORITY` and `SLA_TARGETS`.
 
 ### 0.8 High‑Level Architecture
 ```mermaid
@@ -135,7 +239,7 @@ graph TD
     TR[Triage Service]
     BK[Booking Service]
     PH[Pharmacy Router]
-    CS[Capacity Shaper / Co‑Pilot]
+    CS[Capacity Shaper / Co-Pilot]
     SC[Ambient Scribe]
     ICS[ICS Hub / Broker]
   end
@@ -151,7 +255,7 @@ graph TD
   OBS[Observability/SIEM]
   GP[GP Connect]
   CPCS[CPCS/Pharmacy]
-  OOH[Out‑of‑Hours Provider]
+  OOH[Out-of-Hours Provider]
 
   P -->|portal.submission| O
   T -->|telephony.call.transcribed| O
@@ -173,22 +277,24 @@ graph TD
   SC -.-> OBJ
 ```
 
+
 ### 0.9 Core Flows (Sequences)
 
 Unified Intake → Orchestrate → Triage → Task
 ```mermaid
 sequenceDiagram
   participant Patient
-  participant Portal as Portal/IVR
+  participant Portal as "Portal/IVR"
   participant Orc as Orchestrator
-  participant F as FHIR Store
+  participant F as "FHIR Store"
   participant Tri as Triage
   participant Q as Clinician Queue
   Patient->>Portal: Submit narrative / call intent
   Portal->>Orc: ingress event (+auth, idempotency)
   Orc->>Orc: authZ + consent + normalize + validate
   Orc->>F: Upsert FHIR Bundle (atomic)
-  Orc->>Tri: triage.input event
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri->>Tri: risk/acuity/complexity + score
   Tri->>F: Create Task(for=Patient, owner, priority)
   Tri->>Q: Notify owner/team
@@ -198,7 +304,7 @@ Telephony Parity with Callback Windows
 ```mermaid
 sequenceDiagram
   participant Caller
-  participant IVR as Cloud IVR
+  participant IVR as "Cloud IVR"
   participant ASR
   participant Orc as Orchestrator
   participant Tri
@@ -206,7 +312,8 @@ sequenceDiagram
   IVR->>ASR: Audio
   ASR-->>IVR: Transcript
   IVR->>Orc: telephony.call.transcribed
-  Orc->>Tri: triage.input (if not diverted)
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri-->>IVR: Priority (tentative)
   IVR-->>Caller: Offer CALLBACK_WINDOWS_BY_PRIORITY
 ```
@@ -220,6 +327,9 @@ sequenceDiagram
 - Any inbound event `e` on ingress topics, with `auth`, `idempotency_key`, `payload`.
 
 ### 1.2 Algorithm
+<details>
+<summary>View Orchestrator Algorithm</summary>
+
 ```pseudocode
 Orchestrate(e):
   ctx := initContext(e)
@@ -254,6 +364,8 @@ Orchestrate(e):
   EmitAudit("success", {e, R, routes})
   return OK
 ```
+
+</details>
 **Outputs:** Published events, persisted FHIR bundle, metrics, immutable audit.
 
 Sequence (Orchestrate)
@@ -261,7 +373,7 @@ Sequence (Orchestrate)
 sequenceDiagram
   participant S as Source (Portal/IVR/API)
   participant O as Orchestrator
-  participant F as FHIR Store
+  participant F as "FHIR Store"
   participant E as Event Bus
   S->>O: ingress event (auth, scope)
   O->>O: VerifySignature + ReplayGuard
@@ -281,6 +393,9 @@ Guarantees continuous access across web and phone (eliminates the "8am rush"), w
 **Schedule:** Every minute per practice.  
 **Goal:** Ensure portal is open within `CORE_HOURS`; display OOH banner outside.
 
+<details>
+<summary>View Portal Uptime Guard</summary>
+
 ```pseudocode
 GuardPortal(practice):
   now := LocalTime(practice.tz)
@@ -297,27 +412,76 @@ GuardPortal(practice):
      else:
         BlockSubmissionsWithAdvice(practice.portal)
 ```
+
+</details>
 **Outputs:** Portal state, incident notices, audit.
 
-### 2.2 Urgent‑Safety Gate (red‑flag diversion)
+### 2.2 Urgent‑Safety Gate (transformer‑based red‑flag diversion)
 **Trigger:** Immediately on submission (web or phone transcript).
+
+<details>
+<summary>View Urgent‑Safety Gate</summary>
 
 ```pseudocode
 SafeguardGate(doc, patient):
-  snapshot := FetchRecentContext(patient)                     # vitals, conditions, meds
-  ctxdoc   := ComposeContext(doc, snapshot)
+  # 1) Semantic red‑flag detection via transformer NLP (BioBERT/ClinicalBERT or similar; multilingual if needed)
+  nlp_results      := TransformerModel.analyze(doc)                 # structured extraction from text
+  symptom_list     := nlp_results.symptoms                          # e.g., ["chest pain", "dizziness"] with context
+  severity_list    := nlp_results.severity                          # e.g., descriptors, pain scores
+  temporal_list    := nlp_results.temporal                          # e.g., onset/duration
+  context_entities := nlp_results.context_entities                  # e.g., history of diabetes
 
-  rf := RiskNLP(ctxdoc, RED_FLAG_SET)                        # keyword/semantic red flags
-  acuity := AcuityModel(ctxdoc)                               # Emergency/Urgent/Routine
+  high_risk_symptom_flag := false
+  for s in symptom_list:
+    if SymptomLexicon.isRedFlag(s) && Confidence(nlp_results, s) >= Config.safety_gate.red_flag_threshold:
+       high_risk_symptom_flag := true
+       break
 
-  if rf.emergency || acuity == EMERGENCY:
-     ShowUrgentAdvice(patient.locale)                         # 999/A&E or 111 per config
+  # Optional redundancy: whole‑text emergency classifier
+  if TransformerModel.classify_emergency(doc) >= Config.safety_gate.emergency_confidence:
+     high_risk_symptom_flag := true
+
+  # 2) Patient context integration (demographics + history)
+  age          := patient.age
+  comorbid     := patient.comorbidities
+
+  # 3) Acuity prediction via ensemble ML model (e.g., gradient boosted trees)
+  features := {}
+  features["symptom_embeddings"] := ModelEmbedder.encode(symptom_list, severity_list, temporal_list)
+  features["patient_age"]        := age
+  features["patient_comorbid"]   := PatientVector.encode(comorbid)
+  severity_prediction := AcuityModel.predict(features)              # "Emergency" | "Urgent" | "Routine"
+  # Optionally threshold on emergency probability if available
+  emer_prob := AcuityModel.predict_proba(features).emergency?
+
+  # 4) Safety gate decision and diversion
+  if high_risk_symptom_flag || severity_prediction == "Emergency" || (emer_prob && emer_prob >= Config.safety_gate.acuity_threshold_emergency):
+     ShowUrgentAdvice(patient.locale)                               # localized 999/A&E or 111 guidance
      CreateSafetyAlert(doc, patient)
      EmitAudit("urgent_diversion", {doc, patient})
      return DIVERTED
+  # Enforce timeout/fallback behaviour
+  # If processing exceeded Config.safety_gate.timeout_ms and Config.safety_gate.fallback == "rules",
+  # apply a rules-based check using RED_FLAG_SET as a last resort.
+  if TimedOut():
+     if Config.safety_gate.fallback == "rules" && ContainsAny(doc.text, Config.red_flag_set):
+        ShowUrgentAdvice(patient.locale)
+        CreateSafetyAlert(doc, patient)
+        EmitAudit("urgent_diversion_fallback", {doc, patient})
+        return DIVERTED
   return SAFE_TO_CONTINUE
 ```
+
+</details>
 **Outputs:** Patient urgent advice, Staff safety alert, audit (diverted) or pass‑through.
+
+#### Model Choices & Performance
+- Backbones: BioBERT/ClinicalBERT/BioClinicalBERT for symptom/entity NER; consider XLM-R/mBERT or translate-then-NER for multilingual input.
+- Emergency classifier: lightweight transformer head or distilled LLM (e.g., MedAlpaca small). Calibrate with Platt/temperature; set `RED_FLAG_THRESHOLD` and `EMERGENCY_CONFIDENCE`.
+- Acuity: gradient-boosted trees (e.g., XGBoost/LightGBM) over encoded symptoms + patient context. Calibrate thresholds for “Emergency”.
+- Latency/throughput: target p50 < 300ms, p95 < 800ms. Use quantization (int8), batch small requests, prefer CPU inference where possible; GPU optional for bursts. Enforce `TIMEOUT_MS` with `FALLBACK="rules"` to maintain safety.
+- Multilingual strategy: prefer native multilingual models when available; if translating, preserve clinical terms and run lexicon checks post-translation.
+- Monitoring: log anonymized confidence + decisions, track false negatives, drift, and per-language performance; periodic offline evaluation and re-tuning.
 
 ### 2.3 Telephony Parity (cloud IVR → same digital flow)
 **Input:** Inbound call.  
@@ -345,8 +509,8 @@ HandleCall(call):
 
   Publish("triage.input", doc)
   p := tentativePriorityFromEarlySignals(doc)
-  OfferCallbackWindowsFromConfig(patient, p, CALLBACK_WINDOWS_BY_PRIORITY)
-  if p == STAT and IntegrationAllowsEmergencyTransfer():
+  OfferCallbackWindowsFromConfig(patient, p, Config.callback_windows_by_priority)
+  if p == STAT and Config.telephony.emergency_transfer_enabled:
      OfferImmediateTransfer(to = LocalEmergencyNumber(patient.locale))
   return END
 ```
@@ -363,7 +527,8 @@ sequenceDiagram
   IVR->>ASR: Audio stream
   ASR-->>IVR: Transcript
   IVR->>Orc: telephony.call.transcribed
-  Orc->>Tri: triage.input (SAFE)
+  Orc->>Orc: SafeguardGate(doc, patient) [transformer NLP + ensemble]
+  Orc->>Tri: triage.input (if SAFE)
   Tri-->>IVR: Priority suggestion
   IVR-->>Caller: Offer callback window from config
 ```
@@ -373,35 +538,46 @@ sequenceDiagram
 ## 3) AI Triage, SLA Re‑prioritisation & De‑duplication
 
 ### 3.1 Unified Triage (web + phone + walk‑in)
+<details>
+<summary>View Unified Triage Algorithm</summary>
+
 ```pseudocode
 Triage(doc):
-  intent    := IntentClassifier(doc.text)
-  riskFlags := RiskNLP(doc.text)                              # secondary check
-  acuity    := AcuityModel(doc + patient features)
-  complexity:= ComplexityModel(doc, patient)
+  # Preliminary analysis of patient request
+  intent          := IntentClassifier(doc.text)
+  entities        := ClinicalNER(doc.text)                       # extract key symptoms/conditions for context (NER)
+  riskFlags       := RiskClassifier(entities, doc.text)          # identify high-risk terms (e.g., red-flag symptoms)
+  acuityScore     := AcuityModel(doc, doc.patient)               # ML-predicted acuity
+  complexityScore := ComplexityModel(doc.patient)                # estimate complexity (e.g., multimorbidity)
 
-  neededSkills := SkillExtractor(doc)
-  capacity     := QueryRotaAndSchedules(neededSkills)
+  # Required skills and provider availability
+  requiredSkills := SkillExtractor(intent, entities)             # infer needed clinician skills/role
+  availableTeam  := QueryRotaAndSchedules(requiredSkills)       # on-duty providers with matching skills & capacity
 
-  # Composite priority score
-  wf := riskFlags.weight
-  td := TimeDecay( now() - doc.created_at )                   # 0 at creation
-  cm := CapacityMismatch(neededSkills, capacity)
-  score := W1*acuity + W2*wf + W3*td + W4*complexity - W5*cm
+  # Composite priority scoring (higher = more urgent)
+  riskWeight  := riskFlags.weight
+  timeFactor  := TimeDecay(now() - doc.created_at)               # increase score over time (SLA aging)
+  capacityGap := CapacityGap(requiredSkills, availableTeam)      # demand-supply gap for skill
+  # Weights from config (triage.score_weights)
+  w := Config.triage.score_weights
+  score := w.acuity*acuityScore + w.risk*riskWeight + w.complexity*complexityScore + w.time*timeFactor - w.capacity*capacityGap
 
-  if IsLifeThreatening(riskFlags, acuity):
+  if IsLifeThreatening(riskFlags, acuityScore):
      CreateSafetyAlert(doc.patient)
      EmitAudit("life_threat_override", doc)
      priorityLabel := "stat"
   else:
-     priorityLabel := MapPriority(score, PRIORITY_THRESHOLDS) # stat/urgent/soon/routine
+     priorityLabel := MapPriority(score, Config.priority_thresholds)   # STAT / URGENT / SOON / ROUTINE
 
-  owner := AssignBestOwner(neededSkills, capacity, doc.patient)
-  task  := CreateFHIRTask(doc, owner, priorityLabel)          # status=requested, input refs, for=Patient
+  # Assign to best-suited clinician (skill match, continuity, workload balance)
+  owner := SelectBestProvider(availableTeam, doc.patient, requiredSkills, priorityLabel)
+  task  := CreateFHIRTask(doc, owner, priorityLabel)            # FHIR Task for patient, with assignee and priority
   Persist(task)
   NotifyOwnerQueue(owner, task)
   return task
 ```
+
+</details>
 **Outputs:** `Task` in clinician queue, owner/team notification, audit.
 
 Sequence (Triage and Aging)
@@ -411,7 +587,7 @@ sequenceDiagram
   participant FS as Feature Store
   participant F as FHIR Store
   Tri->>FS: Fetch features (patient/context)
-  Tri->>Tri: Intent + RiskNLP + Acuity + Complexity
+  Tri->>Tri: Intent + ClinicalNER + RiskClassifier + Acuity + Complexity
   Tri->>F: Create Task(for, owner, priority)
   loop Every 5 minutes
     Tri->>F: Recompute score by age
@@ -420,21 +596,40 @@ sequenceDiagram
 ```
 
 ### 3.2 SLA Re‑prioritisation (aging)
-**Schedule:** Every 5 minutes.
+**Schedule:** Every `Config.triage.aging_interval` (default PT5M).
+<details>
+<summary>View SLA Re‑prioritisation (Aging)</summary>
+
 ```pseudocode
 AgeOpenTasks():
+  # Re-run on configured interval, factoring live capacity (monotonic aging)
   for t in OpenTasks(status in {requested, ready}):
-    score' := RecomputeScore(t.doc, age = now - t.created_at)
-    newLabel := MapPriority(score', PRIORITY_THRESHOLDS)
+    # Refresh availability for required skills
+    req := SkillExtractor(IntentClassifier(t.doc.text), ClinicalNER(t.doc.text))
+    team := QueryRotaAndSchedules(req)
+    capGap := CapacityGap(req, team)
+    # Recompute score using same weights, updated age and capacity
+    w := Config.triage.score_weights
+    wf := RiskClassifier(ClinicalNER(t.doc.text), t.doc.text).weight
+    td := TimeDecay(now - t.created_at)
+    acu := AcuityModel(t.doc, t.doc.patient)
+    cpx := ComplexityModel(t.doc.patient)
+    score' := w.acuity*acu + w.risk*wf + w.complexity*cpx + w.time*td - w.capacity*capGap
+    newLabel := MapPriority(score', Config.priority_thresholds)
     if Higher(newLabel, t.priority):
        UpdateTaskPriority(t, newLabel)
        NotifyOwnerQueue(t.owner, t, reason="SLA aging")
 ```
+
+</details>
 **Guarantees:** Monotonic escalation; audited.
 
 ### 3.3 Cross‑Channel De‑duplication
+<details>
+<summary>View Cross‑Channel De‑duplication</summary>
+
 ```pseudocode
-Deduplicate(doc, window=W, tau=SIM_THRESHOLD):
+Deduplicate(doc, window=Config.triage.dedup_window, tau=Config.triage.sim_threshold):
   recents := FetchPatientRequests(doc.patient, last=W)
   for d in recents:
     if Similarity(doc, d) >= tau:
@@ -444,11 +639,16 @@ Deduplicate(doc, window=W, tau=SIM_THRESHOLD):
   return DISTINCT
 ```
 
+</details>
+
 ---
 
 ## 4) Booking — Local, PCN Enhanced Access & GP Connect Broker
 
 ### 4.1 Search & Rank
+<details>
+<summary>View Search & Rank</summary>
+
 ```pseudocode
 SearchAndRankAppointments(request):
   intent := DetermineAppointmentType(request)                 # GP, nurse, phlebotomy...
@@ -467,9 +667,14 @@ SearchAndRankAppointments(request):
     s.rank_score = R1*PrefScore(prefs, s) - R2*tt + R3*cont + R4*util + R5*lang + R6*access
   return TopK(sortDesc(S, by=rank_score), k=5)
 ```
+
+</details>
 **Outputs:** Ranked options (typically top 3–5) for patient/clinician choice.
 
 ### 4.2 Federated Book via GP Connect
+<details>
+<summary>View Federated Booking</summary>
+
 ```pseudocode
 FederatedBook(slot, patient, reason):
   if !EligibilityCheck(slot.org, patient): return INELIGIBLE
@@ -480,13 +685,15 @@ FederatedBook(slot, patient, reason):
   return BOOKED(appt)
 ```
 
+</details>
+
 Sequence (Booking via GP Connect)
 ```mermaid
 sequenceDiagram
-  participant UI as Portal/Clinician UI
-  participant BK as Booking Service
-  participant GC as GP Connect
-  participant F as FHIR Store
+  participant UI as "Portal/Clinician UI"
+  participant BK as "Booking Service"
+  participant GC as "GP Connect"
+  participant F as "FHIR Store"
   UI->>BK: booking.search(request)
   BK->>GC: SlotSearch(serviceType, window)
   GC-->>BK: Slots
@@ -502,6 +709,9 @@ sequenceDiagram
 ## 5) Pharmacy First Router (minor ailments deflection)
 
 ### 5.1 Condition Classification & Eligibility
+<details>
+<summary>View Pharmacy First Router</summary>
+
 ```pseudocode
 PharmacyFirstRoute(doc, patient):
   cond := SymptomToCondition(doc)                             # sore throat, UTI, impetigo, etc.
@@ -525,17 +735,19 @@ PharmacyFirstRoute(doc, patient):
   return BOOKED_PHARMACY(slot, sr)
 ```
 
+</details>
+
 Flow (Pharmacy First)
 ```mermaid
 flowchart LR
-  A[Doc + Patient] --> B{Eligible per rules?}
-  B -- No --> C[Not eligible → GP]
+  A[Doc and Patient] --> B{Eligible per rules?}
+  B -- No --> C[Not eligible to GP]
   B -- Yes --> D[Find nearby pharmacies]
   D --> E{Slot available?}
   E -- Yes --> F[Send CPCS referral with slot]
-  E -- No  --> G{Slotless referral allowed?}
-  G -- Yes --> H[Send CPCS referral (slotless)]
-  G -- No  --> I[Return NO_PHARMACY_SLOTS]
+  E -- No --> G{Slotless referral allowed?}
+  G -- Yes --> H[Send CPCS referral - slotless]
+  G -- No --> I[Return NO_PHARMACY_SLOTS]
 ```
 ### 5.2 Outcome Write‑back
 - Listen for pharmacy outcome → ingest as `Observation` / `Condition` / `MedicationRequest` + update/close original `Task`.  
@@ -584,13 +796,13 @@ AccessCoPilot():
 Flow (Capacity Shaping)
 ```mermaid
 flowchart LR
-  T[Telemetry: arrivals, queue, no‑shows, staffing] --> F[Short‑horizon forecast]
+  T[Telemetry: arrivals, queue, no-shows, staffing] --> F[Short horizon forecast]
   F --> N[Need mix]
   T --> S[Supply mix]
-  N --> D[Delta (need - supply)]
+  N --> D[Delta need vs supply]
   S --> D
-  D -->|Significant?| R[Micro‑releases / template rebalance]
-  R --> A[Audit micro_release]
+  D -->|Significant?| R[Micro releases / template rebalance]
+  R --> A[Audit micro release]
 ```
 
 ---
@@ -600,22 +812,92 @@ flowchart LR
 ### 7.1 Capture → Draft → Commit
 ```pseudocode
 AmbientScribe(encounter):
-  if !(Consent(patient) && Consent(clinician)): return DISABLED
+  # 0) Explicit consent from both parties
+  if !(Consent(encounter.patient) && Consent(encounter.clinician)):
+     return DISABLED
 
-  audio := RecordEncryptedAudio(encounter)                    # FHIR Binary/DocumentReference
-  transcript := ASR_Diarize(audio)                            # speaker turns
-  entities := ClinicalNLP(transcript)                         # SNOMED tagging, vitals
-  context := PullRecentContext(encounter.patient)
+  # 1) Capture and transcribe the clinician‑patient conversation with diarization
+  audio       := encounter.getAudioRecording()
+  ASR_model   := LoadASRModel(Config.ambient_scribe.asr_model)
+  transcript  := ASR_model.transcribe(audio, diarize=Config.ambient_scribe.asr_diarization)
+  speakers    := transcript.speaker_labels
 
-  draft := LLM_SoAP(transcript, entities, context)            # SOAP(summary)
-  bundleDraft := DraftFHIRBundleFromSummary(draft)            # Condition, Observation, MedicationRequest, CarePlan, DocumentReference
+  # 2) Summarize and extract key clinical information using a medical‑grade LLM
+  LLM_model  := LoadLLM(Config.ambient_scribe.llm_model)
+  draft_note := LLM_model.summarizeToSOAP(transcript.text, speakers=speakers,
+                                          highlight_uncertainty=Config.ambient_scribe.uncertainty_highlight)
+  # Ensure end-to-end scribe processing completes within Config.ambient_scribe.timeout_ms or fallback
+  entities   := LLM_model.extractEntities(draft_note)         # conditions, observations, medications, care plan
 
-  presentToClinician(draft, highlights=lowConfidenceSpans)
-  if ClinicianApprovesEdits(draft):
-     Commit(bundleDraft)                                      # finalize into FHIR store
-     EmitAudit("scribe_committed", {encounter, model_ver})
-  else:
-     SaveEditsOrFallbackManual()
+  # 3) Construct FHIR draft resources based on recognized entities, linking to Encounter/Patient
+  docRef := FHIR.DocumentReference(content=draft_note,
+                                   type="clinical-note",
+                                   encounter=encounter.id,
+                                   subject=encounter.patient.id, status="draft")
+  conditions := []
+  for condition_text in entities.conditions:
+    code := Terminology.mapToCode(condition_text, system="SNOMED-CT")
+    condRes := FHIR.Condition(code=code, subject=encounter.patient.id,
+                              encounter=encounter.id, verificationStatus="unconfirmed")
+    conditions.append(condRes)
+
+  observations := []
+  for (obs_text, obs_value) in entities.observations:
+    code := Terminology.mapToCode(obs_text, system="SNOMED-CT")
+    obsRes := FHIR.Observation(code=code, value=obs_value,
+                               subject=encounter.patient.id, encounter=encounter.id)
+    observations.append(obsRes)
+
+  medications := []
+  for (med_name, med_dose) in entities.medications:
+    med_code := Terminology.mapToCode(med_name, system="dm+d")
+    medRes := FHIR.MedicationRequest(medication=med_code, dosage=med_dose,
+                                     subject=encounter.patient.id, encounter=encounter.id)
+    medications.append(medRes)
+
+  care_plan := null
+  if entities.care_plan_actions:
+    care_plan := FHIR.CarePlan(activities=entities.care_plan_actions,
+                               subject=encounter.patient.id, encounter=encounter.id)
+
+  draft_resources := [docRef] + conditions + observations + medications + (care_plan ? [care_plan] : [])
+
+  # 4) Human‑in‑the‑loop review: present the draft note and resources for clinician approval/editing
+  highlights := LLM_model.getUncertaintySpans(draft_note)     # low‑confidence or inferred sections
+  UI.displayDraftNote(draft_note, linkedTranscript=transcript, highlights=highlights)
+  UI.displayDraftResources(draft_resources)
+  clinician_action := UI.promptClinicianReview()              # "approve" | "edit" | "reject"
+
+  if clinician_action == "edit":
+    draft_note       := UI.getEditedNote()
+    draft_resources  := UI.getEditedResources()               # optional: regenerate entities
+    clinician_action := UI.promptClinicianReview()
+
+  if clinician_action == "reject":
+    # 5) Fallback: if LLM draft is declined or unavailable, use transcript or template‑based note
+    if Config.ambient_scribe.fallback_mode == "transcript" || draft_note == null || LLM_model.failed:
+       draft_note := FormatUtils.transcriptToNote(transcript)
+    else if Config.ambient_scribe.fallback_mode == "template":
+       draft_note := TemplateUtils.blankSOAPNote(transcript)
+    else:
+       draft_note := FormatUtils.transcriptToNote(transcript)
+    docRef.content := draft_note
+    UI.displayDraftNote(draft_note, linkedTranscript=transcript)
+    clinician_action := "approve"                               # assume manual completion
+
+  # 6) On approval, finalize the documentation and commit to FHIR store
+  if clinician_action == "approve":
+    docRef.status := "final"
+    for resource in draft_resources:
+      if resource != docRef:
+        if HasField(resource, "verificationStatus"): resource.verificationStatus := "confirmed"
+        if HasField(resource, "status"):             resource.status := "final"
+      FHIR.store(resource)
+    ASR_version := ASR_model.version
+    LLM_version := LLM_model.version
+    EmitAudit("scribe_committed", {encounterId: encounter.id, ASR_model: ASR_version, LLM_model: LLM_version})
+
+  return docRef
 ```
 **Outputs:** Finalised clinical note + structured entries; immutable audit.  
 **Fallbacks:** Provide raw transcript or template if AI unavailable.
@@ -626,16 +908,26 @@ sequenceDiagram
   participant Clin as Clinician
   participant Scribe
   participant LLM
+  participant ASR
   participant F as FHIR Store
   Clin->>Scribe: Start encounter (consents present)
-  Scribe->>Scribe: Record encrypted audio
-  Scribe->>LLM: Transcript + entities + context
-  LLM-->>Scribe: Draft SOAP + draft bundle
-  Scribe-->>Clin: Present draft + low‑confidence spans
-  Clin-->>Scribe: Approve or edit
-  Scribe->>F: Commit bundle (Condition/Observation/MedicationRequest/...)
+  Scribe->>ASR: Capture audio + diarization
+  ASR-->>Scribe: Transcript with speakers
+  Scribe->>LLM: Summarize to SOAP + extract entities
+  LLM-->>Scribe: Draft note + draft resources
+  Scribe-->>Clin: Show draft + uncertainty highlights
+  Clin-->>Scribe: Approve / edit / reject
+  Scribe->>F: Commit approved resources
   Scribe->>F: Store audio as Binary/DocumentReference
 ```
+
+#### Model Choices & Performance
+- ASR: Whisper large‑v3 medical or equivalent; target WER ≤ 12% clinical, DER ≤ 10% for diarization; ensure PII redaction on export.
+- LLM: MedPaLM2/OpenClinicalGPT/BioGPT; enforce uncertainty highlighting and cite‑from‑transcript style to reduce hallucinations.
+- Terminology: SNOMED‑CT for conditions/observations; dm+d for medications (UK); log unmapped terms for curation.
+- Latency: draft within 60s p95; stream partial drafts when >10s; enforce SCRIBE.TIMEOUT_MS with graceful fallback.
+- Human‑in‑the‑loop: mandatory approval; edits overwrite AI content; store provenance (model versions) with Audit.
+- Evaluation: periodic offline eval on de‑identified datasets (SOAP quality, entity precision/recall, safety incidents); canary rollouts for new models.
 
 ---
 
@@ -713,10 +1005,10 @@ OnAppointmentCancelled(slot):
 Sequence (Cross‑Org Referral)
 ```mermaid
 sequenceDiagram
-  participant Home as Home Practice
-  participant ICS as ICS Hub
-  participant ToOrg as Receiving Org
-  participant F as FHIR Store
+  participant Home as "Home Practice"
+  participant ICS as "ICS Hub"
+  participant ToOrg as "Receiving Org"
+  participant F as "FHIR Store"
   Home->>ICS: CreateCrossOrgReferral(bundle)
   ICS->>ToOrg: SecureShare Bundle (FHIR/MESH/XDS)
   ICS->>F: Mirror Task/ServiceRequest
@@ -743,11 +1035,16 @@ Notes: Example defaults from the report include URGENT contact within 2 hours an
 - **Hourly dashboards:** practice / PCN / ICS views.  
 - **Monthly Access Assurance Pack:** trends, breaches, mitigations, Co‑Pilot decisions, signatures.  
 
+ 
+
 ---
 
 ## 11) Identity, Authorization, Consent & Safety Gates
 
 ### 11.1 Authorization = RBAC + Relationship + ABAC + Purpose‑of‑Use
+<details>
+<summary>View Authorization</summary>
+
 ```pseudocode
 Authorize(actor, action, subject, scope):
   if !RBAC(actor.role, action): return false
@@ -755,16 +1052,23 @@ Authorize(actor, action, subject, scope):
   if !ABAC_OK(actor, subject, scope): return false           # sensitivity, time, device, location
   return true
 ```
+
+</details>
 ### 11.2 Consent & Break‑Glass
+<details>
+<summary>View Consent & Break‑Glass</summary>
+
 ```pseudocode
 CheckConsent(patient, purpose, resources):
   rules := FetchActiveFHIRConsent(patient)
   return EvaluatePurposeAndScopes(rules, purpose, resources)
 ```
+
+</details>
 Break‑glass grants emergency access w/ reason, heavy audit, post‑hoc review.
 
 ### 11.3 Clinical Safety Gates
-- **Red‑Flag diversion** (pre‑triage).  
+- **Transformer‑based red‑flag diversion** (pre‑triage via SafeguardGate: NER + emergency classifier + ensemble acuity).  
 - **Human confirmation** of AI outputs (triage assignments, patient advice, scribe).  
 - **Communication guardrails** (plain language, safety‑netting).  
 - Safety case & hazard log (DCB0129/0160).
@@ -791,11 +1095,16 @@ ComposePatientAdvice(draft, locale):
 - **Regular penetration testing** and full **DSPT** compliance.
 
 ### 12.2 Immutable Audit (WORM) + SIEM
+<details>
+<summary>View Immutable Audit</summary>
+
 ```pseudocode
 EmitAudit(action, obj):
   rec := { action, actor, subject, resources, ts, outcome, model_ver? }
   AppendWORM(rec); StreamToSIEM(rec); AnomalyDetect(rec)
 ```
+
+</details>
 ### 12.3 Observability & Resilience
 - SLOs: triage p95 < 2s; scribe draft < 60s; portal p99 < 300ms.  
 - Backpressure & circuit breakers; graceful degradation (rule‑based fallbacks).  
@@ -807,6 +1116,9 @@ EmitAudit(action, obj):
 ## 13) MLOps & Governance
 
 ### 13.1 Lifecycle
+<details>
+<summary>View MLOps Lifecycle</summary>
+
 ```pseudocode
 ModelLifecycle(model):
   data := CurateDeidentifiedTrainingData(FeatureStore, window=6-12m)
@@ -816,6 +1128,8 @@ ModelLifecycle(model):
   CanaryDeploy(v, pct=5%) -> Monitor(latency, agreement, outcomes, bias, drift)
   if Stable(): PromoteTo100% else: Rollback()
 ```
+
+</details>
 ### 13.2 Explainability & Feedback
 - Log inputs/outputs (hashed identifiers), prompt/response archives for LLMs.  
 - SHAP/LIME explanations for predictive models.  
@@ -838,13 +1152,18 @@ ModelLifecycle(model):
 
 ## Appendix A — Priority Mapping (monotonic)
 
+<details>
+<summary>View Priority Mapping</summary>
+
 ```pseudocode
-MapPriority(score):
-  if score >= S_STAT:   return "stat"
-  if score >= S_URGENT: return "urgent"
-  if score >= S_SOON:   return "soon"
+MapPriority(score, thresholds):
+  if score >= thresholds.stat:   return "stat"
+  if score >= thresholds.urgent: return "urgent"
+  if score >= thresholds.soon:   return "soon"
   return "routine"
 ```
+
+</details>
 **Constraints:**  
 1) Higher clinical acuity never lowers score.  
 2) Life‑threatening → **STAT** override.  
@@ -853,17 +1172,25 @@ MapPriority(score):
 ---
 
 ## Appendix B — Continuity & Fairness‑Aware Assignment
+<details>
+<summary>View Continuity & Fairness Assignment</summary>
+
 ```pseudocode
-AssignBestOwner(neededSkills, capacity, patient):
-  candidates := FilterBySkills(capacity, neededSkills)
+SelectBestProvider(availableTeam, patient, requiredSkills, priorityLabel):
+  candidates := FilterBySkills(availableTeam, requiredSkills)
+  w := Config.provider_assignment.weights
   best := argmax_c in candidates of (
-    α*Availability(c) + β*ResolutionRate(c, issueType)
-  + γ*Continuity(patient, c)
-  - δ*Distance(patient, c.site) 
-  + ζ*FairnessBoost(patient.needs, c.capabilities)
+    w.availability*Availability(c)                    # current capacity / queue
+  - w.workload*Workload(c)                            # workload balance
+  + w.continuity*Continuity(patient, c)               # preferred/seen-before GP weighting
+  + w.resolution_rate*ResolutionRate(c, requiredSkills)
+  - w.distance*Distance(patient, c.site)              # if site matters
+  + w.fairness*FairnessBoost(patient.needs, c.capabilities, priorityLabel)
   )
   return best
 ```
+
+</details>
 
 ---
 
@@ -884,10 +1211,15 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 ## Appendix D — Configuration Summary
 - **Hours & windows:** `CORE_HOURS_*`, `ENHANCED_ACCESS_WINDOWS`  
-- **Safety:** `RED_FLAG_SET`, `PRIORITY_THRESHOLDS`, `SLA_TARGETS`  
+- **Safety:** `RED_FLAG_SET`, `PRIORITY_THRESHOLDS`, `SLA_TARGETS`, `SAFETY_GATE.*`  
+- **Scribe:** `SCRIBE.*`  
 - **Capacity:** `HOLD_BACK_FRACTION`  
 - **Equity:** `FAIRNESS_FLOORS`  
 - **Privacy & retention:** `PRIVACY_POLICY`
+ - **Triage & Aging:** `triage.*` (score_weights, aging_interval, sim_threshold, dedup_window)  
+ - **Provider Assignment:** `provider_assignment.*` (weights for availability/workload/continuity/resolution/distance/fairness)  
+ - **Telephony:** `telephony.*` (IVR classifier, callbacks, emergency transfer toggle)  
+ - **Observability & SLOs:** `observability.slo.*`, `observability.alerts.*`
 
 ---
 
@@ -896,6 +1228,8 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 - `booking.search.requested`, `booking.appointment.booked`, `pharmacy.referral.sent`  
 - `copilot.proposal.created`, `copilot.proposal.approved`, `analytics.kpi.updated`, `audit.*`  
 - `ooh.handover.sent`, `ooh.handover.ack` (out‑of‑hours warm handover lifecycle)
+- `safeguard.diverted`, `safeguard.safe` (outcomes of SafeguardGate)
+- `scribe.draft.created`, `scribe.finalized`, `scribe.fallback.used` (ambient scribe lifecycle)
 
 Event Topics Map (illustrative)
 ```mermaid
@@ -907,7 +1241,7 @@ flowchart LR
   UI[UI/Client] -->|booking.search.requested| EB
   EB -->|booking.appointment.booked| BK[Booking]
   EB -->|pharmacy.referral.sent| PH[Pharmacy Router]
-  EB -->|copilot.proposal.created| CS[Capacity/Co‑Pilot]
+  EB -->|copilot.proposal.created| CS[Capacity/Co-Pilot]
   CS -->|analytics.kpi.updated| EB
   Any -->|audit.*| EB
   EB --> SIEM[SIEM/Observability]
@@ -939,6 +1273,7 @@ flowchart LR
 - **Scribe draft** < 60s; alert if queue backlog > N.  
 - **Portal** p99 < 300ms; uptime ≥ 99.9% core hours.  
 - **Audit** end‑to‑end correlation coverage = 100%.
+- **Fairness** telephone fraction ≥ 15% daily; alert if below floor.  
 
 ---
 

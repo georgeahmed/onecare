@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/ingest/portal-submission.json",
+  "title": "PortalSubmission",
+  "type": "object",
+  "properties": {
+    "practiceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "patient": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "dob": { "type": "string", "format": "date" },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "narrative": {
+      "type": "string",
+      "maxLength": 500000
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "format": "uri",
+            "pattern": "^https://"
+          }
+        },
+        "required": ["contentType", "url"],
+        "additionalProperties": false
+      }
+    },
+    "channel": { "type": "string", "enum": ["web", "ivr"] }
+  },
+  "required": ["practiceId", "patient", "narrative", "channel"],
+  "additionalProperties": false
+}

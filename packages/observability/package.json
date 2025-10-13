@@ -1,0 +1,16 @@
+{
+  "name": "@onecare/observability",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+    "@opentelemetry/resources": "^2.1.0",
+    "@opentelemetry/sdk-node": "^0.206.0",
+    "@opentelemetry/semantic-conventions": "^1.29.0"
+  }
+}

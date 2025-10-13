@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "name": "emergency_chest_pain",
+      "predict": {
+        "level": "emergency",
+        "probEmergency": 1.0,
+        "modelVersion": "0.1.0"
+      },
+      "predict_proba": {
+        "modelVersion": "0.1.0",
+        "probabilities": {
+          "emergency": 1.0,
+          "routine": 0.0,
+          "urgent": 0.0
+        }
+      }
+    },
+    {
+      "name": "routine_headache",
+      "predict": {
+        "level": "routine",
+        "probEmergency": 3.2026382098323303e-37,
+        "modelVersion": "0.1.0"
+      },
+      "predict_proba": {
+        "modelVersion": "0.1.0",
+        "probabilities": {
+          "emergency": 3.2026382098323303e-37,
+          "routine": 0.9999978475342013,
+          "urgent": 2.1524657986895496e-06
+        }
+      }
+    }
+  ]
+}

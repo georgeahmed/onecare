@@ -1,0 +1,5 @@
+{"text": "Patient reports mild tension headache for two days and is otherwise stable.", "red_flag_labels": [], "emergency": false}
+{"text": "Caller states they feel crushing chest pain with shortness of breath while climbing stairs.", "red_flag_labels": ["chest_pain", "respiratory_distress"], "emergency": true}
+{"text": "Parent notes a child with a small nosebleed that stopped after a minute.", "red_flag_labels": [], "emergency": false}
+{"text": "Patient says a kitchen accident caused heavy bleeding that will not slow down.", "red_flag_labels": ["severe_bleeding"], "emergency": true}
+{"text": "Patient writes they are thinking about dying and have a plan for self-harm tonight.", "red_flag_labels": ["suicidal_ideation"], "emergency": true}

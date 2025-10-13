@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/booking/booking-search-request.json",
+  "title": "BookingSearchRequest",
+  "type": "object",
+  "properties": {
+    "serviceType": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "windowStart": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "windowEnd": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "location": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^[-A-Za-z0-9._:\\\\s]+$"
+    }
+  },
+  "required": ["serviceType", "windowStart", "windowEnd"],
+  "additionalProperties": false
+}

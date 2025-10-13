@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "name": "emergency_chest_pain",
+      "request": {
+        "symptomMentions": [
+          {
+            "name": "Severe chest pain",
+            "confidence": 0.9
+          },
+          {
+            "name": "Shortness of breath"
+          }
+        ],
+        "patient": {
+          "ageYears": 67,
+          "comorbidities": {
+            "cardiac": true,
+            "diabetes": true
+          }
+        }
+      }
+    },
+    {
+      "name": "routine_headache",
+      "request": {
+        "symptomMentions": [
+          {
+            "name": "Mild headache",
+            "confidence": 0.3
+          }
+        ],
+        "patient": {
+          "ageYears": 29,
+          "comorbidities": {}
+        }
+      }
+    }
+  ]
+}

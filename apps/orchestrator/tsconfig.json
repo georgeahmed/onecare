@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/statekit" },
+    { "path": "../../packages/events" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/ports" },
+    { "path": "../../packages/feature-store-memory" },
+    { "path": "../../packages/bus" },
+    { "path": "../../packages/security" },
+    { "path": "../../packages/observability" }
+  ]
+}

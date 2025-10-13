@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/scribe/scribe-audio.json",
+  "title": "ScribeAudio",
+  "type": "object",
+  "properties": {
+    "encounterId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "audioUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "format": "uri",
+      "pattern": "^(https|s3)://"
+    },
+    "contentType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^audio/[A-Za-z0-9!#$&^_.+-]{1,63}$"
+    },
+    "diarization": { "type": "boolean" }
+  },
+  "required": ["encounterId", "audioUrl", "contentType"],
+  "additionalProperties": false
+}

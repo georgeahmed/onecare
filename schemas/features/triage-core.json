@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/features/triage-core.json",
+  "title": "TriageCoreFeatures",
+  "description": "Feature vector used for prioritising triage submissions. All values are normalised to the range [0, 1] unless specified otherwise.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Semantic version of the feature payload. Bump on backwards-incompatible changes.",
+      "pattern": "^v[0-9]+(\\.[0-9]+){0,2}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when the feature vector was produced (UTC)."
+    },
+    "acuity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Predicted emergency probability or severity score."
+    },
+    "risk": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Risk-of-deterioration signal derived from patient history."
+    },
+    "complexity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Operational complexity estimate capturing comorbidities and care coordination needs."
+    },
+    "time": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Time-sensitivity score (e.g., symptom onset, follow-up deadlines)."
+    },
+    "capacity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Signal representing provider/network capacity constraints."
+    },
+    "compositeScore": {
+      "type": "number",
+      "description": "Weighted score computed from the component features."
+    },
+    "source": {
+      "type": "string",
+      "description": "Identifier of the pipeline or model that produced the feature vector.",
+      "maxLength": 64
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional expiry timestamp (UTC) after which the vector should be refreshed."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Reserved for additive signals that do not yet justify a schema bump. Keys must be lowerCamelCase.",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][A-Za-z0-9]*$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string", "maxLength": 128 },
+          { "type": "boolean" },
+          { "type": "null" }
+        ]
+      }
+    }
+  },
+  "required": ["schemaVersion", "generatedAt"],
+  "additionalProperties": false
+}

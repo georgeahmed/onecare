@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/common/event-envelope.json",
+  "title": "EventEnvelope",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "topic": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+    "correlationId": { "type": "string" }
+  },
+  "required": ["id", "topic", "timestamp", "payload"],
+  "additionalProperties": false
+}
+

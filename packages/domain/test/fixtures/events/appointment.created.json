@@ -1,0 +1,31 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-appointment-minimal",
+      "topic": "booking.appointment.created",
+      "timestamp": "2025-01-05T14:30:00.000Z",
+      "correlationId": "corr-appt-min",
+      "payload": {
+        "appointmentId": "appt-001",
+        "patientId": "patient-001",
+        "start": "2025-01-10T09:00:00.000Z",
+        "end": "2025-01-10T09:30:00.000Z"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-appointment-maximal",
+      "topic": "booking.appointment.created",
+      "timestamp": "2025-01-06T15:45:20.789Z",
+      "correlationId": "corr-appt-max",
+      "payload": {
+        "appointmentId": "appt-999",
+        "patientId": "patient-999",
+        "start": "2025-02-01T10:00:00.000Z",
+        "end": "2025-02-01T10:30:00.000Z",
+        "location": "Exam Room 3"
+      }
+    }
+  }
+}

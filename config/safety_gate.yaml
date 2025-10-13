@@ -1,0 +1,34 @@
+# Safety Gate classifier thresholds; defaults can be overridden per practice.
+# Note: Values must be regenerated from the offline evaluation harness (see ML-01.19)
+# before promoting new model versions. Do not update without fresh calibration runs.
+defaults:
+  emergency_confidence: 0.74
+
+models:
+  stub-v1:
+    huggingface_model: "stub"
+    emergency_confidence: 0.70
+    calibration:
+      type: temperature
+      temperature: 1.00
+
+  bioclinical-bert-emergency-v1:
+    huggingface_model: "onecare/bio-clinicalbert-emergency-v1"
+    calibration:
+      type: temperature
+      temperature: 1.28
+    thresholds:
+      control: 0.74
+      high_precision: 0.80
+      high_recall: 0.68
+
+  bioclinical-bert-emergency-v2:
+    huggingface_model: "onecare/bio-clinicalbert-emergency-v2"
+    calibration:
+      type: platt
+      parameters:
+        a: -1.12
+        b: 0.34
+    thresholds:
+      control: 0.76
+      experiment: 0.82

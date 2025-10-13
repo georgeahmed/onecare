@@ -1,0 +1,164 @@
+version: '3.9'
+services:
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command:
+      [
+        "-js",
+        "-sd",
+        "/data/jetstream",
+        "-m",
+        "8222",
+        "-user",
+        "onecare",
+        "-pass",
+        "onecare-secret"
+      ]
+    environment:
+      - NATS_USER=onecare
+      - NATS_PASSWORD=onecare-secret
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data/jetstream
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+  otel-collector:
+    image: otel/opentelemetry-collector:0.97.0
+    restart: unless-stopped
+    command: ["--config", "/etc/otel-collector.yaml"]
+    volumes:
+      - ./infra/otel/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+        reservations:
+          cpus: "0.25"
+          memory: 192M
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:13133/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    environment:
+      # These environment variables allow overriding exporters without editing the config.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  orchestrator:
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - PY_SAFETY_GATE_URL=http://safety-gate:8081
+      - PY_SCRIBE_URL=http://scribe:8082
+      - BUS_IMPL=nats
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+      - NATS_CONNECT_TIMEOUT_MS=2000
+      - NATS_MAX_RECONNECT_ATTEMPTS=10
+    ports:
+      - "3001:3001"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 384M
+    depends_on:
+      safety-gate:
+        condition: service_healthy
+      scribe:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  safety-gate:
+    build:
+      context: services-py
+      dockerfile: safety_gate_service/Dockerfile
+    restart: unless-stopped
+    # Resource budget tuned for FastAPI + lightweight model stub; adjust per docs/RUNBOOKS.md.
+    ports:
+      - "8081:8081"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  scribe:
+    build:
+      context: services-py
+      dockerfile: scribe_service/Dockerfile
+    restart: unless-stopped
+    # Resource budget tuned for transcription stub workload.
+    ports:
+      - "8082:8082"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  analytics:
+    build:
+      context: .
+      dockerfile: apps/analytics/Dockerfile
+    restart: unless-stopped
+    environment:
+      - BUS_IMPL=nats
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+      - NATS_CONNECT_TIMEOUT_MS=2000
+      - NATS_MAX_RECONNECT_ATTEMPTS=10
+      - ANALYTICS_SINK_PATH=/var/analytics/metrics.jsonl
+    volumes:
+      - analytics-metrics:/var/analytics
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    depends_on:
+      nats:
+        condition: service_healthy
+
+volumes:
+  nats-data:
+  analytics-metrics:
