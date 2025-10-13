@@ -9,6 +9,9 @@ const EVENT_ENVELOPE_ID = 'https://onecare/schemas/common/event-envelope.json';
 const TRIAGE_INPUT_ID = 'https://onecare/schemas/triage/triage-input.json';
 const TASK_CREATED_ID = 'https://onecare/schemas/tasks/task-created.json';
 const APPOINTMENT_CREATED_ID = 'https://onecare/schemas/booking/appointment-created.json';
+const PHARMACY_REFERRAL_ID = 'https://onecare/schemas/pharmacy/pharmacy-referral.json';
+const ICS_REFERRAL_REQUEST_ID = 'https://onecare/schemas/ics/referral-request.json';
+const ICS_REFERRAL_ACK_ID = 'https://onecare/schemas/ics/referral-ack.json';
 
 type EventEnvelope = {
   id: string;
@@ -230,6 +233,145 @@ describe('core event contracts', () => {
               "format": "date-time",
             },
             "path": "/timestamp",
+          },
+        ]
+      `);
+    });
+  });
+
+  describe('pharmacy.referral', () => {
+    const fixture = loadFixture('pharmacy.referral.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(PHARMACY_REFERRAL_ID, env.payload);
+      }
+    });
+
+    it('rejects missing required fields and additional properties', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      delete invalidPayload.condition;
+      // @ts-expect-error - injecting invalid property for test
+      invalidPayload.extra = 'unexpected';
+
+      const errors = collectErrorShape(PHARMACY_REFERRAL_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "condition",
+            },
+            "path": "/condition",
+          },
+          {
+            "keyword": "additionalProperties",
+            "params": {
+              "additionalProperty": "extra",
+            },
+            "path": "/extra",
+          },
+        ]
+      `);
+    });
+
+    it('requires RFC3339 timestamps within slot', () => {
+      const invalidPayload = clone(fixture.maximal.envelope.payload) as Record<string, unknown> & {
+        slot?: { start: string; end: string } | null;
+      };
+      if (invalidPayload.slot) {
+        invalidPayload.slot.start = '08-01-2025 09:00';
+      }
+
+      const errors = collectErrorShape(PHARMACY_REFERRAL_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "format",
+            "params": {
+              "format": "date-time",
+            },
+            "path": "/slot/start",
+          },
+        ]
+      `);
+    });
+  });
+
+  describe('ics.referral.request', () => {
+    const fixture = loadFixture('ics.referral.request.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(ICS_REFERRAL_REQUEST_ID, env.payload);
+      }
+    });
+
+    it('rejects missing required fields and additional properties', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      delete invalidPayload.org;
+      // @ts-expect-error - injecting invalid property for test
+      invalidPayload.metadata = { priority: 'low' };
+
+      const errors = collectErrorShape(ICS_REFERRAL_REQUEST_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "additionalProperties",
+            "params": {
+              "additionalProperty": "metadata",
+            },
+            "path": "/metadata",
+          },
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "org",
+            },
+            "path": "/org",
+          },
+        ]
+      `);
+    });
+  });
+
+  describe('ics.referral.ack', () => {
+    const fixture = loadFixture('ics.referral.ack.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(ICS_REFERRAL_ACK_ID, env.payload);
+      }
+    });
+
+    it('rejects missing required fields and additional properties', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      delete invalidPayload.referralId;
+      // @ts-expect-error - injecting invalid property for test
+      invalidPayload.details = 'extra context';
+
+      const errors = collectErrorShape(ICS_REFERRAL_ACK_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "additionalProperties",
+            "params": {
+              "additionalProperty": "details",
+            },
+            "path": "/details",
+          },
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "referralId",
+            },
+            "path": "/referralId",
           },
         ]
       `);

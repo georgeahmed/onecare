@@ -1,0 +1,27 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-ics-ack-minimal",
+      "topic": "ics.referral.ack",
+      "timestamp": "2025-01-09T12:00:00.000Z",
+      "correlationId": "corr-ics-ack-min",
+      "payload": {
+        "referralId": "ref-2000",
+        "accepted": true
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-ics-ack-maximal",
+      "topic": "ics.referral.ack",
+      "timestamp": "2025-01-09T12:05:00.000Z",
+      "correlationId": "corr-ics-ack-max",
+      "payload": {
+        "referralId": "ref-2001",
+        "accepted": false,
+        "note": "Requires updated documentation"
+      }
+    }
+  }
+}

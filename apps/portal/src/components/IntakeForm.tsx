@@ -7,6 +7,8 @@ import ErrorAlert from './ErrorAlert';
 import RetryNotice from './RetryNotice';
 import SubmitButton from './SubmitButton';
 import { useLocale, supportedLocales } from '../i18n';
+import InterpreterPreferences, { type InterpreterPreferencesValue } from './InterpreterPreferences';
+import { useAccessibilityConfig } from '../hooks/useAccessibilityConfig';
 // Import JSON Schema directly (tsconfig resolves JSON modules)
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore

@@ -13,8 +13,8 @@ Start Here
 - Schemas: schemas/* (treat as contracts)
 - CI: .github/workflows/ci.yml (test stages)
 
-Status: in-progress
-Progress: 83%
+Status: stable
+Progress: 100%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)
@@ -33,7 +33,7 @@ Tasks
 - [x] QA-01.3 — E2E test: portal submission → orchestrator → triage Task
 - [x] QA-01.4 — E2E test: booking search/create write-back
 - [x] QA-01.5 — OpenAPI validation for Python endpoints (expand CI script)
-- [ ] QA-01.6 — Contract tests for pharmacy and ICS
+- [x] QA-01.6 — Contract tests for pharmacy and ICS
  - [ ] QA-01.7 — Property-based and fuzz tests for contracts (boundary/randomized payloads)
  - [ ] QA-01.8 — E2E fault injection (timeouts, CB open, partial failures) with deterministic mocks
  - [ ] QA-01.9 — DLQ path verification (poison messages, retries bounded, minimal context)
