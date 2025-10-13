@@ -3,7 +3,7 @@ GENERATED from schemas/ (v0.1). Replace via codegen.
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EventEnvelope(BaseModel):
@@ -15,21 +15,26 @@ class EventEnvelope(BaseModel):
 
 
 class PortalSubmissionPatient(BaseModel):
-    id: str
-    dob: Optional[str] = None
-    locale: Optional[str] = None
+    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    dob: Optional[str] = Field(default=None)
+    locale: Optional[str] = Field(default=None, pattern=r"^[a-z]{2}(?:-[A-Z]{2})?$")
 
 
 class AttachmentRef(BaseModel):
-    contentType: str
-    url: str
+    contentType: str = Field(
+        ...,
+        min_length=3,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$",
+    )
+    url: str = Field(..., min_length=1, max_length=2048, pattern=r"^https://")
 
 
 class PortalSubmission(BaseModel):
-    practiceId: str
+    practiceId: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
     patient: PortalSubmissionPatient
-    narrative: str
-    attachments: Optional[List[AttachmentRef]] = None
+    narrative: str = Field(..., max_length=500_000)
+    attachments: Optional[List[AttachmentRef]] = Field(default=None, max_length=10)
     channel: Literal["web", "ivr"]
 
 
@@ -59,9 +64,14 @@ class PharmacyReferral(BaseModel):
 
 
 class ScribeAudio(BaseModel):
-    encounterId: str
-    audioUrl: str
-    contentType: str
+    encounterId: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    audioUrl: str = Field(..., min_length=1, max_length=2048, pattern=r"^(https|s3)://")
+    contentType: str = Field(
+        ...,
+        min_length=3,
+        max_length=128,
+        pattern=r"^audio/[A-Za-z0-9!#$&^_.+-]{1,63}$",
+    )
     diarization: Optional[bool] = None
 
 

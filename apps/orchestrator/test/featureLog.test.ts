@@ -72,4 +72,38 @@ describe('feature logging endpoint', () => {
       metadata: { practiceId: 'demo' },
     });
   });
+
+  it('rejects feature payloads containing nested data', async () => {
+    const res = await fetch(`${baseUrl()}/feature-log`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        source: 'triage',
+        features: { nested: { invalid: true } },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body?.error?.code).toBe('invalid_input');
+  });
+
+  it('rejects metadata that is not an object', async () => {
+    const res = await fetch(`${baseUrl()}/feature-log`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        source: 'triage',
+        metadata: 42,
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body?.error?.code).toBe('invalid_input');
+  });
 });

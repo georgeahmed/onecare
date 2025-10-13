@@ -106,7 +106,11 @@ describe('ReliablePortalNotifyPublisher', () => {
     const entry = bus.published[0];
     expect(entry.topic).toBe(Topics.broker.deadLetter);
 
-    const dlqPayload = entry.payload as DlqEvent;
+    const dlqEnvelope = entry.payload as TypedEnvelope<DlqEvent>;
+    expect(dlqEnvelope.topic).toBe(Topics.broker.deadLetter);
+    expect(dlqEnvelope.correlationId).toBe('corr-test');
+
+    const dlqPayload = dlqEnvelope.payload;
     expect(dlqPayload.originalTopic).toBe(Topics.portal.notify);
     expect(dlqPayload.correlationId).toBe('corr-test');
     expect(dlqPayload.payloadRef).toMatchObject({
@@ -115,6 +119,10 @@ describe('ReliablePortalNotifyPublisher', () => {
       idempotencyKey: 'portal.notify:prac-001:UP:2025-01-01T08:15:00Z',
     });
     expect(dlqPayload.ts).toBe('2025-01-01T08:16:00.000Z');
+    expect(entry.headers).toMatchObject({
+      'x-original-topic': Topics.portal.notify,
+      'x-correlation-id': 'corr-test',
+    });
   });
 
   it('throws validation error when payload invalid', async () => {

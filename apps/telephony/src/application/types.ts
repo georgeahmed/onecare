@@ -1,4 +1,5 @@
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
+import type { IdempotencyStore } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import type { TypedEnvelope, CallTranscribed, IntentClassified, TriageInput } from '@onecare/events';
 import type {
@@ -53,6 +54,11 @@ export interface TelephonyContext extends MachineContext {
   ivrPrompts?: string[];
   enqueuePrompt?: (prompt: string) => Promise<void> | void;
   now?: () => number;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds?: number;
+  callTranscribedIdempotencyKey?: string;
+  intentClassifiedIdempotencyKey?: string;
+  triagePublishIdempotencyKey?: string;
 }
 
 export interface TelephonyEvent extends MachineEvent {

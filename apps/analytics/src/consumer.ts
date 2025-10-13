@@ -1,6 +1,8 @@
 import type { MessageBus, Subscription } from '@onecare/bus';
-import { getBus } from '@onecare/bus';
+import { getBus, withMessageGuards } from '@onecare/bus';
 import { Topics, type TypedEnvelope } from '@onecare/events';
+import type { IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 import type { Metric } from '@onecare/events/src/contracts/metric';
 import { validate, type ValidationError } from '@onecare/domain';
 import { logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
@@ -8,6 +10,7 @@ import type { AnalyticsSink } from './sink/fileSink';
 import { createFileSink } from './sink/fileSink';
 
 const METRIC_SCHEMA_ID = 'https://onecare/schemas/analytics/metric.json';
+const ANALYTICS_ALLOWED_TOPICS = new Set<string>([Topics.analytics.metric]);
 
 export class AnalyticsMetricValidationError extends Error {
   constructor(
@@ -33,6 +36,8 @@ interface AnalyticsConsumerOptions {
   bus?: MessageBus;
   sink?: AnalyticsSink;
   schemaId?: string;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds?: number;
 }
 
 export class AnalyticsConsumer {
@@ -40,11 +45,19 @@ export class AnalyticsConsumer {
   private readonly sink: AnalyticsSink;
   private readonly schemaId: string;
   private subscription: Subscription | null = null;
+  private readonly idempotencyStore?: IdempotencyStore;
+  private readonly idempotencyTtlSeconds: number;
 
   constructor(options: AnalyticsConsumerOptions = {}) {
-    this.bus = options.bus ?? getBus();
+    const baseBus = options.bus ?? getBus();
+    this.bus = withMessageGuards(baseBus, {
+      allowedTopics: ANALYTICS_ALLOWED_TOPICS,
+    });
     this.sink = options.sink ?? createFileSink();
     this.schemaId = options.schemaId ?? METRIC_SCHEMA_ID;
+    this.idempotencyStore = options.idempotencyStore;
+    const ttl = options.idempotencyTtlSeconds;
+    this.idempotencyTtlSeconds = typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : 5 * 60;
   }
 
   async start(): Promise<void> {
@@ -79,26 +92,60 @@ export class AnalyticsConsumer {
         throw new AnalyticsMetricValidationError(correlationId, validation.errors);
       }
 
-      try {
-        await this.sink.write(metric);
-      } catch (err: unknown) {
-        logger.error('analytics metric persistence failed', {
-          correlationId,
-          metricName: metric.name,
-          error: err instanceof Error ? err.message : err,
-        });
-        if (err instanceof AnalyticsMetricSinkError) {
-          throw err;
-        }
-        throw new AnalyticsMetricSinkError(correlationId, err);
-      }
+      const idempotencyKey = this.deriveIdempotencyKey(envelope);
+      await executeWithIdempotency({
+        store: this.idempotencyStore,
+        key: idempotencyKey,
+        ttlSeconds: this.idempotencyTtlSeconds,
+        execute: async () => {
+          try {
+            await this.sink.write(metric);
+          } catch (err: unknown) {
+            logger.error('analytics metric persistence failed', {
+              correlationId,
+              metricName: metric.name,
+              error: err instanceof Error ? err.message : err,
+            });
+            if (err instanceof AnalyticsMetricSinkError) {
+              throw err;
+            }
+            throw new AnalyticsMetricSinkError(correlationId, err);
+          }
 
-      logger.info('analytics metric persisted', {
-        correlationId,
-        metricName: metric.name,
-        labelKeys: Object.keys(metric.labels ?? {}),
+          logger.info('analytics metric persisted', {
+            correlationId,
+            metricName: metric.name,
+            labelKeys: Object.keys(metric.labels ?? {}),
+            idempotencyKey,
+          });
+          return true;
+        },
+        onDuplicate: () => {
+          logger.warn('analytics.metric.duplicate_suppressed', {
+            correlationId,
+            metricName: metric.name,
+            idempotencyKey,
+          });
+        },
+        onError: (error) => {
+          logger.error('analytics.metric.idempotency_failed', {
+            correlationId,
+            metricName: metric.name,
+            idempotencyKey,
+            reason: error instanceof Error ? error.message : 'unknown_error',
+          });
+        },
       });
     });
+  }
+
+  private deriveIdempotencyKey(envelope: TypedEnvelope<Metric>): string {
+    if (envelope.id) {
+      return `analytics:${envelope.id}`;
+    }
+    const metric = envelope.payload;
+    const timestamp = metric.timestamp ?? 'unknown-ts';
+    return `analytics:${metric.name}:${timestamp}`;
   }
 }
 

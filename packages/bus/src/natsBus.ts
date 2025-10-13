@@ -1,5 +1,6 @@
 import type { Handler, MessageBus, Subscription } from './types';
 import { MemoryBus } from './memoryBus';
+import { unwrapGuardedBus } from './guardedBus';
 import {
   connect,
   headers as createHeaders,
@@ -260,18 +261,20 @@ export function getBus(opts?: NatsBusOptions): MessageBus {
 }
 
 export function getNatsBusDiagnostics(bus: MessageBus): NatsBusDiagnostics | null {
-  if (bus instanceof NatsBus) {
+  const inner = unwrapGuardedBus(bus);
+  if (inner instanceof NatsBus) {
     return {
-      isConnected: bus.isConnected,
-      published: bus.published,
-      subscribed: bus.subscribed,
+      isConnected: inner.isConnected,
+      published: inner.published,
+      subscribed: inner.subscribed,
     };
   }
   return null;
 }
 
 export function markNatsBusConnected(bus: MessageBus, connected: boolean): void {
-  if (bus instanceof NatsBus) {
-    bus.setConnected(connected);
+  const inner = unwrapGuardedBus(bus);
+  if (inner instanceof NatsBus) {
+    inner.setConnected(connected);
   }
 }

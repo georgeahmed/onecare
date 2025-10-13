@@ -1,4 +1,5 @@
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
+import type { IdempotencyStore } from '@onecare/ports';
 import type { ResolvedConfig } from '@onecare/config';
 
 export interface TelemetrySnapshot {
@@ -124,6 +125,10 @@ export interface CapacityContext extends MachineContext {
   telemetry?: TelemetrySnapshot;
   forecast?: ForecastResult;
   decision?: ReleaseDecision;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds?: number;
+  releaseIdempotencyKey?: string;
+  auditIdempotencyKey?: string;
 }
 
 export interface CapacityEvent extends MachineEvent {

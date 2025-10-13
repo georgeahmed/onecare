@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { logger } from '@onecare/observability';
 import type { SecurityServices, AuthContext } from '@onecare/security';
 
@@ -9,10 +9,97 @@ function resolveReplayWindowMs(): number {
   return Math.max(base, 1_000);
 }
 
-function normalizeActionScope(action: string, scope?: string[]): boolean {
-  if (!scope || scope.length === 0) return false;
-  const normalized = scope.map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return normalized.includes(action.toLowerCase()) || normalized.includes(`triage:${action}`.toLowerCase());
+type ScopeSet = Set<string>;
+
+function normalizeScopes(scope?: string[]): ScopeSet {
+  if (!scope || scope.length === 0) return new Set();
+  return new Set(scope.map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+
+function hasRequiredScope(scopes: ScopeSet, action: string, prefixes: string[]): boolean {
+  if (scopes.size === 0) return false;
+  const normalizedAction = action.trim().toLowerCase();
+  if (!normalizedAction) return false;
+  if (scopes.has(normalizedAction)) return true;
+  for (const prefix of prefixes) {
+    const candidate = `${prefix}:${normalizedAction}`;
+    if (scopes.has(candidate)) return true;
+    const wildcard = `${prefix}:*`;
+    if (scopes.has(wildcard)) return true;
+  }
+  if (scopes.has('*')) return true;
+  return false;
+}
+
+function systemAllowlist(): Set<string> {
+  const raw = process.env.SECURITY_SYSTEM_ALLOWLIST;
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+}
+
+interface ConsentEntry {
+  purpose: string;
+  resources: string[];
+  reference: string;
+  expiresAt?: string;
+  grantedAt?: string;
+  revoked?: boolean;
+  scopes?: string[];
+}
+
+type ConsentCache = Record<string, ConsentEntry[]>;
+
+export interface ConsentEvidence {
+  reference: string;
+  purpose: string;
+  resources: string[];
+  expiresAt?: string;
+  grantedAt?: string;
+  scopes?: string[];
+}
+
+const consentEvidenceCache = new Map<string, ConsentEvidence>();
+
+function consentCacheKey(patientId: string, purpose: string): string {
+  return `${patientId}::${purpose}`;
+}
+
+function loadConsentCache(): ConsentCache {
+  const raw = process.env.CONSENT_CACHE;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      return parsed as ConsentCache;
+    }
+  } catch (error) {
+    logger.warn('failed to parse CONSENT_CACHE', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return {};
+}
+
+function normaliseResource(resource: string): string {
+  return resource.trim().toLowerCase();
+}
+
+function hashIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('base64url');
+}
+
+export function getConsentEvidence(patientId: string, purpose: string): ConsentEvidence | null {
+  const key = consentCacheKey(patientId, purpose);
+  return consentEvidenceCache.get(key) ?? null;
+}
+
+export function setConsentEvidenceForTest(patientId: string, purpose: string, evidence: ConsentEvidence): void {
+  consentEvidenceCache.set(consentCacheKey(patientId, purpose), evidence);
 }
 
 function createDefaultSecurityServices(): SecurityServices {
@@ -63,21 +150,79 @@ function createDefaultSecurityServices(): SecurityServices {
     },
     async authorize(actor: AuthContext['actor'], action: string, patientId?: string, scope?: string[]): Promise<boolean> {
       if (!actor?.id) return false;
+      const scopes = normalizeScopes(scope);
+      const normalizedAction = action.trim().toLowerCase();
+      if (!normalizedAction) return false;
       if (actor.type === 'patient') {
-        return Boolean(patientId && patientId === actor.id);
+        if (!patientId || patientId !== actor.id) return false;
+        return hasRequiredScope(scopes, normalizedAction, ['patient', 'triage']);
       }
       if (actor.type === 'practitioner') {
-        return normalizeActionScope(action, scope);
+        return hasRequiredScope(scopes, normalizedAction, ['practitioner', 'triage']);
       }
       if (actor.type === 'system') {
-        return true;
+        const allow = systemAllowlist();
+        if (allow.size > 0 && !allow.has(actor.id)) {
+          logger.warn('system actor denied by allowlist', {
+            actorIdHash: hashIdentifier(actor.id),
+            action: normalizedAction,
+          });
+          return false;
+        }
+        return hasRequiredScope(scopes, normalizedAction, ['system']);
       }
       return false;
     },
     async checkConsent(patientId: string, purpose: string, requestedResources: string[]): Promise<boolean> {
-      if (!patientId) return false;
-      if (purpose !== 'care') return false;
-      return requestedResources.length > 0;
+      const normalizedPurpose = purpose.trim().toLowerCase();
+      const key = consentCacheKey(patientId, normalizedPurpose);
+      consentEvidenceCache.delete(key);
+      if (!patientId || !normalizedPurpose || requestedResources.length === 0) {
+        return false;
+      }
+      const consentCache = loadConsentCache();
+      const entries = consentCache[patientId];
+      if (!Array.isArray(entries) || entries.length === 0) {
+        logger.warn('consent check denied - no entries', {
+          patientIdHash: hashIdentifier(patientId),
+          purpose: normalizedPurpose,
+        });
+        return false;
+      }
+      const now = Date.now();
+      const requiredResources = requestedResources.map(normaliseResource);
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (entry.revoked === true) continue;
+        if (typeof entry.purpose !== 'string') continue;
+        if (entry.purpose.trim().toLowerCase() !== normalizedPurpose) continue;
+        const resources = Array.isArray(entry.resources)
+          ? entry.resources.map(normaliseResource).filter(Boolean)
+          : [];
+        if (resources.length === 0) continue;
+        if (!requiredResources.every((res) => resources.includes(res))) continue;
+        if (entry.expiresAt) {
+          const expires = Date.parse(entry.expiresAt);
+          if (Number.isFinite(expires) && expires <= now) continue;
+        }
+        if (!entry.reference || typeof entry.reference !== 'string') continue;
+        const evidence: ConsentEvidence = {
+          reference: entry.reference,
+          purpose: normalizedPurpose,
+          resources: entry.resources ?? [],
+          expiresAt: entry.expiresAt,
+          grantedAt: entry.grantedAt,
+          scopes: Array.isArray(entry.scopes) ? entry.scopes : undefined,
+        };
+        consentEvidenceCache.set(key, evidence);
+        return true;
+      }
+      logger.warn('consent check denied - no matching consent', {
+        patientIdHash: hashIdentifier(patientId),
+        purpose: normalizedPurpose,
+        requestedResources: requiredResources,
+      });
+      return false;
     },
   };
 }
@@ -127,5 +272,6 @@ export function setSecurityServices(services: SecurityServices): void {
 }
 
 export function resetSecurityServices(): void {
+  consentEvidenceCache.clear();
   activeSecurityServices = createDefaultSecurityServices();
 }

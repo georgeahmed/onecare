@@ -31,3 +31,37 @@ def test_transcribe_endpoint_returns_transcript():
         assert quality["lowConfidence"] in {True, False}
         assert quality["silenceDetected"] in {True, False}
         assert isinstance(quality["notes"], list)
+
+
+def test_transcribe_rejects_insecure_scheme():
+    payload = {
+        "encounterId": "enc-456",
+        "audioUrl": "http://example.com/audio.wav",
+        "contentType": "audio/wav",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert isinstance(body.get("detail"), list)
+        first_error = body["detail"][0]
+        assert first_error["type"] == "string_pattern_mismatch"
+        assert first_error["loc"] == ["body", "audioUrl"]
+
+
+def test_transcribe_rejects_private_host():
+    payload = {
+        "encounterId": "enc-789",
+        "audioUrl": "https://127.0.0.1/audio.wav",
+        "contentType": "audio/wav",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["detail"]["error"]["code"] == "invalid_input"
+        assert body["detail"]["error"]["details"]["reason"] == "private_host"

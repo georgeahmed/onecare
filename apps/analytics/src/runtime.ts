@@ -1,14 +1,17 @@
 import { createFileSink, resolveAnalyticsSinkPath } from './sink/fileSink';
 import { AnalyticsConsumer, startAnalyticsConsumer } from './consumer';
 import { logger } from '@onecare/observability';
-import { getBus, markNatsBusConnected } from '@onecare/bus';
+import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
+import { Topics } from '@onecare/events';
 
 const SHUTDOWN_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
 
 async function establishBus(): Promise<MessageBus> {
   const wantsNats = Boolean(process.env.NATS_URL?.trim());
-  const bus = getBus();
+  const bus = withMessageGuards(getBus(), {
+    allowedTopics: new Set([Topics.analytics.metric]),
+  });
   if (!wantsNats) {
     markNatsBusConnected(bus, true);
   }

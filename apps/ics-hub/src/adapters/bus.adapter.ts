@@ -25,6 +25,7 @@ export async function publishWithGuard<T>(
 ): Promise<void> {
   const headers: Record<string, string> = {};
   if (correlationId) headers['x-correlation-id'] = correlationId;
+  ensureEnvelopeTopic(topic, payload);
   let lastErr: unknown;
   const base = opts.baseDelayMs ?? 10;
   const timeoutMs = opts.timeoutMs ?? 500;
@@ -49,7 +50,12 @@ export async function publishWithGuard<T>(
     error: lastErr instanceof Error ? lastErr.message : String(lastErr),
     ts: new Date().toISOString(),
   };
-  await bus.publish(Topics.broker.deadLetter, dlqPayload, headers);
+  const dlqEnvelope = createEnvelope(Topics.broker.deadLetter, dlqPayload, correlationId);
+  const dlqHeaders: Record<string, string> = {
+    ...(headers ?? {}),
+    'x-original-topic': topic,
+  };
+  await bus.publish(dlqEnvelope.topic, dlqEnvelope, dlqHeaders);
 }
 
 async function publishWithTimeout<T>(
@@ -73,6 +79,16 @@ async function publishWithTimeout<T>(
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+function ensureEnvelopeTopic(topic: string, payload: unknown): void {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+  const candidate = payload as { topic?: unknown };
+  if (typeof candidate.topic === 'string' && candidate.topic !== topic) {
+    throw new Error(`publish_topic_mismatch: expected=${topic} actual=${candidate.topic}`);
   }
 }
 

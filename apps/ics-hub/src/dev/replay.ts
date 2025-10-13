@@ -1,5 +1,5 @@
 import type { MessageBus } from '@onecare/bus';
-import { Topics } from '@onecare/events';
+import { Topics, createEnvelope } from '@onecare/events';
 
 export interface DLQEnvelope<T = unknown> {
   originalTopic: string;
@@ -11,9 +11,15 @@ export interface DLQEnvelope<T = unknown> {
 
 // Minimal replay helper to republish DLQ entries.
 export async function replayDlqMessage<T>(bus: MessageBus, dlq: DLQEnvelope<T>): Promise<void> {
-  const headers: Record<string, string> = {};
-  if (dlq.correlationId) headers['x-correlation-id'] = dlq.correlationId + ':replay';
-  await bus.publish(dlq.originalTopic, dlq.payload as T, headers);
+  const replayCorrelation = dlq.correlationId ? `${dlq.correlationId}:replay` : undefined;
+  const envelope = createEnvelope(dlq.originalTopic, dlq.payload as T, replayCorrelation);
+  const headers: Record<string, string> = {
+    'x-original-topic': dlq.originalTopic,
+  };
+  if (replayCorrelation) {
+    headers['x-correlation-id'] = replayCorrelation;
+  }
+  await bus.publish(envelope.topic, envelope, headers);
 }
 
 // Example usage (dev): replay one DLQ message
@@ -26,4 +32,3 @@ export async function exampleReplay(bus: MessageBus) {
   };
   await replayDlqMessage(bus, sample);
 }
-

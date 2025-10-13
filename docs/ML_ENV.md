@@ -24,11 +24,21 @@ These values are shared between the Node orchestrator and the Python services. D
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PY_SAFETY_GATE_URL` | Base URL used by orchestrator to reach the safety gate container. | `http://safety-gate:8081` (compose) |
+| `PY_SAFETY_GATE_API_KEY` | Bearer token attached to orchestrator → safety gate calls (prepends `Bearer ` when missing). | unset |
+| `PY_SAFETY_GATE_AUTH_HEADER_NAME` / `PY_SAFETY_GATE_AUTH_HEADER_VALUE` | Optional custom auth header pair for safety gate calls (wins over bearer token). | unset |
+| `PY_SAFETY_GATE_EXTRA_HEADERS` | JSON object of additional headers to apply to safety gate requests. | unset |
+| `PY_SAFETY_GATE_MAX_RESPONSE_BYTES` | Hard cap on response size accepted from the safety gate (bytes). | `262144` |
 | `PY_SCRIBE_URL` | Base URL used by orchestrator to reach the scribe container. | `http://scribe:8082` (compose) |
 | `SAFETY_GATE_PORT` | Optional override for the Uvicorn port inside the safety gate container. | `8081` |
 | `SCRIBE_PORT` | Optional override for the Uvicorn port inside the scribe container. | `8082` |
 | `OTEL_ENABLED` | See table above—repeat here for clarity when injecting into container env. | `0` |
 | `FEATURE_LOG_ENDPOINT` | HTTP endpoint that accepts feature log payloads (used by safety gate). | `http://orchestrator:3001/feature-log` |
+| `FEATURE_LOG_AUTH_HEADER_NAME` / `FEATURE_LOG_AUTH_HEADER_VALUE` | Optional custom auth header pair for feature logging calls. | unset |
+| `FEATURE_LOG_BEARER_TOKEN` | Bearer token for feature logging (ignored when custom header provided). | unset |
+| `FEATURE_LOG_API_KEY` | Legacy token string for feature logging (sets `Authorization` directly). | unset |
+| `FEATURE_LOG_EXTRA_HEADERS` | JSON object containing additional headers for feature logging. | unset |
+| `FEATURE_LOG_RETRY_ATTEMPTS` | Max retry attempts for feature log delivery (exponential backoff). | `2` |
+| `FEATURE_LOG_RETRY_BASE_MS` | Base delay (ms) for feature log retry backoff. | `150` |
 | `FEATURE_DRIFT_BASELINE_SIZE` | Sample size for drift baseline window. | `200` |
 | `FEATURE_DRIFT_CURRENT_SIZE` | Sample size for each evaluated window. | `50` |
 | `FEATURE_DRIFT_PSI_THRESHOLD` | PSI threshold that emits a drift alert. | `0.5` |

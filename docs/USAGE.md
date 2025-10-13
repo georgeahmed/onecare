@@ -174,6 +174,7 @@ Manual runs
 - k6 baseline load for /safety-check: `SAFETY_CHECK_SECRET=<shared secret> k6 run scripts/perf/safety_check.js`
 - Triage flow load (triage.input → tasks.created via memory bus): `node scripts/perf/triage_flow.js`
 - Booking flow load (search → create with conflict simulation): `node scripts/perf/booking_flow.js`
+- Telephony parity (IVR → ASR → intent stub pipeline): `node scripts/perf/telephony_parity.js`
 - Contracts sync check: bash scripts/ci/check_contracts_sync.sh HEAD^ HEAD
 - OpenAPI validation: python scripts/ci/validate_openapi.py
 

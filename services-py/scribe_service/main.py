@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import AsyncIterator
-from typing import Optional
+from typing import Any, Optional
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +16,75 @@ from .audio_store import create_audio_store
 from .quality import evaluate_quality
 from .llm_client import SummaryLLM
 from .postprocess import highlight_uncertainty
+
+_ALLOWED_AUDIO_SCHEMES = {"https", "s3"}
+
+
+def _audio_validation_error(reason: str) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": {
+                "code": "invalid_input",
+                "message": "Invalid audio reference",
+                "details": {"reason": reason},
+            }
+        },
+    )
+
+
+def _is_private_host(host: str) -> bool:
+    lowered = host.lower()
+    if lowered == "localhost" or lowered.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+
+
+def _sanitize_audio_request(audio: ScribeAudio) -> dict[str, Any]:
+    encounter_id = audio.encounterId.strip()
+    if not encounter_id:
+        raise _audio_validation_error("missing_encounter_id")
+
+    raw_url = audio.audioUrl.strip()
+    if not raw_url:
+        raise _audio_validation_error("missing_audio_url")
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        raise _audio_validation_error("invalid_audio_url")
+
+    if parsed.scheme not in _ALLOWED_AUDIO_SCHEMES:
+        raise _audio_validation_error("unsupported_scheme")
+    if parsed.scheme == "https":
+        host = parsed.hostname
+        if not host:
+            raise _audio_validation_error("missing_hostname")
+        if parsed.username or parsed.password:
+            raise _audio_validation_error("credentials_not_allowed")
+        if _is_private_host(host):
+            raise _audio_validation_error("private_host")
+    elif parsed.scheme == "s3":
+        if not parsed.netloc:
+            raise _audio_validation_error("missing_bucket")
+
+    normalized_url = parsed.geturl()
+    if len(normalized_url) > 2048:
+        raise _audio_validation_error("url_too_long")
+
+    content_type = (audio.contentType or "").strip()
+    if not content_type.lower().startswith("audio/"):
+        raise _audio_validation_error("invalid_content_type")
+
+    return {
+        "encounterId": encounter_id,
+        "audioUrl": normalized_url,
+        "contentType": content_type,
+        "diarization": audio.diarization,
+    }
 
 
 @asynccontextmanager
@@ -71,18 +142,20 @@ def transcribe(audio: ScribeAudio) -> Transcript:
     if model is None:
         model = load_model()
 
+    sanitized = _sanitize_audio_request(audio)
+
     audio_payload = {
-        "url": audio.audioUrl,
-        "audioUrl": audio.audioUrl,
-        "encounterId": audio.encounterId,
+        "url": sanitized["audioUrl"],
+        "audioUrl": sanitized["audioUrl"],
+        "encounterId": sanitized["encounterId"],
     }
-    if audio.diarization is not None:
-        audio_payload["diarization"] = audio.diarization
+    if sanitized["diarization"] is not None:
+        audio_payload["diarization"] = sanitized["diarization"]
 
     result = run_transcription(audio_payload, model=model)
     store = getattr(app.state, "audio_store", None)
     if store is not None:
-        store.record(encounter_id=audio.encounterId, audio_url=audio.audioUrl)
+        store.record(encounter_id=sanitized["encounterId"], audio_url=sanitized["audioUrl"])
     quality = evaluate_quality(
         result.text,
         chunk_texts=[chunk.text for chunk in result.chunks],

@@ -14,7 +14,7 @@ Start Here
 - Tools: choose k6/Locust; integrate with CI artifacts
 
 Status: in-progress
-Progress: 43%
+Progress: 57%
 
 Dependencies
 - telephony-voice team (IVR/ASR)
@@ -29,7 +29,7 @@ Tasks
 - [x] QA-02.1 — k6 baseline load for /safety-check (latency/throughput)
 - [x] QA-02.2 — Triage flow load test (publish triage.input → tasks.created)
 - [x] QA-02.3 — Booking flow load test (search/create)
-- [ ] QA-02.4 — Telephony parity flow checks (IVR → ASR → intent)
+- [x] QA-02.4 — Telephony parity flow checks (IVR → ASR → intent)
 - [ ] QA-02.5 — CI integration with SLO thresholds + artifacts
 - [ ] QA-02.6 — Alert SLO tests
 - [ ] QA-02.5 — CI integration with SLO thresholds + artifacts

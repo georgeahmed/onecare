@@ -22,7 +22,8 @@ import type {
   ReferralResult,
   ReferralOptions,
 } from '../adapters/cpcs.client';
-import type { FhirBundle, FhirRepository, FhirResourceRef } from '@onecare/ports';
+import type { FhirBundle, FhirRepository, FhirResourceRef, IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 
 export interface PharmacyContext extends MachineContext {
   document?: EligibilityDocument;
@@ -44,11 +45,17 @@ export interface PharmacyContext extends MachineContext {
   outcomeBundle?: FhirBundle;
   eligibilityDecision?: EligibilityDecision;
   eligibilityRule?: PharmacyEligibilityRule;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds?: number;
+  notificationIdempotencyKey?: string;
+  outcomeIdempotencyKey?: string;
 }
 
 export interface PharmacyEvent extends MachineEvent {
   type: 'pharmacy.route' | string;
 }
+
+const DEFAULT_PHARMACY_IDEMPOTENCY_TTL_SECONDS = 15 * 60;
 
 export class ClassifiedState extends BaseState<PharmacyContext, PharmacyEvent> {
   constructor(private readonly injectedRules?: PharmacyEligibilityRuleset) {
@@ -221,12 +228,47 @@ export class OutcomeRecordedState extends BaseState<PharmacyContext, PharmacyEve
       eligibilityReason: ctx.eligibilityDecision?.reason ?? 'eligible',
     });
     const bundle = buildOutcomeBundle(ctx);
-    ctx.outcomeBundle = await ctx.fhirRepository.upsertBundle(bundle);
+    const key = derivePharmacyOutcomeKey(ctx);
+    const ttlSeconds = resolvePharmacyIdempotencyTtl(ctx);
+    const { status } = await executeWithIdempotency({
+      store: ctx.idempotencyStore,
+      key,
+      ttlSeconds,
+      execute: async () => {
+        ctx.outcomeBundle = await ctx.fhirRepository!.upsertBundle(bundle);
 
-    if (shouldEscalateAfterReferral(ctx)) {
-      ctx.escalationTaskRef = await ctx.fhirRepository.createTask(
-        buildEscalationTask(ctx, 'referral_failed'),
-      );
+        if (shouldEscalateAfterReferral(ctx)) {
+          ctx.escalationTaskRef = await ctx.fhirRepository!.createTask(
+            buildEscalationTask(ctx, 'referral_failed'),
+          );
+        }
+        logger.info('pharmacy.outcome.persisted', {
+          ctxId: ctx.id,
+          correlationId: ctx.correlationId,
+          key,
+          escalated: shouldEscalateAfterReferral(ctx),
+        });
+        return true;
+      },
+      onDuplicate: () => {
+        logger.warn('pharmacy.outcome.duplicate_suppressed', {
+          ctxId: ctx.id,
+          correlationId: ctx.correlationId,
+          key,
+        });
+      },
+      onError: (error) => {
+        logger.error('pharmacy.outcome.idempotency_failed', {
+          ctxId: ctx.id,
+          correlationId: ctx.correlationId,
+          key,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        });
+      },
+    });
+
+    if (status === 'skipped') {
+      ctx.outcomeBundle = ctx.outcomeBundle ?? bundle;
     }
     return 'OutcomeRecorded';
   }
@@ -331,21 +373,53 @@ function buildReferralSummary(ctx: PharmacyContext): string {
 
 async function notifyPatient(ctx: PharmacyContext): Promise<void> {
   if (!ctx.notifier || !ctx.serviceRequest || !ctx.referralSummary) return;
-  try {
-    await ctx.notifier.notifyReferral({
-      serviceRequestId: ctx.serviceRequest.id,
-      organisationId: ctx.referralOrgId ?? 'unknown',
-      summary: ctx.referralSummary,
-      status: ctx.referralResult?.status ?? 'unknown',
-      correlationId: ctx.correlationId,
-    });
-  } catch (error) {
-    logger.error('pharmacy.notification.failed', {
-      ctxId: ctx.id,
-      correlationId: ctx.correlationId,
-      error: error instanceof Error ? error.message : 'unknown_error',
-    });
-  }
+  const key = derivePharmacyNotificationKey(ctx);
+  const ttlSeconds = resolvePharmacyIdempotencyTtl(ctx);
+  await executeWithIdempotency({
+    store: ctx.idempotencyStore,
+    key,
+    ttlSeconds,
+    execute: async () => {
+      try {
+        await ctx.notifier!.notifyReferral({
+          serviceRequestId: ctx.serviceRequest!.id,
+          organisationId: ctx.referralOrgId ?? 'unknown',
+          summary: ctx.referralSummary!,
+          status: ctx.referralResult?.status ?? 'unknown',
+          correlationId: ctx.correlationId,
+        });
+        logger.info('pharmacy.notification.sent', {
+          ctxId: ctx.id,
+          correlationId: ctx.correlationId,
+          organisationFingerprint: fingerprint(ctx.referralOrgId),
+          key,
+        });
+      } catch (error) {
+        logger.error('pharmacy.notification.failed', {
+          ctxId: ctx.id,
+          correlationId: ctx.correlationId,
+          error: error instanceof Error ? error.message : 'unknown_error',
+        });
+        throw error;
+      }
+      return true;
+    },
+    onDuplicate: () => {
+      logger.warn('pharmacy.notification.duplicate_suppressed', {
+        ctxId: ctx.id,
+        correlationId: ctx.correlationId,
+        key,
+      });
+    },
+    onError: (error) => {
+      logger.error('pharmacy.notification.idempotency_failed', {
+        ctxId: ctx.id,
+        correlationId: ctx.correlationId,
+        key,
+        reason: error instanceof Error ? error.message : 'unknown_error',
+      });
+    },
+  });
 }
 
 function buildOutcomeBundle(ctx: PharmacyContext): FhirBundle {
@@ -374,6 +448,25 @@ function buildOutcomeBundle(ctx: PharmacyContext): FhirBundle {
       },
     ],
   } as FhirBundle;
+}
+
+function resolvePharmacyIdempotencyTtl(ctx: PharmacyContext): number {
+  const ttl = ctx.idempotencyTtlSeconds;
+  return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_PHARMACY_IDEMPOTENCY_TTL_SECONDS;
+}
+
+function derivePharmacyNotificationKey(ctx: PharmacyContext): string {
+  if (ctx.notificationIdempotencyKey) return ctx.notificationIdempotencyKey;
+  const organisation = ctx.referralOrgId ?? 'unknown-org';
+  const serviceRequestId = ctx.serviceRequest?.id ?? `sr-${ctx.id}`;
+  return `pharmacy:notify:${organisation}:${serviceRequestId}`;
+}
+
+function derivePharmacyOutcomeKey(ctx: PharmacyContext): string {
+  if (ctx.outcomeIdempotencyKey) return ctx.outcomeIdempotencyKey;
+  const organisation = ctx.referralOrgId ?? 'unknown-org';
+  const serviceRequestId = ctx.serviceRequest?.id ?? `sr-${ctx.id}`;
+  return `pharmacy:outcome:${organisation}:${serviceRequestId}`;
 }
 
 function shouldEscalateAfterReferral(ctx: PharmacyContext): boolean {

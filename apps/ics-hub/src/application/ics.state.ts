@@ -6,6 +6,8 @@ import { getIcsOrganisationPolicies } from '@onecare/config';
 import { createCounter, logger } from '@onecare/observability';
 import type { TypedEnvelope, IcsReferralRequest, AuditEvent, ErrorEnvelope } from '@onecare/events';
 import type { MessageBus } from '@onecare/bus';
+import type { IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 import { publishAutomationTasks, type AutomationPublishOptions } from '../adapters/bus.adapter';
 import { buildRouteDecision, type RouteDecision, type RoutingConfig } from './routing';
 import { validateReferralIngress } from './ingress';
@@ -25,6 +27,7 @@ const routingBlockedCounter = createCounter('ics.routing.blocked_total');
 const routingRateLimitedCounter = createCounter('ics.routing.rate_limited_total');
 
 const RATE_WINDOW_MS = 60_000;
+const DEFAULT_ICS_IDEMPOTENCY_TTL_SECONDS = 5 * 60;
 
 function normaliseOrgId(orgId: string): string {
   return orgId.trim().toLowerCase();
@@ -118,6 +121,9 @@ export interface IcsContext extends MachineContext {
   automationIntents?: AutomationIntent[];
   automationTasks?: AutomationTaskCreation[];
   automationPublished?: boolean;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds?: number;
+  automationPublishIdempotencyKey?: string;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -462,8 +468,53 @@ export async function publishAutomationOutputs(
   if (!ctx.automationTasks || ctx.automationTasks.length === 0) {
     return;
   }
-  await publishAutomationTasks(ctx.bus, ctx.automationTasks, options);
-  ctx.automationPublished = true;
+  const key = deriveAutomationPublishKey(ctx);
+  const ttlSeconds = resolveIcsIdempotencyTtl(ctx);
+  const { status } = await executeWithIdempotency({
+    store: ctx.idempotencyStore,
+    key,
+    ttlSeconds,
+    execute: async () => {
+      await publishAutomationTasks(ctx.bus!, ctx.automationTasks, options);
+      ctx.automationPublished = true;
+      logger.info('ics.automation.outputs_published', {
+        ctxId: ctx.id,
+        correlationId: ctx.correlationId,
+        key,
+        taskCount: ctx.automationTasks?.length ?? 0,
+      });
+      return true;
+    },
+    onDuplicate: () => {
+      logger.warn('ics.automation.publish_duplicate', {
+        ctxId: ctx.id,
+        correlationId: ctx.correlationId,
+        key,
+      });
+    },
+    onError: (error) => {
+      logger.error('ics.automation.publish_failed', {
+        ctxId: ctx.id,
+        correlationId: ctx.correlationId,
+        key,
+        reason: error instanceof Error ? error.message : 'unknown_error',
+      });
+    },
+  });
+
+  if (status === 'skipped') {
+    ctx.automationPublished = ctx.automationPublished ?? true;
+  }
+}
+
+function resolveIcsIdempotencyTtl(ctx: IcsContext): number {
+  const ttl = ctx.idempotencyTtlSeconds;
+  return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_ICS_IDEMPOTENCY_TTL_SECONDS;
+}
+
+function deriveAutomationPublishKey(ctx: IcsContext): string {
+  if (ctx.automationPublishIdempotencyKey) return ctx.automationPublishIdempotencyKey;
+  return `ics:automation:${ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
 }
 
 export class AckedState extends BaseState<IcsContext, IcsEvent> {

@@ -1,5 +1,6 @@
 import { BaseState } from '@onecare/statekit';
 import { logger } from '@onecare/observability';
+import { executeWithIdempotency } from '@onecare/ports';
 import { forecastNeedVsSupply } from './forecast';
 import { collectTelemetrySnapshot } from './telemetry';
 import {
@@ -30,6 +31,7 @@ const DELTA_THRESHOLD_DEFAULT = 3;
 const CONFIDENCE_THRESHOLD_DEFAULT = 0.6;
 const MIN_FORECAST_MINUTES = 30;
 const MAX_FORECAST_MINUTES = 8 * 60;
+const DEFAULT_CAPACITY_IDEMPOTENCY_TTL_SECONDS = 5 * 60;
 
 export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
   constructor() {
@@ -295,19 +297,79 @@ export class AppliedState extends BaseState<CapacityContext, CapacityEvent> {
         if (!ctx.releaseExecutor) {
           throw new Error('release_executor_missing');
         }
-        await ctx.releaseExecutor.apply(plan, meta);
-        ctx.capacityWindow.heldSlots = plan.heldSlotsAfter;
-        logger.info('capacity.micro_release.applied', {
-          practiceId: ctx.practiceId,
-          runId: ctx.id,
-          slots: plan.slotsToRelease,
+        const releaseKey = ctx.releaseIdempotencyKey ?? deriveReleaseIdempotencyKey(ctx, plan);
+        const ttlSeconds = resolveCapacityIdempotencyTtl(ctx);
+        const { status } = await executeWithIdempotency({
+          store: ctx.idempotencyStore,
+          key: releaseKey,
+          ttlSeconds,
+          execute: async () => {
+            await ctx.releaseExecutor!.apply(plan, meta);
+            ctx.capacityWindow.heldSlots = plan.heldSlotsAfter;
+            logger.info('capacity.micro_release.applied', {
+              practiceId: ctx.practiceId,
+              runId: ctx.id,
+              slots: plan.slotsToRelease,
+            });
+            return true;
+          },
+          onDuplicate: () => {
+            logger.warn('capacity.micro_release.duplicate', {
+              practiceId: ctx.practiceId,
+              runId: ctx.id,
+              slots: plan.slotsToRelease,
+              key: releaseKey,
+            });
+          },
+          onError: (error) => {
+            logger.error('capacity.micro_release.idempotency_failed', {
+              practiceId: ctx.practiceId,
+              runId: ctx.id,
+              slots: plan.slotsToRelease,
+              key: releaseKey,
+              reason: error instanceof Error ? error.message : 'unknown_error',
+            });
+          },
         });
+        if (status === 'skipped') {
+          ctx.capacityWindow.heldSlots = plan.heldSlotsAfter;
+        }
       }
     }
 
     const auditRecord = buildAuditRecord(ctx, plan, decision);
     if (ctx.auditor) {
-      await ctx.auditor.record(auditRecord);
+      const auditKey = ctx.auditIdempotencyKey ?? deriveAuditIdempotencyKey(ctx);
+      const ttlSeconds = resolveCapacityIdempotencyTtl(ctx);
+      await executeWithIdempotency({
+        store: ctx.idempotencyStore,
+        key: auditKey,
+        ttlSeconds,
+        execute: async () => {
+          await ctx.auditor!.record(auditRecord);
+          logger.info('capacity.micro_release.audit_recorded', {
+            practiceId: ctx.practiceId,
+            runId: ctx.id,
+            key: auditKey,
+          });
+          return true;
+        },
+        onDuplicate: () => {
+          logger.warn('capacity.micro_release.audit_duplicate', {
+            practiceId: ctx.practiceId,
+            runId: ctx.id,
+            key: auditKey,
+          });
+        },
+        onError: (error) => {
+          logger.error('capacity.micro_release.audit_failed', {
+            practiceId: ctx.practiceId,
+            runId: ctx.id,
+            key: auditKey,
+            reason: error instanceof Error ? error.message : 'unknown_error',
+          });
+        },
+      });
     }
 
     return 'Applied';
@@ -468,6 +530,21 @@ function buildZeroReleasePlan(
     minReserveSlots,
     cappedBy: [],
   };
+}
+
+function resolveCapacityIdempotencyTtl(ctx: CapacityContext): number {
+  const ttl = ctx.idempotencyTtlSeconds;
+  return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_CAPACITY_IDEMPOTENCY_TTL_SECONDS;
+}
+
+function deriveReleaseIdempotencyKey(ctx: CapacityContext, plan: ReleasePlan): string {
+  const practice = ctx.practiceId ?? 'unknown-practice';
+  return ctx.releaseIdempotencyKey ?? `capacity:release:${practice}:${ctx.id}:${plan.slotsToRelease}`;
+}
+
+function deriveAuditIdempotencyKey(ctx: CapacityContext): string {
+  const practice = ctx.practiceId ?? 'unknown-practice';
+  return ctx.auditIdempotencyKey ?? `capacity:audit:${practice}:${ctx.id}`;
 }
 
 async function evaluateTelemetryHealth(

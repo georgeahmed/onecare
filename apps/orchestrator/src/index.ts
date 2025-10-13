@@ -4,7 +4,7 @@ import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
-import { getBus, markNatsBusConnected } from '@onecare/bus';
+import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
 import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
@@ -12,7 +12,7 @@ import { deriveIdempotencyKey, reserveIdempotency, releaseIdempotency, InMemoryI
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
-import { getSecurityServices } from './adapters/security';
+import { getSecurityServices, getConsentEvidence } from './adapters/security';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import { InMemoryFeatureStore } from '@onecare/feature-store-memory';
@@ -78,13 +78,33 @@ void initTracing('orchestrator').catch((err: unknown) => {
   logger.warn('failed to initialize tracing', { message });
 });
 
-let bus: MessageBus = getBus();
+const ORCHESTRATOR_ALLOWED_TOPICS = new Set<string>([
+  Topics.audit.event,
+  Topics.triage.input,
+  Topics.tasks.created,
+]);
+
+function buildMessageBus(options?: Parameters<typeof getBus>[0]): MessageBus {
+  const base = getBus(options);
+  return withMessageGuards(base, {
+    allowedTopics: ORCHESTRATOR_ALLOWED_TOPICS,
+  });
+}
+
+let bus: MessageBus = buildMessageBus();
 markNatsBusConnected(bus, !wantsNats);
 let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
 let _natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
+const BOOKING_RESOURCES = ['Slot'] as const;
+const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
+const BOOKING_SCOPE = 'booking:read';
+const FEATURE_LOG_SCOPE = 'analytics:feature:write';
+const SAFETY_GATE_SCOPE = 'safety:analyze';
+const FEATURE_LOG_PURPOSE = 'analytics-lite';
+type GateDenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
 const AUDIT_SUCCESS_TYPE = 'orchestrator.access.success';
 
@@ -152,7 +172,7 @@ function sanitizeInboundSubmission(submission: PortalSubmission): void {
     }
     return;
   }
-  const sanitized: NonNullable<PortalSubmission['attachments']> = [];
+  const sanitized: Array<{ contentType: string; url: string }> = [];
   for (const raw of submission.attachments) {
     const contentType = typeof raw?.contentType === 'string' ? raw.contentType.trim() : '';
     const url = typeof raw?.url === 'string' ? raw.url.trim() : '';
@@ -257,7 +277,7 @@ async function establishBusConnection(): Promise<void> {
     logger.info('Connecting to NATS', { servers: options.servers });
     const conn = await connect(options);
     _natsConn = conn;
-    bus = getBus({ connection: conn });
+    bus = buildMessageBus({ connection: conn });
     markNatsBusConnected(bus, true);
     busReady = true;
     monitorNats(conn);
@@ -470,17 +490,21 @@ function normalizeActorType(raw: string | undefined): AuthContext['actor']['type
   return null;
 }
 
+function extractScopes(headers: http.IncomingHttpHeaders): string[] | undefined {
+  const scopeHeader = getHeader(headers, 'x-auth-scope');
+  if (!scopeHeader) return undefined;
+  const scopes = scopeHeader
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return scopes.length > 0 ? scopes : undefined;
+}
+
 function buildAuthContext(headers: http.IncomingHttpHeaders): AuthContext | null {
   const actorId = getHeader(headers, 'x-actor-id');
   const actorType = normalizeActorType(getHeader(headers, 'x-actor-type'));
   if (!actorId || !actorType) return null;
-  const scopeHeader = getHeader(headers, 'x-auth-scope');
-  const scope = scopeHeader
-    ? scopeHeader
-        .split(/\s+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0)
-    : undefined;
+  const scope = extractScopes(headers);
   return {
     actor: { type: actorType, id: actorId },
     scope,
@@ -502,7 +526,8 @@ async function emitAuditEvent(
   };
   try {
     const env = createEnvelope(Topics.audit.event, event, correlationId);
-    await bus.publish(env.topic, env);
+    const headers = env.correlationId ? { 'x-correlation-id': env.correlationId } : undefined;
+    await bus.publish(env.topic, env, headers);
   } catch (err) {
     logger.warn('failed to publish audit event', {
       type,
@@ -552,13 +577,68 @@ function classifyErrorCode(err: unknown): string | undefined {
   return code ? String(code).toLowerCase() : undefined;
 }
 
+type FeaturePrimitive = string | number | boolean | null;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sanitizeFeatureValue(value: unknown): FeaturePrimitive | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    return trimmed.length > 512 ? trimmed.slice(0, 512) : trimmed;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return undefined;
+    return value;
+  }
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
+
+function sanitizeFeatureBag(
+  raw: unknown,
+  maxEntries = 100
+): { bag: Record<string, FeaturePrimitive>; dropped: boolean } {
+  if (raw === undefined || raw === null) {
+    return { bag: {}, dropped: false };
+  }
+  if (!isPlainObject(raw)) {
+    return { bag: {}, dropped: true };
+  }
+  const result: Record<string, FeaturePrimitive> = {};
+  let dropped = false;
+  let count = 0;
+  for (const [key, candidate] of Object.entries(raw)) {
+    if (count >= maxEntries) {
+      dropped = true;
+      break;
+    }
+    const normalizedKey = key.trim();
+    if (!normalizedKey || normalizedKey.length > 64) {
+      dropped = true;
+      continue;
+    }
+    const sanitizedValue = sanitizeFeatureValue(candidate);
+    if (sanitizedValue === undefined) {
+      dropped = true;
+      continue;
+    }
+    result[normalizedKey] = sanitizedValue;
+    count += 1;
+  }
+  return { bag: result, dropped };
+}
+
 interface FeatureLogEntry {
   source: 'triage' | 'safety';
   entityId?: string | null;
   patientId?: string | null;
   correlationId?: string | null;
-  features?: Record<string, unknown> | null;
-  metadata?: Record<string, unknown> | null;
+  features?: Record<string, FeaturePrimitive> | null;
+  metadata?: Record<string, FeaturePrimitive> | null;
   occurredAt?: string | number | Date | null;
 }
 
@@ -660,6 +740,69 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
   if (req.method === 'GET' && parsedUrl.pathname === '/booking/slots') {
     const routeLabel = 'GET /booking/slots';
     handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
+      const authHeader = getHeader(req.headers, 'authorization');
+      const authContext = buildAuthContext(req.headers);
+      const deny = async (reason: GateDenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
+        logger.warn('booking slots denied', {
+          reason,
+          correlationId: corr,
+          requestId,
+          actorType: authContext?.actor?.type,
+          actorScope: authContext?.scope,
+        });
+        const auditDetails = {
+          reason,
+          requestId,
+          scope: authContext?.scope,
+          ...extraDetails,
+        } satisfies Record<string, unknown>;
+        recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
+        await emitAuditEvent(AUDIT_DENIED_TYPE, corr, authContext?.actor ?? null, auditDetails);
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+      };
+
+      const fingerprint = `${requestId}:booking:slots`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
+        return;
+      }
+
+      if (!authContext) {
+        await deny('actor_missing');
+        return;
+      }
+
+      const { actor, scope } = authContext;
+      const patientIdFromQuery = parsedUrl?.searchParams?.get('patientId') ?? undefined;
+      const patientIdHeader = getHeader(req.headers, 'x-patient-id');
+      const patientId = patientIdHeader || patientIdFromQuery || undefined;
+
+      if (actor.type === 'patient' && (!patientId || patientId !== actor.id)) {
+        await deny('not_authorized', { reason: 'patient_mismatch' });
+        return;
+      }
+
+      if (!(await security.authorize(actor, BOOKING_SCOPE, patientId, scope))) {
+        await deny('not_authorized');
+        return;
+      }
+
+      let consentReference: string | null = null;
+      if (patientId) {
+        if (!(await security.checkConsent(patientId, 'care', Array.from(BOOKING_RESOURCES)))) {
+          await deny('consent_denied');
+          return;
+        }
+        const consentEvidence = getConsentEvidence(patientId, 'care');
+        if (!consentEvidence) {
+          await deny('consent_denied', { reason: 'consent_evidence_missing' });
+          return;
+        }
+        consentReference = consentEvidence.reference;
+      }
+
       if (!bookingAvailabilityBase) {
         respondError(res, 'upstream_unavailable', 'Booking availability service not configured', corr, setOutcome);
         return;
@@ -672,7 +815,6 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         accept: 'application/json',
         'x-correlation-id': corr,
       };
-      const authHeader = getHeader(req.headers, 'authorization');
       if (authHeader) {
         headers.authorization = authHeader;
       }
@@ -723,6 +865,15 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       if (!upstream.ok) {
         setOutcome(upstream.status >= 500 ? 'upstream_unavailable' : 'invalid_input');
       } else {
+        const successAuditDetails = {
+          patientId: patientId ?? null,
+          actorType: actor.type,
+          scope,
+          consentReference,
+          upstreamStatus: upstream.status,
+        } satisfies Record<string, unknown>;
+        recordAudit('orchestrator.booking.proxy', corr, successAuditDetails);
+        await emitAuditEvent('orchestrator.booking.proxy', corr, authContext.actor, successAuditDetails);
         setOutcome('ok');
       }
     });
@@ -731,10 +882,50 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
 
   if (req.method === 'POST' && parsedUrl.pathname === '/feature-log') {
     const routeLabel = 'POST /feature-log';
-    handleHttp(req, res, routeLabel, corr, async () => {
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
       if (!featureLoggingOn || !featureStore) {
         res.statusCode = 202;
         res.end('feature logging disabled');
+        return;
+      }
+
+      const security = getSecurityServices();
+      const authContext = buildAuthContext(req.headers);
+      const deny = async (
+        reason: string,
+        code: ErrorCode = 'forbidden',
+        extraDetails: Record<string, unknown> = {}
+      ): Promise<void> => {
+        const auditDetails = {
+          reason,
+          scope: extractScopes(req.headers),
+          ...extraDetails,
+        } satisfies Record<string, unknown>;
+        recordAudit('orchestrator.feature_log.denied', corr, auditDetails);
+        await emitAuditEvent('orchestrator.feature_log.denied', corr, authContext?.actor ?? null, auditDetails);
+        respondError(res, code, code === 'forbidden' ? 'Access denied' : 'Invalid request', corr, setOutcome, auditDetails);
+      };
+
+      const expectedApiKey = (process.env.FEATURE_LOG_API_KEY ?? '').trim();
+      if (!expectedApiKey) {
+        await deny('feature_log_api_key_missing', 'upstream_unavailable');
+        return;
+      }
+      const providedApiKey = getHeader(req.headers, 'x-api-key')?.trim();
+      if (!providedApiKey || providedApiKey !== expectedApiKey) {
+        await deny('invalid_api_key');
+        return;
+      }
+
+      const scopes = extractScopes(req.headers) ?? [];
+      if (!scopes.includes(FEATURE_LOG_SCOPE) && !scopes.includes('*')) {
+        await deny('missing_scope', 'forbidden', { requiredScope: FEATURE_LOG_SCOPE });
+        return;
+      }
+
+      const consentReferenceHeader = getHeader(req.headers, 'x-consent-reference');
+      if (!consentReferenceHeader || consentReferenceHeader.trim().length === 0) {
+        await deny('missing_consent_reference');
         return;
       }
 
@@ -756,15 +947,53 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       }
 
       const entityId = typeof payload.entityId === 'string' && payload.entityId.trim().length > 0 ? payload.entityId : null;
-      const patientId =
-        typeof payload.patientId === 'string' && payload.patientId.trim().length > 0 ? payload.patientId : entityId;
+      const patientIdRaw =
+        typeof payload.patientId === 'string' && payload.patientId.trim().length > 0
+          ? payload.patientId
+          : entityId;
+      const patientId = patientIdRaw ?? null;
+      if (!patientId) {
+        await deny('patient_id_missing', 'invalid_input');
+        return;
+      }
       const correlationId =
         typeof payload.correlationId === 'string' && payload.correlationId.trim().length > 0 ? payload.correlationId : corr;
 
-      const features =
-        payload.features && typeof payload.features === 'object' ? (payload.features as Record<string, unknown>) : {};
-      const metadata =
-        payload.metadata && typeof payload.metadata === 'object' ? (payload.metadata as Record<string, unknown>) : {};
+      if (
+        !(await security.checkConsent(patientId, FEATURE_LOG_PURPOSE, Array.from(FEATURE_LOG_RESOURCES)))
+      ) {
+        await deny('consent_denied');
+        return;
+      }
+      const consentEvidence = getConsentEvidence(patientId, FEATURE_LOG_PURPOSE);
+      if (!consentEvidence || consentEvidence.reference !== consentReferenceHeader) {
+        await deny('consent_mismatch', 'forbidden', { consentReference: consentEvidence?.reference ?? null });
+        return;
+      }
+
+      const hasFeaturesInput = payload.features !== undefined && payload.features !== null;
+      const hasMetadataInput = payload.metadata !== undefined && payload.metadata !== null;
+
+      const {
+        bag: features,
+        dropped: featuresDropped,
+      } = sanitizeFeatureBag(payload.features, 100);
+      if (hasFeaturesInput && featuresDropped) {
+        throw new HttpError('invalid_input', 'Invalid features payload');
+      }
+
+      const {
+        bag: metadataBag,
+        dropped: metadataDropped,
+      } = sanitizeFeatureBag(payload.metadata, 50);
+      if (hasMetadataInput && metadataDropped) {
+        throw new HttpError('invalid_input', 'Invalid metadata payload');
+      }
+
+      const metadata: Record<string, unknown> = {
+        ...metadataBag,
+        consentReference: consentEvidence.reference,
+      };
 
       let recordedAt: string | number | undefined;
       if (typeof payload.recordedAt === 'string' || typeof payload.recordedAt === 'number') {
@@ -781,8 +1010,18 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         occurredAt: recordedAt ?? Date.now(),
       });
 
+      const successAuditDetails = {
+        source,
+        patientId,
+        consentReference: consentEvidence.reference,
+        scope: scopes,
+      } satisfies Record<string, unknown>;
+      recordAudit('orchestrator.feature_log.accepted', corr, successAuditDetails);
+      await emitAuditEvent('orchestrator.feature_log.accepted', corr, authContext?.actor ?? null, successAuditDetails);
+
       res.statusCode = 202;
       res.end('accepted');
+      setOutcome('ok');
     });
     return;
   }
@@ -851,8 +1090,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
           reservationActive = false;
         }
       };
-      type DenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
-      const deny = async (reason: DenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
+      const deny = async (reason: GateDenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
         logger.warn('zero-trust gate denied request', {
           reason,
           correlationId: corr,
@@ -894,6 +1132,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         await deny('consent_denied');
         return;
       }
+      const consentEvidence = getConsentEvidence(patientId, 'care');
+      if (!consentEvidence) {
+        await deny('consent_denied', { reason: 'consent_evidence_missing' });
+        return;
+      }
 
       res.setHeader('x-idempotency-key', idemKey);
       logger.info('idempotency.key.derived', { key: idemKey, correlationId: corr });
@@ -921,6 +1164,10 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
               analyzePortalSubmission(submission, undefined, {
                 correlationId: corr,
                 signal,
+                requestId,
+                consentReference: consentEvidence.reference,
+                actor,
+                scope,
               }),
             {
               timeoutMs: safetyGateTimeoutMs,
@@ -950,17 +1197,19 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
             await releaseReservation();
             respondError(res, 'invalid_fhir', 'FHIR validation failed', corr, setOutcome);
             return;
-          }
-          logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
-          const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
-          const envelope = createEnvelope(Topics.triage.input, tri, corr);
-          await bus.publish(envelope.topic, envelope);
+        }
+        logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
+        const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
+        const envelope = createEnvelope(Topics.triage.input, tri, corr);
+        const headers = corr ? { 'x-correlation-id': corr } : undefined;
+        await bus.publish(envelope.topic, envelope, headers);
           logger.info('published triage.input', { topic: envelope.topic, correlationId: corr });
           const successAuditDetails = {
             outcome: decision.outcome,
             patientId: tri.patientId,
             practiceId: practiceConfig.practiceId,
             topic: envelope.topic,
+            consentReference: consentEvidence.reference,
           } satisfies Record<string, unknown>;
           recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
           await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);

@@ -210,8 +210,9 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       throw new PortalNotifyValidationError(validation.errors);
     }
 
-    const headers = this.buildDlqHeaders(request.correlationId);
-    await this.bus.publish(this.dlqTopic, dlqPayload, headers);
+    const headers = this.buildDlqHeaders(request.correlationId, Topics.portal.notify);
+    const dlqEnvelope = createEnvelope(this.dlqTopic, dlqPayload, request.correlationId);
+    await this.bus.publish(dlqEnvelope.topic, dlqEnvelope, headers);
 
     logger.error('portal.notify.routed_to_dlq', {
       practiceId: request.practiceId,
@@ -223,9 +224,9 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
     });
   }
 
-  private buildDlqHeaders(correlationId: string | undefined): Record<string, string> {
+  private buildDlqHeaders(correlationId: string | undefined, originalTopic: string): Record<string, string> {
     const headers: Record<string, string> = {
-      'x-original-topic': Topics.portal.notify,
+      'x-original-topic': originalTopic,
     };
     if (correlationId) {
       headers['x-correlation-id'] = correlationId;

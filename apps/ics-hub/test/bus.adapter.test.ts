@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageBus } from '@onecare/bus';
-import { publishWithGuard, publishAutomationTasks } from '../src/adapters/bus.adapter';
+import { publishWithGuard, publishAutomationTasks, type DLQMessage } from '../src/adapters/bus.adapter';
 import { Topics } from '@onecare/events';
 import type { AutomationTaskCreation } from '../src/application/automation.rules';
 
 class FlakyBus implements MessageBus {
-  public publishes: { topic: string; payload: unknown }[] = [];
+  public publishes: { topic: string; payload: unknown; headers?: Record<string, string> }[] = [];
   constructor(private failTimes: number) {}
-  async publish<T>(topic: string, payload: T): Promise<void> {
+  async publish<T>(topic: string, payload: T, headers?: Record<string, string>): Promise<void> {
     if (topic !== Topics.broker.deadLetter && this.failTimes > 0) {
       this.failTimes -= 1;
       throw new Error('transient');
     }
-    this.publishes.push({ topic, payload });
+    this.publishes.push({ topic, payload, headers });
   }
   async subscribe() {
     return { unsubscribe: async () => {} };
@@ -20,14 +20,14 @@ class FlakyBus implements MessageBus {
 }
 
 class HangingBus implements MessageBus {
-  public publishes: { topic: string; payload: unknown }[] = [];
+  public publishes: { topic: string; payload: unknown; headers?: Record<string, string> }[] = [];
 
-  async publish<T>(topic: string, payload: T): Promise<void> {
+  async publish<T>(topic: string, payload: T, headers?: Record<string, string>): Promise<void> {
     if (topic === Topics.broker.deadLetter) {
-      this.publishes.push({ topic, payload });
+      this.publishes.push({ topic, payload, headers });
       return;
     }
-    this.publishes.push({ topic, payload });
+    this.publishes.push({ topic, payload, headers });
     await new Promise(() => { /* never resolves */ });
   }
 
@@ -49,8 +49,12 @@ describe('publishWithGuard', () => {
     await publishWithGuard(bus, 'ics.referral.ack', { ok: false }, 'cid-2', { maxRetries: 1, baseDelayMs: 1 });
     const dlq = bus.publishes.find(p => p.topic === Topics.broker.deadLetter);
     expect(dlq).toBeTruthy();
-    expect((dlq!.payload as any).originalTopic).toBe('ics.referral.ack');
-    expect((dlq!.payload as any).correlationId).toBe('cid-2');
+    const dlqEnvelope = dlq!.payload as { topic: string; correlationId?: string; payload: DLQMessage };
+    expect(dlqEnvelope.topic).toBe(Topics.broker.deadLetter);
+    expect(dlqEnvelope.correlationId).toBe('cid-2');
+    expect(dlqEnvelope.payload.originalTopic).toBe('ics.referral.ack');
+    expect(dlqEnvelope.payload.correlationId).toBe('cid-2');
+    expect(dlq!.headers?.['x-original-topic']).toBe('ics.referral.ack');
   });
 
   it('respects publish timeouts and falls back to DLQ', async () => {
@@ -58,7 +62,10 @@ describe('publishWithGuard', () => {
     await publishWithGuard(bus, 'ics.referral.ack', { ok: true }, 'cid-timeout', { timeoutMs: 5, maxRetries: 1, baseDelayMs: 1 });
     const dlq = bus.publishes.find((p) => p.topic === Topics.broker.deadLetter);
     expect(dlq).toBeTruthy();
-    expect((dlq!.payload as any).error).toBe('publish_timeout');
+    const dlqEnvelope = dlq!.payload as { topic: string; payload: DLQMessage };
+    expect(dlqEnvelope.topic).toBe(Topics.broker.deadLetter);
+    expect(dlqEnvelope.payload.error).toBe('publish_timeout');
+    expect(dlq!.headers?.['x-original-topic']).toBe('ics.referral.ack');
   });
 });
 

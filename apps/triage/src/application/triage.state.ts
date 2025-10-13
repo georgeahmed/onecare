@@ -79,6 +79,7 @@ export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | vo
 
 const dedupCache = new Map<string, DedupEntry[]>();
 const DEDUP_CACHE_LIMIT = 50;
+const DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
 
 function parseDurationToMs(raw: unknown): number {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -257,31 +258,67 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     ctx.priority = priority;
 
     const timestamp = new Date().toISOString();
-    const taskResource = buildTaskResource(ctx, priority, timestamp);
-    const reference = await createTaskResource(ctx.fhirRepository, taskResource);
+    const idempotencyKey = ctx.idempotencyKey ?? deriveTriageIdempotencyKey(ctx);
+    const ttlSeconds = resolveTriageIdempotencyTtl(ctx);
 
-    ctx.taskReference = reference;
-    ctx.taskId = reference.id;
-    ctx.taskCreatedAt = timestamp;
+    const { status } = await executeWithIdempotency({
+      store: ctx.idempotencyStore,
+      key: idempotencyKey,
+      ttlSeconds,
+      execute: async () => {
+        const taskResource = buildTaskResource(ctx, priority, timestamp);
+        const reference = await createTaskResource(ctx.fhirRepository!, taskResource);
 
-    const payload: TaskCreatedEvent = {
-      taskId: reference.id,
-      patientId: ctx.patientId,
-      priority,
-      owner: ctx.taskOwner,
-    };
-    const envelope = createEnvelope(Topics.tasks.created, payload, ctx.correlationId);
-    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
-    await ctx.bus.publish(Topics.tasks.created, envelope, headers);
-    ctx.taskEventPublished = true;
+        ctx.taskReference = reference;
+        ctx.taskId = reference.id;
+        ctx.taskCreatedAt = timestamp;
 
-    await notifyQueue(ctx, {
-      taskId: reference.id,
-      patientId: ctx.patientId,
-      priority,
-      createdAt: timestamp,
+        const payload: TaskCreatedEvent = {
+          taskId: reference.id,
+          patientId: ctx.patientId!,
+          priority,
+          owner: ctx.taskOwner,
+        };
+        const envelope = createEnvelope(Topics.tasks.created, payload, ctx.correlationId);
+        const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
+        await ctx.bus!.publish(Topics.tasks.created, envelope, headers);
+        ctx.taskEventPublished = true;
+
+        await notifyQueue(ctx, {
+          taskId: reference.id,
+          patientId: ctx.patientId!,
+          priority,
+          createdAt: timestamp,
+        });
+
+        logger.info('triage.idempotency.executed', {
+          key: idempotencyKey,
+          patientId: ctx.patientId,
+          taskId: reference.id,
+          correlationId: ctx.correlationId,
+        });
+        return true;
+      },
+      onDuplicate: () => {
+        logger.warn('triage.idempotency.duplicate', {
+          key: idempotencyKey,
+          patientId: ctx.patientId,
+          correlationId: ctx.correlationId,
+        });
+      },
+      onError: (error) => {
+        logger.error('triage.idempotency.failed', {
+          key: idempotencyKey,
+          patientId: ctx.patientId,
+          correlationId: ctx.correlationId,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        });
+      },
     });
 
+    if (status === 'skipped') {
+      return 'Notified';
+    }
     return 'Notified';
   }
 }
@@ -444,4 +481,15 @@ async function notifyQueue(ctx: TriageContext, payload: QueueNotificationPayload
 
   const queue = ctx.queueName || ctx.taskOwner || 'triage.default';
   await ctx.queueNotifier.notify(queue, payload);
+}
+
+function deriveTriageIdempotencyKey(ctx: TriageContext): string {
+  const patientId = ctx.patientId ?? 'unknown-patient';
+  const correlation = ctx.correlationId ?? ctx.id;
+  return `triage:task:${patientId}:${correlation}`;
+}
+
+function resolveTriageIdempotencyTtl(ctx: TriageContext): number {
+  const ttl = ctx.idempotencyTtlSeconds;
+  return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS;
 }

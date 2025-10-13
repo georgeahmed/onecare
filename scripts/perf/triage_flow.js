@@ -223,7 +223,8 @@ async function publishTriageInput() {
   const envelope = createEnvelope(Topics.triage.input, payload, correlationId);
   trackRequest(correlationId);
   metrics.total += 1;
-  await bus.publish(envelope.topic, envelope);
+  const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
+  await bus.publish(envelope.topic, envelope, headers);
 }
 
 function deriveFeatures(payload) {

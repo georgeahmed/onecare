@@ -6,13 +6,252 @@ export interface PortalSubmission {
     id: string;
     dob?: string;
     locale?: string;
-    [k: string]: unknown;
   };
   narrative: string;
-  attachments?: {
-    contentType: string;
-    url: string;
-    [k: string]: unknown;
-  }[];
+  /**
+   * @maxItems 10
+   */
+  attachments?:
+    | []
+    | [
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ]
+    | [
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        },
+        {
+          contentType: string;
+          url: string;
+        }
+      ];
   channel: "web" | "ivr";
 }

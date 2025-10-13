@@ -15,6 +15,7 @@ from threading import Lock
 from typing import Any, Mapping, Optional
 from uuid import uuid4
 from urllib import error as urllib_error, request as urllib_request
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -67,7 +68,19 @@ def _feature_logging_enabled() -> bool:
 def _feature_log_endpoint() -> Optional[str]:
     candidate = os.getenv(_FEATURE_LOG_ENDPOINT_ENV, "http://orchestrator:3001/feature-log")
     trimmed = candidate.strip()
-    return trimmed or None
+    if not trimmed:
+        return None
+    parsed = urlparse(trimmed)
+    if parsed.scheme not in {"http", "https"}:
+        LOGGER.debug("Ignoring feature log endpoint with invalid scheme: %s", trimmed)
+        return None
+    if not parsed.netloc:
+        LOGGER.debug("Ignoring feature log endpoint without host: %s", trimmed)
+        return None
+    if parsed.username or parsed.password:
+        LOGGER.debug("Ignoring feature log endpoint with credentials: %s", trimmed)
+        return None
+    return trimmed
 
 
 def _clamp_rate(value: Any) -> float:
@@ -101,15 +114,109 @@ def _emit_feature_log(payload: dict[str, Any]) -> None:
     request_obj = urllib_request.Request(
         endpoint,
         data=data,
-        headers={"content-type": "application/json"},
+        headers=_feature_log_headers(payload.get("correlationId")),
         method="POST",
     )
+    attempts, base_delay = _feature_log_retry_policy()
+    for attempt in range(1, attempts + 1):
+        try:
+            urllib_request.urlopen(request_obj, timeout=_FEATURE_LOG_TIMEOUT)
+            return
+        except Exception as exc:  # pragma: no cover - network guards
+            retryable = attempt < attempts and _should_retry_feature_log(exc)
+            LOGGER.debug(
+                "Feature logging request failed (attempt %s/%s, retryable=%s): %s",
+                attempt,
+                attempts,
+                retryable,
+                getattr(exc, "reason", exc),
+            )
+            if not retryable:
+                break
+            delay = _compute_retry_delay(base_delay, attempt)
+            _feature_log_sleep(delay)
+
+
+def _feature_log_headers(correlation_id: Optional[str]) -> dict[str, str]:
+    headers = {"content-type": "application/json"}
+    headers.update(_feature_log_auth_headers())
+    if correlation_id and isinstance(correlation_id, str) and correlation_id.strip():
+        headers.setdefault("x-correlation-id", correlation_id.strip())
+    return headers
+
+
+def _feature_log_auth_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    name = os.getenv("FEATURE_LOG_AUTH_HEADER_NAME", "").strip()
+    value = os.getenv("FEATURE_LOG_AUTH_HEADER_VALUE", "").strip()
+    if name and value:
+        headers[name] = value
+
+    bearer = os.getenv("FEATURE_LOG_BEARER_TOKEN") or os.getenv("FEATURE_LOG_AUTH_TOKEN")
+    api_key = os.getenv("FEATURE_LOG_API_KEY")
+    token = bearer or api_key
+    if token:
+        token = token.strip()
+        if token and all(key.lower() != "authorization" for key in headers):
+            if bearer and not token.lower().startswith("bearer "):
+                headers["Authorization"] = f"Bearer {token}"
+            elif bearer:
+                headers["Authorization"] = token
+            else:
+                headers["Authorization"] = token
+
+    extras = os.getenv("FEATURE_LOG_EXTRA_HEADERS")
+    if extras:
+        try:
+            parsed = json.loads(extras)
+            if isinstance(parsed, dict):
+                for key, extra_value in parsed.items():
+                    if isinstance(key, str) and isinstance(extra_value, str) and key.strip() and extra_value.strip():
+                        headers[key] = extra_value
+        except (TypeError, ValueError):
+            LOGGER.debug("Ignored malformed FEATURE_LOG_EXTRA_HEADERS payload")
+
+    return headers
+
+
+def _feature_log_retry_policy() -> tuple[int, float]:
+    raw_attempts = os.getenv("FEATURE_LOG_RETRY_ATTEMPTS")
     try:
-        urllib_request.urlopen(request_obj, timeout=_FEATURE_LOG_TIMEOUT)
-    except urllib_error.URLError as exc:
-        LOGGER.debug("Feature logging request failed: %s", getattr(exc, "reason", exc))
-    except Exception as exc:  # pragma: no cover - defensive logging
-        LOGGER.debug("Feature logging request errored: %s", exc)
+        attempts = int(raw_attempts) if raw_attempts is not None else 2
+    except ValueError:
+        attempts = 2
+    attempts = max(1, min(attempts, 5))
+
+    raw_base = os.getenv("FEATURE_LOG_RETRY_BASE_MS")
+    try:
+        base_ms = float(raw_base) if raw_base is not None else 150.0
+    except ValueError:
+        base_ms = 150.0
+    base_ms = max(0.0, min(base_ms, 2000.0))
+    return attempts, base_ms / 1000.0
+
+
+def _should_retry_feature_log(exc: Exception) -> bool:
+    if isinstance(exc, urllib_error.HTTPError):
+        code = getattr(exc, "code", 0)
+        return 500 <= (code or 0) < 600
+    if isinstance(exc, urllib_error.URLError):
+        return True
+    return False
+
+
+def _compute_retry_delay(base_delay: float, attempt: int) -> float:
+    if base_delay <= 0:
+        return 0.0
+    delay = base_delay * (2 ** (attempt - 1))
+    jitter = delay * 0.25 * random.random()
+    return delay + jitter
+
+
+def _feature_log_sleep(seconds: float) -> None:
+    if seconds <= 0:
+        return
+    time.sleep(seconds)
 
 
 def _log_safety_features(
