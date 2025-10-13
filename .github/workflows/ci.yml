@@ -41,6 +41,8 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test --silent
+      - name: Portal accessibility audit
+        run: npm run a11y:portal
       - name: Python tests
         run: make py-test
       - name: Platform checklist check (backend)

@@ -18,7 +18,8 @@
     "metrics:rollup": "node scripts/metrics_rollup.js",
     "metrics:quality": "node scripts/analytics_quality.js",
     "feature:backfill": "node scripts/feature_backfill.js",
-    "drift:report": "node scripts/drift_report.js"
+    "drift:report": "node scripts/drift_report.js",
+    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",

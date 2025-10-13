@@ -279,6 +279,9 @@ const SearchSlots = ({
             />
           </div>
         </fieldset>
+        <button type="submit" className="visually-hidden">
+          {intl.formatMessage({ id: 'booking.filter.apply' })}
+        </button>
       </form>
 
       {isLoading ? renderSkeletons() : null}

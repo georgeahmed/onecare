@@ -75,6 +75,7 @@ const en = {
   'booking.filter.modality.all': 'All modalities',
   'booking.filter.from': 'From date',
   'booking.filter.to': 'To date',
+  'booking.filter.apply': 'Apply filters',
   'booking.modality.phone': 'Phone consultation',
   'booking.modality.in_person': 'In-person visit',
   'booking.location.unassigned': 'Location to be confirmed',
