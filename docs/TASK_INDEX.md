@@ -485,11 +485,11 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [SRE-01.7](../team/devops-sre/tasks/SRE-01.7.md) — SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
 - [SRE-01.8](../team/devops-sre/tasks/SRE-01.8.md) — SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI
 - [SRE-01.9](../team/devops-sre/tasks/SRE-01.9.md) — SRE-01.9 — Data retention/minimization: log/event retention policies + purge tooling
-- [SRE-02.1](../team/devops-sre/tasks/SRE-02.1.md) — SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
-- [SRE-02.2](../team/devops-sre/tasks/SRE-02.2.md) — SRE-02.2 — Correlation IDs in logs + log format policy
-- [SRE-02.3](../team/devops-sre/tasks/SRE-02.3.md) — SRE-02.3 — Define SLOs (triage p95, scribe p95, uptime) docs + CI guard
-- [SRE-02.4](../team/devops-sre/tasks/SRE-02.4.md) — SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
-- [SRE-02.5](../team/devops-sre/tasks/SRE-02.5.md) — SRE-02.5 — Node OTEL init + correlation context
+- [SRE-02.1](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.1.md) — SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
+- [SRE-02.2](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.2.md) — SRE-02.2 — Correlation IDs in logs + log format policy
+- [SRE-02.3](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.3.md) — SRE-02.3 — Define SLOs (triage p95, scribe p95, uptime) docs + CI guard
+- [SRE-02.4](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.4.md) — SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
+- [SRE-02.5](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.5.md) — SRE-02.5 — Node OTEL init + correlation context
 - [SRE-02.6](../team/devops-sre/tasks/SRE-02.6.md) — SRE-02.6 — Centralized logs stack (Loki/ELK) with correlationId parsing and retention
 - [SRE-02.7](../team/devops-sre/tasks/SRE-02.7.md) — SRE-02.7 — Trace sampling policy (tail-based; error/latency bias)
 - [SRE-02.8](../team/devops-sre/tasks/SRE-02.8.md) — SRE-02.8 — Metrics pipeline hardening (cardinality limits, relabeling, histograms)

@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.9.md) | [Next](SRE-02.2.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](../SRE-01.9.md) | [Next](SRE-02.2.md)
 
 Task: SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
 
@@ -23,4 +23,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SRE-02.1' && make team-status-write
-

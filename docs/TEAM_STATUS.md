@@ -2,8 +2,6 @@ TEAM STATUS
 
 | Engineer | Status | Progress | Done/Total | Bugs | Deps |
 |---|---|---|---:|---:|---:|
-| team/backend/Completed Tasks/engineer-02.md | planned | 0% | 0/0 | 0 | 0 |
-| team/backend/Completed Tasks/engineer-05.md | planned | 0% | 0/0 | 0 | 0 |
 | team/backend/engineer-01.md | in-progress | 24% | 8/34 | 0 | 4 |
 | team/backend/engineer-02.md | in-progress | 26% | 0/0 | 0 | 3 |
 | team/backend/engineer-03.md | in-progress | 5% | 1/21 | 0 | 4 |
@@ -14,10 +12,11 @@ TEAM STATUS
 | team/data-engineering/engineer-01.md | in-progress | 35% | 0/0 | 0 | 2 |
 | team/data-engineering/engineer-02.md | in-progress | 28% | 0/0 | 0 | 2 |
 | team/devops-sre/engineer-01.md | in-progress | 35% | 0/0 | 0 | 2 |
-| team/devops-sre/engineer-02.md | in-progress | 57% | 4/7 | 0 | 2 |
-| team/frontend/engineer-01.md | planned | 0% | 0/7 | 0 | 2 |
-| team/frontend/engineer-02.md | planned | 0% | 0/5 | 0 | 2 |
-| team/frontend/engineer-03.md | planned | 0% | 0/5 | 0 | 2 |
+| team/devops-sre/engineer-02.md | in-progress | 44% | 0/0 | 0 | 2 |
+| team/frontend/Completed Tasks/engineer-03.md | planned | 0% | 0/0 | 0 | 0 |
+| team/frontend/engineer-01.md | stable | 100% | 7/7 | 0 | 2 |
+| team/frontend/engineer-02.md | in-progress (6/17 tasks complete) | 35% | 0/0 | 0 | 2 |
+| team/frontend/engineer-03.md | in progress | 35% | 0/0 | 0 | 2 |
 | team/integrations/engineer-01.md | in-progress | 57% | 4/7 | 0 | 3 |
 | team/integrations/engineer-02.md | in-progress | 26% | 5/19 | 0 | 2 |
 | team/integrations/engineer-03.md | planned | 0% | 0/16 | 0 | 3 |

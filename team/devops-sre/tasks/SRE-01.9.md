@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.8.md) | [Next](SRE-02.1.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-01.8.md) | [Next](../Completed Tasks/SRE-02.1.md)
 
 Task: SRE-01.9 — Data retention/minimization: log/event retention policies + purge tooling
 
@@ -23,4 +23,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.9' && make team-status-write
-

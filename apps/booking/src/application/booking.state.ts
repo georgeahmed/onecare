@@ -1,12 +1,8 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
-import {
-  mapSlotsToView,
-  type SlotView,
-  GpConnectClientError,
-} from '../adapters/gpconnect.client';
+import { mapSlotsToView, type SlotView, GpConnectClientError } from '../adapters/gpconnect.client';
 import type { GpConnectClient, SearchSlotsParams } from '../adapters/gpconnect.client';
-import type { EnhancedAccessPolicy, RejectedSlot } from './enhancedAccess';
+import type { EnhancedAccessPolicy, RejectedSlot as EnhancedAccessRejectedSlot } from './enhancedAccess';
 import { applyEnhancedAccessFilters } from './enhancedAccess';
 import type { FhirRepository } from '@onecare/ports';
 import type { QueueNotifier } from '@onecare/ports';
@@ -15,7 +11,19 @@ import { executeWithIdempotency } from '@onecare/ports';
 import { logger, ensureTracing } from '@onecare/observability';
 import type { MessageBus } from '@onecare/bus';
 import { withMessageGuards } from '@onecare/bus';
-import { Topics, createEnvelope, type AppointmentCreated } from '@onecare/events';
+import {
+  Topics,
+  createEnvelope,
+  type AppointmentCreated,
+  type BookingSearchRequest,
+  type BookingSearchResponse,
+  type RejectedSlot as BookingRejectedSlot,
+} from '@onecare/events';
+import {
+  validateAppointmentCreatedEvent,
+  validateBookingSearchRequest,
+  validateBookingSearchResponse,
+} from './contracts';
 
 export interface BookingAuditPublisher {
   emit(event: { type: string; payload: Record<string, unknown> }): Promise<void>;
@@ -25,6 +33,7 @@ export interface BookingContext extends MachineContext {
   client: GpConnectClient;
   searchParams?: Record<string, unknown>;
   slots?: SlotView[];
+  lastSearchResponse?: BookingSearchResponse;
   selectedSlot?: SlotView;
   appointmentConfirmation?: { appointmentId: string; slotId: string };
   patientId?: string;
@@ -99,7 +108,12 @@ export class SearchState extends BaseState<BookingContext, BookingEvent> {
 }
 
 function buildSearchRequest(raw: Record<string, unknown> | undefined): SearchSlotsParams {
-  const normalized = normalizeSearchParams(raw);
+  const candidate = raw ?? {};
+  const validation = validateBookingSearchRequest(candidate);
+  if (!validation.ok) {
+    throw new BookingSearchError('booking.search.invalid_params', validation.errors);
+  }
+  const normalized = normalizeSearchParams(validation.value);
   return {
     organisationId: normalized.organisationId,
     serviceType: normalized.serviceType,
@@ -109,45 +123,22 @@ function buildSearchRequest(raw: Record<string, unknown> | undefined): SearchSlo
 }
 
 function applySlotsToContext(ctx: BookingContext, slots: SlotView[]): void {
-  if (ctx.enhancedAccessPolicy) {
-    const result = applyEnhancedAccessFilters(slots, ctx.enhancedAccessPolicy);
-    ctx.slots = result.accepted;
-    ctx.rejectedSlots = result.rejected;
-  } else {
-    ctx.slots = slots;
-    ctx.rejectedSlots = [];
-  }
+  const { response, outcome } = buildValidatedSearchResponse(slots, ctx.enhancedAccessPolicy);
+  ctx.slots = outcome.accepted.map((slot) => ({ ...slot }));
+  ctx.rejectedSlots = outcome.rejected.map((entry) => ({
+    slot: { ...entry.slot },
+    reasons: [...entry.reasons],
+  }));
+  ctx.lastSearchResponse = response;
 }
 
-function normalizeSearchParams(raw: Record<string, unknown> | undefined): NormalizedSearchParams {
-  const source = raw ?? {};
-  const serviceType = readString(source, ['serviceType', 'service_type']);
-  const windowStart = readString(source, ['windowStart', 'window_start']);
-  const windowEnd = readString(source, ['windowEnd', 'window_end']);
-  if (!serviceType || !windowStart || !windowEnd) {
-    throw new BookingSearchError('booking.search.invalid_params');
-  }
-  const organisation = readString(source, ['organisationId', 'organisation_id', 'location']);
-  if (!organisation) {
-    throw new BookingSearchError('booking.search.invalid_params');
-  }
+function normalizeSearchParams(request: BookingSearchRequest): NormalizedSearchParams {
   return {
-    organisationId: organisation,
-    serviceType,
-    windowStart,
-    windowEnd,
+    organisationId: request.location,
+    serviceType: request.serviceType,
+    windowStart: request.windowStart,
+    windowEnd: request.windowEnd,
   };
-}
-
-function readString(source: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed.length > 0) return trimmed;
-    }
-  }
-  return undefined;
 }
 
 function mapSearchError(error: unknown): BookingSearchError {

@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/features/registry.json",
+  "title": "FeatureRegistry",
+  "description": "Authoritative registry of feature entities, join keys, and materialisation rules.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the registry metadata.",
+      "pattern": "^v[0-9]+(\\.[0-9]+){0,2}$"
+    },
+    "entities": {
+      "type": "array",
+      "description": "Entity definitions used as join keys for feature sets.",
+      "items": { "$ref": "#/$defs/entity" },
+      "minItems": 1
+    },
+    "featureSets": {
+      "type": "array",
+      "description": "Registered feature sets and their schemas.",
+      "items": { "$ref": "#/$defs/featureSet" },
+      "minItems": 1
+    }
+  },
+  "required": ["version", "entities", "featureSets"],
+  "additionalProperties": false,
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-zA-Z0-9]*$",
+          "description": "CamelCase entity identifier (e.g., patient, triageCase)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Summary of the entity and how it is derived."
+        },
+        "keys": {
+          "type": "array",
+          "description": "Primary join keys (ordered by precedence).",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-zA-Z0-9]*$"
+          },
+          "minItems": 1
+        },
+        "surrogateKeys": {
+          "type": "array",
+          "description": "Optional surrogate identifiers stored alongside natural keys.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-zA-Z0-9]*$"
+          },
+          "default": []
+        },
+        "piiClassification": {
+          "type": "string",
+          "enum": ["none", "limited", "phi"],
+          "description": "PII/PHI classification for the entity identifiers."
+        }
+      },
+      "required": ["name", "description", "keys", "piiClassification"],
+      "additionalProperties": false
+    },
+    "featureSet": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Kebab-case feature set identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable title."
+        },
+        "entity": {
+          "type": "string",
+          "description": "Entity name (from entities[].name) this feature set is keyed on."
+        },
+        "schemaId": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical schema identifier for the payload."
+        },
+        "description": {
+          "type": "string",
+          "description": "Purpose of the feature set and typical consumers."
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["phi", "pii", "deidentified"],
+          "description": "Data classification for payload fields."
+        },
+        "owners": {
+          "type": "array",
+          "description": "Owning teams or service groups.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "sources": {
+          "type": "array",
+          "description": "Upstream systems or jobs producing this feature set.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "freshness": {
+          "type": "object",
+          "description": "Freshness SLO and expiry configuration.",
+          "properties": {
+            "slaMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum tolerated age (minutes) for the latest feature snapshot."
+            },
+            "expiryMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Hard expiry after which the feature snapshot must be recomputed."
+            }
+          },
+          "required": ["slaMinutes"],
+          "additionalProperties": false
+        },
+        "materialization": {
+          "type": "object",
+          "description": "Offline/online materialisation strategy for this feature set.",
+          "properties": {
+            "offline": {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "enum": ["parquet", "delta"],
+                  "description": "Primary file/storage format."
+                },
+                "partitioning": {
+                  "type": "array",
+                  "description": "Partition columns used for offline storage.",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "pitTable": {
+                  "type": "string",
+                  "description": "Name of the point-in-time table/view."
+                }
+              },
+              "required": ["format", "partitioning", "pitTable"],
+              "additionalProperties": false
+            },
+            "online": {
+              "type": "object",
+              "properties": {
+                "store": {
+                  "type": "string",
+                  "description": "Target online store implementation (e.g., redis, memory)."
+                },
+                "ttlSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Default TTL for online entries in seconds."
+                }
+              },
+              "required": ["store"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["offline"],
+          "additionalProperties": false
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Search or governance tags."
+        }
+      },
+      "required": [
+        "name",
+        "title",
+        "entity",
+        "schemaId",
+        "description",
+        "classification",
+        "owners",
+        "sources",
+        "freshness",
+        "materialization"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "version": "v1.0.0",
+      "entities": [
+        {
+          "name": "patient",
+          "description": "Tenant-scoped hashed patient identifier used across clinical workflows.",
+          "keys": ["patientId"],
+          "piiClassification": "phi"
+        }
+      ],
+      "featureSets": [
+        {
+          "name": "triage-core",
+          "title": "Triage Core Features",
+          "entity": "patient",
+          "schemaId": "https://onecare/schemas/features/triage-core.json",
+          "description": "Composite triage prioritisation signals.",
+          "classification": "phi",
+          "owners": ["team:data-engineering", "team:triage"],
+          "sources": ["service:triage", "job:feature_backfill"],
+          "freshness": { "slaMinutes": 15, "expiryMinutes": 30 },
+          "materialization": {
+            "offline": {
+              "format": "delta",
+              "partitioning": ["featureSet", "eventDate"],
+              "pitTable": "feature_pit.triage_core"
+            },
+            "online": {
+              "store": "redis",
+              "ttlSeconds": 900
+            }
+          },
+          "tags": ["triage", "core"]
+        }
+      ]
+    }
+  ]
+}

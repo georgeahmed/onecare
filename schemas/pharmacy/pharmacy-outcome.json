@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/pharmacy/pharmacy-outcome.json",
+  "title": "PharmacyOutcome",
+  "type": "object",
+  "properties": {
+    "serviceRequestId": { "type": "string", "minLength": 1 },
+    "organisationId": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["accepted", "queued", "rejected"]
+    },
+    "referralReference": { "type": "string", "minLength": 1 },
+    "code": { "type": "string", "minLength": 1 },
+    "message": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "condition": { "type": "string", "minLength": 1 },
+    "severity": { "type": "string", "minLength": 1 },
+    "slot": {
+      "type": ["object", "null"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      },
+      "required": ["start", "end"],
+      "additionalProperties": false
+    },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "escalated": { "type": "boolean" }
+  },
+  "required": ["serviceRequestId", "organisationId", "status", "referralReference", "recordedAt"],
+  "additionalProperties": false
+}

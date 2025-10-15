@@ -7,6 +7,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --pretty"
   },
+  "dependencies": {
+    "@onecare/domain": "0.1.0",
+    "@onecare/events": "0.1.0"
+  },
   "overrides": {
     "@onecare/events": "file:packages/events"
   },

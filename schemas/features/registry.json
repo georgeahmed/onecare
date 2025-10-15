@@ -1,0 +1,74 @@
+{
+  "$schema": "https://onecare/schemas/features/registry.schema.json",
+  "$id": "https://onecare/schemas/features/registry.json",
+  "version": "v1.0.0",
+  "entities": [
+    {
+      "name": "patient",
+      "description": "Tenant-scoped hashed patient identifier used across clinical workflows.",
+      "keys": ["patientId"],
+      "surrogateKeys": ["practiceId"],
+      "piiClassification": "phi"
+    },
+    {
+      "name": "triageSubmission",
+      "description": "Unique triage submission identifier scoped to a patient narrative or encounter.",
+      "keys": ["submissionId"],
+      "piiClassification": "phi"
+    }
+  ],
+  "featureSets": [
+    {
+      "name": "triage-core",
+      "title": "Triage Core Features",
+      "entity": "patient",
+      "schemaId": "https://onecare/schemas/features/triage-core.json",
+      "description": "Primary triage prioritisation signals aggregated from intake context, ML models, and operational metrics.",
+      "classification": "phi",
+      "owners": ["team:data-engineering", "team:triage"],
+      "sources": ["service:triage", "job:feature_backfill"],
+      "freshness": {
+        "slaMinutes": 15,
+        "expiryMinutes": 30
+      },
+      "materialization": {
+        "offline": {
+          "format": "delta",
+          "partitioning": ["featureSet", "eventDate", "entityBucket"],
+          "pitTable": "feature_pit.triage_core"
+        },
+        "online": {
+          "store": "redis",
+          "ttlSeconds": 900
+        }
+      },
+      "tags": ["triage", "core", "prioritisation"]
+    },
+    {
+      "name": "acuity-signal",
+      "title": "Acuity Signal Features",
+      "entity": "patient",
+      "schemaId": "https://onecare/schemas/features/acuity-signal.json",
+      "description": "Safety gate ensemble outputs and attribution artefacts used for acuity monitoring and safety escalation.",
+      "classification": "phi",
+      "owners": ["team:data-engineering", "team:safety-gate"],
+      "sources": ["service:safety-gate"],
+      "freshness": {
+        "slaMinutes": 5,
+        "expiryMinutes": 10
+      },
+      "materialization": {
+        "offline": {
+          "format": "delta",
+          "partitioning": ["featureSet", "eventDate", "entityBucket"],
+          "pitTable": "feature_pit.acuity_signal"
+        },
+        "online": {
+          "store": "redis",
+          "ttlSeconds": 600
+        }
+      },
+      "tags": ["safety", "acuity"]
+    }
+  ]
+}

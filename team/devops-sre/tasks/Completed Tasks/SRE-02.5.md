@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.4.md) | [Next](SRE-02.6.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.4.md) | [Next](../SRE-02.6.md)
 
 Task: SRE-02.5 — Node OTEL init + correlation context
 
@@ -22,4 +22,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SRE-02.5' && make team-status-write
-
