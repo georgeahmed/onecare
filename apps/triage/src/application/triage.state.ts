@@ -12,9 +12,12 @@ import type {
 import { createTaskResource, executeWithIdempotency } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import { withMessageGuards } from '@onecare/bus';
-import { Topics, createEnvelope } from '@onecare/events';
+import { Topics, createEnvelope, type TriageDecision, type TriageInput } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
 import { extractFeatures } from './features';
+import { createDedupStore, type DedupEntry } from './dedup';
+import type { TextNormalizeOptions } from './text-normalize';
+import { assertValidTriageDecision, assertValidTriageInput } from './contracts';
 import { logFeatureVector } from '../featuresHook';
 
 export interface TriageContext extends MachineContext {
@@ -48,6 +51,9 @@ export interface TriageContext extends MachineContext {
   idempotencyStore?: IdempotencyStore;
   idempotencyKey?: string;
   idempotencyTtlSeconds?: number;
+  triageInput?: TriageInput;
+  decision?: TriageDecision;
+  decisionReasons?: string[];
 }
 
 export interface TriageEvent extends MachineEvent {
@@ -61,11 +67,6 @@ interface TaskCreatedEvent {
   patientId: string;
   priority: PriorityCode;
   owner?: string;
-}
-
-interface DedupEntry {
-  narrative: string;
-  timestamp: number;
 }
 
 export interface DuplicateDetails {
@@ -82,9 +83,9 @@ export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | vo
 
 ensureTracing('triage');
 
-const dedupCache = new Map<string, DedupEntry[]>();
 const TRIAGE_ALLOWED_TOPICS = new Set<string>([Topics.tasks.created]);
 const DEDUP_CACHE_LIMIT = 50;
+const dedupStore = createDedupStore({ maxEntriesPerPatient: DEDUP_CACHE_LIMIT });
 const DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
 
 function parseDurationToMs(raw: unknown): number {
@@ -119,56 +120,40 @@ function getSimilarityThreshold(config: ResolvedConfig): number {
   return 1;
 }
 
-function normalizeTokens(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/\W+/)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 0),
-  );
-}
-
-function similarity(a: string, b: string): number {
-  const tokensA = normalizeTokens(a);
-  const tokensB = normalizeTokens(b);
-  if (tokensA.size === 0 && tokensB.size === 0) return 1;
-  let intersection = 0;
-  for (const token of tokensA) {
-    if (tokensB.has(token)) {
-      intersection += 1;
-    }
-  }
-  const union = tokensA.size + tokensB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
 function getNow(ctx: TriageContext): number {
   return typeof ctx.now === 'number' ? ctx.now : Date.now();
 }
 
 export function resetDedupCache(): void {
-  dedupCache.clear();
+  dedupStore.reset();
 }
 
-function pruneDedupCache(windowMs: number, now: number): void {
-  if (windowMs <= 0) {
-    dedupCache.clear();
-    return;
+function getDedupShingleSize(config: ResolvedConfig): number {
+  const raw = (config.triage as { dedup_shingle_size?: unknown } | undefined)?.dedup_shingle_size;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const value = Math.floor(raw);
+    return value >= 2 ? value : 2;
   }
-  for (const [patientId, entries] of dedupCache.entries()) {
-    const fresh = entries.filter((entry) => now - entry.timestamp <= windowMs);
-    if (fresh.length === 0) {
-      dedupCache.delete(patientId);
-    } else {
-      dedupCache.set(patientId, fresh);
-    }
-  }
+  return 3;
 }
 
-function trimEntries(entries: DedupEntry[], limit: number): DedupEntry[] {
-  if (entries.length <= limit) return entries;
-  return entries.slice(entries.length - limit);
+function getDedupTextOptions(config: ResolvedConfig): TextNormalizeOptions | undefined {
+  const raw = (config.triage as { dedup_normalization?: Record<string, unknown> } | undefined)?.dedup_normalization;
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const options: TextNormalizeOptions = {};
+  if (Array.isArray(raw.stopwords)) {
+    options.stopwords = raw.stopwords.filter((value): value is string => typeof value === 'string');
+  }
+  if (typeof raw.apply_stemming === 'boolean') {
+    options.applyStemming = raw.apply_stemming;
+  }
+  if (typeof raw.min_token_length === 'number' && Number.isFinite(raw.min_token_length)) {
+    const coerced = Math.floor(raw.min_token_length);
+    options.minTokenLength = coerced > 0 ? coerced : 1;
+  }
+  return options;
 }
 
 export class IntakeState extends BaseState<TriageContext, TriageEvent> {
@@ -177,43 +162,59 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
   }
 
   async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
+    const fallbackFeatures =
+      ctx.rawFeatures ??
+      (ctx.features
+        ? Object.fromEntries(
+            Object.entries(ctx.features).filter(([, value]) => value !== undefined),
+          )
+        : undefined);
+
+    const inputPayload: TriageInput =
+      ctx.triageInput ??
+      ({
+        patientId: ctx.patientId ?? '',
+        narrative: ctx.narrative ?? '',
+        ...(fallbackFeatures ? { features: fallbackFeatures } : {}),
+      } as TriageInput);
+
+    assertValidTriageInput(inputPayload);
+    ctx.triageInput = inputPayload;
+    ctx.patientId = inputPayload.patientId;
+    ctx.narrative = inputPayload.narrative;
+    ctx.rawFeatures =
+      inputPayload.features && typeof inputPayload.features === 'object'
+        ? (inputPayload.features as Record<string, unknown>)
+        : undefined;
+
     const windowMs = getDedupWindowMs(ctx.config);
     const threshold = getSimilarityThreshold(ctx.config);
     const patientId = ctx.patientId?.trim();
     const narrative = ctx.narrative?.trim();
     const now = getNow(ctx);
 
-    pruneDedupCache(windowMs, now);
+    const decision = dedupStore.evaluate({
+      patientId,
+      narrative,
+      now,
+      windowMs,
+      threshold,
+      shingleSize: getDedupShingleSize(ctx.config),
+      textOptions: getDedupTextOptions(ctx.config),
+    });
 
-    let duplicateSimilarity: number | undefined;
-    if (windowMs > 0 && threshold > 0 && patientId && narrative) {
-      const entries = dedupCache.get(patientId) ?? [];
-      const freshEntries = entries.filter((entry) => now - entry.timestamp <= windowMs);
-      const duplicateEntry = freshEntries.find((entry) => {
-        const score = similarity(entry.narrative, narrative);
-        if (score >= threshold) {
-          duplicateSimilarity = score;
-          return true;
-        }
-        return false;
-      });
+    ctx.duplicateWindowMs = windowMs > 0 ? windowMs : undefined;
+    ctx.duplicateSimilarity = decision.similarity;
+    ctx.duplicateReference = decision.reference;
 
-      if (duplicateEntry) {
-        ctx.isDuplicate = true;
-        ctx.duplicateDetectedAt = now;
-        ctx.duplicateWindowMs = windowMs;
-        ctx.duplicateSimilarity = duplicateSimilarity;
-        ctx.duplicateReference = duplicateEntry;
-      }
-
-      const updatedEntries = trimEntries([...freshEntries, { narrative, timestamp: now }], DEDUP_CACHE_LIMIT);
-      dedupCache.set(patientId, updatedEntries);
-    }
-
-    if (ctx.isDuplicate) {
+    if (decision.isDuplicate) {
+      ctx.isDuplicate = true;
+      ctx.duplicateDetectedAt = now;
       return 'Duplicate';
     }
 
+    ctx.isDuplicate = false;
+    ctx.duplicateDetectedAt = undefined;
     const normalizedFeatures = extractFeatures(ctx.rawFeatures ?? ctx.features ?? {}, ctx.config);
     ctx.features = normalizedFeatures;
     ctx.score = computeTriageScore(ctx.config, normalizedFeatures);
@@ -351,11 +352,11 @@ export class CompletedState extends BaseState<TriageContext, TriageEvent> {
 }
 
 export function getDedupCacheSizeForTest(): number {
-  return dedupCache.size;
+  return dedupStore.size();
 }
 
 export function getDedupCacheEntryCountForTest(patientId: string): number {
-  return dedupCache.get(patientId)?.length ?? 0;
+  return dedupStore.count(patientId);
 }
 
 export { DEDUP_CACHE_LIMIT as DEDUP_CACHE_LIMIT_FOR_TEST };

@@ -352,7 +352,7 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-01.8](../team/data-engineering/tasks/Completed%20Tasks/DE-01.8.md) — DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
 - [DE-01.9](../team/data-engineering/tasks/DE-01.9.md) — DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)
 - [DE-02.1](../team/data-engineering/Completed%20Tasks/DE-02.1.md) — DE-02.1 — Define feature schemas (JSON) + docs
-- [DE-02.10](../team/data-engineering/tasks/DE-02.10.md) — DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ
+- [DE-02.10](../team/data-engineering/Completed%20Tasks/DE-02.10.md) — DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ
 - [DE-02.11](../team/data-engineering/tasks/DE-02.11.md) — DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization
 - [DE-02.12](../team/data-engineering/tasks/DE-02.12.md) — DE-02.12 — Data quality & freshness (constraints, SLI, alerts) and quarantine
 - [DE-02.13](../team/data-engineering/tasks/DE-02.13.md) — DE-02.13 — Privacy & governance (PII minimization, IAM, encryption, audit logs)
@@ -365,10 +365,10 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-02.3](../team/data-engineering/Completed%20Tasks/DE-02.3.md) — DE-02.3 — Backfill job script from historical events
 - [DE-02.4](../team/data-engineering/Completed%20Tasks/DE-02.4.md) — DE-02.4 — Retention + compaction job (config-driven)
 - [DE-02.5](../team/data-engineering/Completed%20Tasks/DE-02.5.md) — DE-02.5 — Sample queries/reports for ML teams
-- [DE-02.6](../team/data-engineering/tasks/DE-02.6.md) — DE-02.6 — Feature registry: entities, join keys, schema versioning (codegen + validators)
-- [DE-02.7](../team/data-engineering/tasks/DE-02.7.md) — DE-02.7 — Offline store layout (Parquet/Delta): partitioning, PIT tables, schema evolution
-- [DE-02.8](../team/data-engineering/tasks/DE-02.8.md) — DE-02.8 — Online store adapter (memory/Redis) with TTL, upsert semantics, health/readiness
-- [DE-02.9](../team/data-engineering/tasks/DE-02.9.md) — DE-02.9 — Point‑in‑time join library (leakage‑safe training sets) + tests
+- [DE-02.6](../team/data-engineering/Completed%20Tasks/DE-02.6.md) — DE-02.6 — Feature registry: entities, join keys, schema versioning (codegen + validators)
+- [DE-02.7](../team/data-engineering/Completed%20Tasks/DE-02.7.md) — DE-02.7 — Offline store layout (Parquet/Delta): partitioning, PIT tables, schema evolution
+- [DE-02.8](../team/data-engineering/Completed%20Tasks/DE-02.8.md) — DE-02.8 — Online store adapter (memory/Redis) with TTL, upsert semantics, health/readiness
+- [DE-02.9](../team/data-engineering/Completed%20Tasks/DE-02.9.md) — DE-02.9 — Point‑in‑time join library (leakage‑safe training sets) + tests
 
 ## qa-automation
 - [QA-01.1](../team/qa-automation/tasks/QA-01.1.md) — QA-01.1 — Schema validation harness for TS events (Ajv)
@@ -463,11 +463,11 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [FE-03.9](../team/frontend/tasks/FE-03.9.md) — FE-03.9 — Locale date/number/timezone formatting
 
 ## devops-sre
-- [SEC-01.3](../team/devops-sre/tasks/SEC-01.3.md) — SEC-01.3 — CSP baseline and security headers policy
-- [SEC-01.4](../team/devops-sre/tasks/SEC-01.4.md) — SEC-01.4 — Dependency scanning gates and license policy
-- [SEC-01.5](../team/devops-sre/tasks/SEC-01.5.md) — SEC-01.5 — Secrets scanning in CI and pre-commit
-- [SEC-01.6](../team/devops-sre/tasks/SEC-01.6.md) — SEC-01.6 — Egress allowlist enforcement and SSRF guard
-- [SEC-01.7](../team/devops-sre/tasks/SEC-01.7.md) — SEC-01.7 — Pen-test checklist and hardening backlog
+- [SEC-01.3](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.3.md) — SEC-01.3 — CSP baseline and security headers policy
+- [SEC-01.4](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.4.md) — SEC-01.4 — Dependency scanning gates and license policy
+- [SEC-01.5](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.5.md) — SEC-01.5 — Secrets scanning in CI and pre-commit
+- [SEC-01.6](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.6.md) — SEC-01.6 — Egress allowlist enforcement and SSRF guard
+- [SEC-01.7](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.7.md) — SEC-01.7 — Pen-test checklist and hardening backlog
 - [SRE-01.1](../team/devops-sre/tasks/SRE-01.1.md) — SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
 - [SRE-01.10](../team/devops-sre/tasks/SRE-01.10.md) — SRE-01.10 — Observability stack: OTEL, Prometheus/Grafana, logs (correlationId)
 - [SRE-01.11](../team/devops-sre/tasks/SRE-01.11.md) — SRE-01.11 — SLOs & alerting (latency p95, error rates, DLQ growth, readiness flaps)
@@ -490,10 +490,10 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [SRE-02.3](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.3.md) — SRE-02.3 — Define SLOs (triage p95, scribe p95, uptime) docs + CI guard
 - [SRE-02.4](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.4.md) — SRE-02.4 — Alerts templates for triage latency breach, scribe backlog
 - [SRE-02.5](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.5.md) — SRE-02.5 — Node OTEL init + correlation context
-- [SRE-02.6](../team/devops-sre/tasks/SRE-02.6.md) — SRE-02.6 — Centralized logs stack (Loki/ELK) with correlationId parsing and retention
-- [SRE-02.7](../team/devops-sre/tasks/SRE-02.7.md) — SRE-02.7 — Trace sampling policy (tail-based; error/latency bias)
-- [SRE-02.8](../team/devops-sre/tasks/SRE-02.8.md) — SRE-02.8 — Metrics pipeline hardening (cardinality limits, relabeling, histograms)
-- [SRE-02.9](../team/devops-sre/tasks/SRE-02.9.md) — SRE-02.9 — Alert hygiene (dedupe, silence windows, runbook links) and on-call guide
+- [SRE-02.6](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.6.md) — SRE-02.6 — Centralized logs stack (Loki/ELK) with correlationId parsing and retention
+- [SRE-02.7](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.7.md) — SRE-02.7 — Trace sampling policy (tail-based; error/latency bias)
+- [SRE-02.8](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.8.md) — SRE-02.8 — Metrics pipeline hardening (cardinality limits, relabeling, histograms)
+- [SRE-02.9](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.9.md) — SRE-02.9 — Alert hygiene (dedupe, silence windows, runbook links) and on-call guide
 
 ## security
 - [SEC-01.1](../team/security/tasks/SEC-01.1.md) — SEC-01.1 — Logging redaction utility

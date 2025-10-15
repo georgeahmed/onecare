@@ -68,7 +68,7 @@ describe('BufferedAuditLedger', () => {
     });
 
     const ledger = getAuditLedger();
-    await ledger.write(createAuditEvent('test.full.1'));
+    ledger.write(createAuditEvent('test.full.1')).catch(() => {});
     await ledger.write(createAuditEvent('test.full.2'));
 
     await flushAuditLedgerForTest();

@@ -17,10 +17,13 @@
     "test": "node scripts/run-vitest.js",
     "metrics:rollup": "node scripts/metrics_rollup.js",
     "metrics:quality": "node scripts/analytics_quality.js",
+    "analytics:quarantine:export": "node scripts/analytics_quarantine_export.js",
     "feature:backfill": "node scripts/feature_backfill.js",
     "feature:ingest": "node scripts/feature_store/ingest_stream.js",
     "drift:report": "node scripts/drift_report.js",
-    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci",
+    "a11y:portal": "npx tsx apps/portal/scripts/a11y-ci.ts",
+    "i18n:portal": "npx tsx apps/portal/scripts/i18n/extract.ts",
+    "i18n:portal:check": "npx tsx apps/portal/scripts/i18n/extract.ts --check",
     "smoke:nats": "node scripts/smoke/nats-guard-smoke.js"
   },
   "devDependencies": {

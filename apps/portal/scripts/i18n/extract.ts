@@ -15,7 +15,7 @@ type LocaleFile = {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const OUTPUT_DIR = resolve(__dirname, '..', 'locales');
+const OUTPUT_DIR = resolve(__dirname, '..', '..', 'locales');
 
 const baseLocales: LocaleFile[] = [
   { id: 'en', messages: en },
@@ -48,10 +48,31 @@ const run = async (): Promise<void> => {
 
   const locales: LocaleFile[] = [...baseLocales, pseudoLocale];
   const mismatches: string[] = [];
+  const englishKeys = new Set(Object.keys(en));
 
   for (const locale of locales) {
     const sorted = sortMessages(locale.messages);
     const targetPath = resolve(OUTPUT_DIR, `${locale.id}.json`);
+
+    if (locale.id !== 'en' && locale.id !== 'pseudo') {
+      const localeKeys = new Set(Object.keys(sorted));
+      const missing = Array.from(englishKeys).filter((key) => !localeKeys.has(key));
+      const extras = Array.from(localeKeys).filter((key) => !englishKeys.has(key));
+      if (missing.length > 0 || extras.length > 0) {
+        const summaryParts = [] as string[];
+        if (missing.length > 0) {
+          summaryParts.push(`missing keys: ${missing.join(', ')}`);
+        }
+        if (extras.length > 0) {
+          summaryParts.push(`unexpected keys: ${extras.join(', ')}`);
+        }
+        console.warn(`⚠ Locale ${locale.id} has ${summaryParts.join('; ')}`);
+        mismatches.push(`${locale.id}: ${summaryParts.join('; ')}`);
+        if (checkMode) {
+          continue;
+        }
+      }
+    }
 
     if (checkMode) {
       try {
@@ -72,8 +93,8 @@ const run = async (): Promise<void> => {
   }
 
   if (checkMode && mismatches.length > 0) {
-    const summary = mismatches.join(', ');
-    throw new Error(`Locale message artifacts out of date: ${summary}`);
+    const summary = mismatches.join('; ');
+    throw new Error(`Locale validation failed: ${summary}`);
   }
 };
 
@@ -81,4 +102,3 @@ run().catch((error) => {
   console.error('Failed to extract locale messages:', error);
   process.exitCode = 1;
 });
-

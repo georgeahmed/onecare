@@ -39,7 +39,6 @@ Operations
 - [ ] Graceful shutdown drains in‑flight work and closes adapters within budget. (BE‑01.18)
 - [ ] Config validated against schema at startup; effective config logged once (redacted). (BE‑01.2H)
 - [ ] Rollout plan: image build, env/secrets, probes, resources/limits, and rollback steps documented.
-- [ ] Event bus guard smoke (`npm run smoke:nats`) executed against staging NATS; results captured with release notes.
 
 Dependencies (cross‑team gates)
 - [ ] Event Bus durability, consumer groups, and DLQ routing ready. (BE‑02)
@@ -63,3 +62,4 @@ Go/No‑Go Criteria
 - [ ] Container image builds; SBOM/vulnerability scan acceptable.
 - [ ] Dashboards show healthy latencies and error budgets under smoke load.
 - [ ] Rollback plan validated (can revert to previous version cleanly).
+

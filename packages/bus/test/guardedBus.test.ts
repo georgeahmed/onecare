@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MemoryBus } from '../src/memoryBus';
 import { withMessageGuards } from '../src/guardedBus';
+import type { IdempotencyStore } from '@onecare/ports';
 
 function buildEnvelope<T>(topic: string, payload: T, correlationId?: string, id?: string) {
   return {
@@ -59,5 +60,41 @@ describe('withMessageGuards', () => {
     await expect(async () => {
       await bus.publish('demo.topic', envelope, { 'x-message-id': 'env-other' });
     }).rejects.toThrow(/message_id_mismatch/);
+  });
+
+  it('skips duplicate deliveries when idempotency store present', async () => {
+    class SimpleIdempotencyStore implements IdempotencyStore {
+      private readonly keys = new Set<string>();
+      async reserve(key: string, _ttlSeconds: number): Promise<'reserved' | 'exists'> {
+        if (this.keys.has(key)) {
+          return 'exists';
+        }
+        this.keys.add(key);
+        return 'reserved';
+      }
+      async exists(key: string): Promise<boolean> {
+        return this.keys.has(key);
+      }
+      async put(key: string, _ttlSeconds: number): Promise<void> {
+        this.keys.add(key);
+      }
+      async delete(key: string): Promise<void> {
+        this.keys.delete(key);
+      }
+    }
+
+    const store = new SimpleIdempotencyStore();
+    const bus = withMessageGuards(new MemoryBus(), { allowedTopics: ['demo.topic'], idempotencyStore: store });
+    const handler = vi.fn();
+
+    await bus.subscribe('demo.topic', async (message) => {
+      handler(message);
+    });
+
+    const envelope = buildEnvelope('demo.topic', { ok: true }, 'corr-dup', 'dup-key');
+    await bus.publish('demo.topic', envelope);
+    await bus.publish('demo.topic', envelope);
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

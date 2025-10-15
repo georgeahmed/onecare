@@ -15,6 +15,13 @@ Data Sources
   - `numericCount` (subset of `count` where `value` parsed as a number)
   - `p95` (95th percentile across numeric values; `null` if insufficient numeric data)
   - `generatedAt` (ISO timestamp when the rollup was produced)
+- **Runtime ingest metrics** — The TypeScript consumer emits counters/histograms (see `apps/analytics/src/consumer.ts`):
+  - `analytics.ingest.ok` — Successful writes (attributes: `metricName`, `attempt`, `duplicate`)
+  - `analytics.ingest.error` — Failures after retries (attributes include `reason`)
+  - `analytics.ingest.retry` — Retry attempts (attributes: `metricName`, `attempt`)
+  - `analytics.ingest.dlq` — Messages routed to DLQ (attributes mirror error counter)
+  - `analytics.ingest.lag_ms` — Histogram of clock skew between payload timestamp and persistence time
+  - `analytics.sink.latency_ms` — Histogram of sink write duration
 - **Raw sink (`metrics.jsonl`)** — Optional for drill-down. Each line mirrors the analytics metric contract (`name`, `value`, `labels`, `timestamp`).
 - **Dead-letter queue (`broker.dlq`)** — Optional for error investigation. Surface as a secondary panel when DLQ metrics are published.
 
@@ -43,8 +50,15 @@ Dashboard Layout
    - Query: pivot latest 7 days of rollups by `metric` and label (requires label extraction pipeline or derived tables).
    - Visual: table listing `metric`, `label`, `count`, `p95`. Useful for spotting hotspots (e.g., specific services spiking latency).
 
-5. **DLQ Intake (Bar)**
-   - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day.
+5. **Pipeline Health (Lag & Reliability)**
+   - Charts:
+     - Histogram/percentiles of `analytics.ingest.lag_ms` to monitor end-to-end ingest latency.
+     - Line chart of `analytics.ingest.ok` vs `analytics.ingest.error`/`analytics.ingest.dlq` (stacked or side-by-side) to gauge reliability.
+     - Bar chart or sparkline of `analytics.ingest.retry` to uncover flapping sinks.
+   - Notes: break down by `metricName` attribute where volumes justify it; alert when errors or DLQ counts exceed agreed thresholds.
+
+6. **DLQ Intake (Bar)**
+   - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day (combine with `analytics.ingest.dlq` for cross-check).
    - Visual: bar chart to highlight ingestion failures. Use the same color palette as error rate for correlation.
 
 Recommended Queries
@@ -83,6 +97,26 @@ Recommended Queries
   FROM <ROLLUP_TABLE>
   WHERE metric = 'latency_ms'
   ORDER BY date DESC;
+  ```
+
+- **Ingest Reliability (PromQL style example)**
+  ```promql
+  sum by (metricName) (increase(analytics_ingest_ok_total[1d]))
+  /
+  clamp_min(
+    sum by (metricName) (
+      increase(analytics_ingest_ok_total[1d]) + increase(analytics_ingest_error_total[1d])
+    ),
+    1
+  )
+  ```
+
+- **Ingest Lag Percentiles**
+  ```promql
+  histogram_quantile(
+    0.95,
+    sum by (le) (rate(analytics_ingest_lag_ms_bucket[5m]))
+  )
   ```
 
 Ops Checklist

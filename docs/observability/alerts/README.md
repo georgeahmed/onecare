@@ -6,6 +6,7 @@ These templates cover the two most user-visible reliability risks called out in 
 
 - `TRIAGE_LATENCY.yaml` — fires when the configured latency quantile breaches the SLO target over short (warning) and longer (critical) windows.
 - `SCRIBE_BACKLOG.yaml` — tracks sustained queue depth and forward-projected growth for the scribe pipeline.
+- Refer to [`../ALERTING.md`](../ALERTING.md) for alert hygiene, dedupe settings, and on-call response guidance. Populate the `runbook` annotation in each template with the relevant URL from that guide.
 
 All placeholders follow the `{{PLACEHOLDER}}` pattern. Replace them with concrete values before applying:
 

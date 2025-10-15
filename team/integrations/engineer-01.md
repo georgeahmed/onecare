@@ -18,7 +18,7 @@ Start Here
 - Security: packages/security/src/index.ts (authorize/consent)
 
 Status: in-progress
-Progress: 57%
+Progress: 21%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)
@@ -26,22 +26,21 @@ Dependencies
 - qa-automation/engineer-01 (Contract tests)
 
 Tasks
-- [ ] IN-01.1 — FHIR client skeleton + env wiring (baseUrl, auth)
-- [x] IN-01.2 — Bundle upsert (transaction) with retry/timeout
-- [x] IN-01.3 — Create methods: Task, Appointment, DocumentReference
-- [ ] IN-01.4 — Object Store linking for Binary/DocumentReference
-- [ ] IN-01.5 — OIDC (NHS Login) client + consent check stub API
-- [x] IN-01.6 — YAML config loader merge + floors/ceilings
-- [x] IN-01.7 — FHIR profile validate() stub
- - [ ] IN-01.8 — SSRF guardrails & TLS enforcement (FHIR/Object Store)
- - [ ] IN-01.9 — Circuit breaker + backoff policy (idempotent-safe retries)
- - [ ] IN-01.10 — Idempotent FHIR ops (ETag/If-Match, 409/412 handling)
- - [ ] IN-01.11 — FHIR search/pagination helpers (429 Retry-After handling)
- - [ ] IN-01.12 — Observability (correlationId, metrics, spans; PHI-safe logs)
- - [ ] IN-01.13 — Health/readiness probes (FHIR/Object Store/OIDC); cached checks
- - [ ] IN-01.14 — Contract & content negotiation (application/fhir+json; Bundle.transaction)
- - [ ] IN-01.15 — OIDC JWT verify with JWKs rotation (kid/aud/iss/nbf/exp; skew)
- - [ ] IN-01.16 — Privacy & PHI minimization (payload shaping; audit-safe)
- - [ ] IN-01.17 — Performance baselines (p50/p95; keep-alive; connection reuse)
- - [ ] IN-01.18 — Fault injection tests (timeouts, CB-open, 429/backoff)
- - [ ] IN-01.19 — Documentation & ADRs (FHIR repo integration, consent/security)
+Completed tasks have moved to `team/integrations/Completed Tasks/engineer-01.md`.
+
+Incomplete
+- [ ] IN-01.1 — HttpFhirRepository still lacks GET/logging support; the request helper only allows POST/PUT and no logger is wired in (apps/orchestrator/src/adapters/persistence/fhir.repository.ts:184).
+- [ ] IN-01.4 — DocumentReference helper forwards payloads without staging Binary content in an ObjectStore (packages/ports/src/fhir.ts:102, packages/ports/src/object-store.ts:1).
+- [ ] IN-01.5 — OIDC/NHS Login client and consent stub API are unimplemented; the security package exposes only interfaces (packages/security/src/index.ts:1).
+- [ ] IN-01.8 — Startup wiring accepts any FHIR_BASE_URL and no object store client, so SSRF/TLS guardrails remain TODO (apps/orchestrator/src/index.ts:58).
+- [ ] IN-01.9 — The FHIR adapter retries with jitter but lacks a circuit breaker or capped retry policy abstraction (apps/orchestrator/src/adapters/persistence/fhir.repository.ts:177).
+- [ ] IN-01.10 — Idempotent operations (If-Match/ETag, 409/412 handling) are not implemented in the request pipeline (apps/orchestrator/src/adapters/persistence/fhir.repository.ts:177).
+- [ ] IN-01.11 — The repository contract omits search/pagination helpers and Retry-After handling for 429s (packages/ports/src/fhir.ts:22).
+- [ ] IN-01.12 — Metrics/spans exist but the adapter does not emit PHI-safe structured logs via the shared logger (apps/orchestrator/src/adapters/persistence/fhir.repository.ts:1, packages/observability/src/logger.ts:1).
+- [ ] IN-01.13 — `/health` and `/ready` endpoints do not probe FHIR/Object Store/OIDC dependencies yet (apps/orchestrator/src/index.ts:1000).
+- [ ] IN-01.14 — Request headers lack charset negotiation and no response validation hook asserts FHIR JSON envelopes (apps/orchestrator/src/adapters/persistence/fhir.repository.ts:209).
+- [ ] IN-01.15 — JWT verification and JWKS rotation for NHS Login remain unimplemented (packages/security/src/index.ts:1).
+- [ ] IN-01.16 — Redaction helpers are unused around FHIR/Object Store flows and audit payload shaping is unspecified (packages/observability/src/logger.ts:1, apps/orchestrator/src/application/normalize.ts:26).
+- [ ] IN-01.17 — No performance baselines or connection reuse controls are documented; release readiness keeps the FHIR/Object Store SLA gate unchecked (docs/RELEASE_READINESS.md:45).
+- [ ] IN-01.18 — Test coverage stops at basic validation helpers; there is no resilience suite for timeouts/429/circuit-breaker scenarios (packages/ports/test/fhir.test.ts:1).
+- [ ] IN-01.19 — There is no ADR or documentation covering the FHIR/Object Store/OIDC integration yet (docs/RELEASE_READINESS.md:45).

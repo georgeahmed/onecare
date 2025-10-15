@@ -51,8 +51,8 @@ describe('InMemoryOnlineFeatureStore', () => {
     expect(await store.get({ featureSet: 'triage-core', entityId: 'patient-123' })).not.toBeNull();
 
     now += 120_000;
-    expect(await store.get({ featureSet: 'triage-core', entityId: 'patient-123' })).toBeNull();
     expect(store.purgeExpired()).toBeGreaterThan(0);
+    expect(await store.get({ featureSet: 'triage-core', entityId: 'patient-123' })).toBeNull();
   });
 
   it('reports healthy status', async () => {

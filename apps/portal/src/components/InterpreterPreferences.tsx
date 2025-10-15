@@ -1,4 +1,4 @@
-import { Fragment, useId } from 'react';
+import { Fragment, useMemo, useId } from 'react';
 import { useIntl } from 'react-intl';
 import type { TransformedAccessibilityConfig } from '../lib/config';
 
@@ -6,40 +6,50 @@ export interface InterpreterPreferencesProps {
   config: TransformedAccessibilityConfig;
   value: InterpreterPreferencesValue;
   onChange: (value: InterpreterPreferencesValue) => void;
+  allowPersistence?: boolean;
 }
 
 export interface InterpreterPreferencesValue {
   requiresInterpreter: boolean;
-  preferredLanguage?: string;
+  preferredLanguages?: string[];
   notes?: string;
   requiresInterpreterConfirmed?: boolean;
+  rememberSelection?: boolean;
 }
 
-const InterpreterPreferences = ({ config, value, onChange }: InterpreterPreferencesProps) => {
+const InterpreterPreferences = ({ config, value, onChange, allowPersistence = false }: InterpreterPreferencesProps) => {
   const intl = useIntl();
   const sectionId = useId();
   const notesId = useId();
   const languageId = useId();
   const confirmId = useId();
+  const rememberId = useId();
+  const helpTextId = useId();
 
   if (!config || !config.interpreterLanguages || config.interpreterLanguages.length === 0) {
     return null;
   }
 
-  const languages = config.interpreterLanguages;
+  const languages = useMemo(
+    () => config.interpreterLanguages?.slice().sort((a, b) => a.localeCompare(b)) ?? [],
+    [config.interpreterLanguages]
+  );
   const requiresInterpreter = value.requiresInterpreter;
   const handleToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     const checked = event.target.checked;
     onChange({
       requiresInterpreter: checked,
-      preferredLanguage: checked ? value.preferredLanguage : undefined,
+      preferredLanguages: checked ? value.preferredLanguages ?? [] : undefined,
       notes: checked ? value.notes : undefined,
       requiresInterpreterConfirmed: checked ? value.requiresInterpreterConfirmed : undefined,
+      rememberSelection: checked ? value.rememberSelection : undefined
     });
   };
 
   const handleLanguageChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...value, preferredLanguage: event.target.value });
+    const options = Array.from(event.target.selectedOptions ?? []);
+    const selected = options.map((option) => option.value).filter((item) => languages.includes(item));
+    onChange({ ...value, preferredLanguages: selected });
   };
 
   const handleNotesChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -49,6 +59,13 @@ const InterpreterPreferences = ({ config, value, onChange }: InterpreterPreferen
   const handleConfirmChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...value, requiresInterpreterConfirmed: event.target.checked });
   };
+
+  const handleRememberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    onChange({ ...value, rememberSelection: event.target.checked });
+  };
+
+  const selectSize = Math.min(Math.max(languages.length, 3), 6);
+  const selectedLanguages = value.preferredLanguages ?? [];
 
   return (
     <section
@@ -74,16 +91,21 @@ const InterpreterPreferences = ({ config, value, onChange }: InterpreterPreferen
             <label htmlFor={languageId}>{intl.formatMessage({ id: 'intake.interpreter.language.label' })}</label>
             <select
               id={languageId}
-              value={value.preferredLanguage ?? ''}
+              multiple
+              size={selectSize}
+              value={selectedLanguages}
               onChange={handleLanguageChange}
+              aria-describedby={helpTextId}
             >
-              <option value="">{intl.formatMessage({ id: 'intake.interpreter.language.placeholder' })}</option>
               {languages.map((lang) => (
                 <option key={lang} value={lang}>
                   {lang}
                 </option>
               ))}
             </select>
+            <p id={helpTextId} className="field-hint">
+              {intl.formatMessage({ id: 'intake.interpreter.language.multipleHint' })}
+            </p>
           </div>
           <div className="interpreter-field">
             <label htmlFor={notesId}>{intl.formatMessage({ id: 'intake.interpreter.notes.label' })}</label>
@@ -92,6 +114,7 @@ const InterpreterPreferences = ({ config, value, onChange }: InterpreterPreferen
               value={value.notes ?? ''}
               onChange={handleNotesChange}
               rows={3}
+              maxLength={300}
             />
             <p className="field-hint">{intl.formatMessage({ id: 'intake.interpreter.notes.hint' })}</p>
           </div>
@@ -104,6 +127,18 @@ const InterpreterPreferences = ({ config, value, onChange }: InterpreterPreferen
                 onChange={handleConfirmChange}
               />
               <label htmlFor={confirmId}>{intl.formatMessage({ id: 'intake.interpreter.confirmBsl' })}</label>
+            </div>
+          ) : null}
+          {allowPersistence ? (
+            <div className="interpreter-field interpreter-field--confirm">
+              <input
+                id={rememberId}
+                type="checkbox"
+                checked={Boolean(value.rememberSelection)}
+                onChange={handleRememberChange}
+              />
+              <label htmlFor={rememberId}>{intl.formatMessage({ id: 'intake.interpreter.remember.label' })}</label>
+              <p className="field-hint">{intl.formatMessage({ id: 'intake.interpreter.remember.hint' })}</p>
             </div>
           ) : null}
         </Fragment>

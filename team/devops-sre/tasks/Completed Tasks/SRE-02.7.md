@@ -13,9 +13,9 @@ Steps
 1) Configure tail-based sampling in the collector to keep 100% of error traces and a higher fraction of slow traces while downsampling the rest.
 2) Document sampling rates and how to adjust; include examples for different environments.
 
-Current Findings
-- `infra/otel/otel-collector.yaml` only wires batch processing and logging export; there is no tail sampling processor configured.
-- `docs/observability/TRACING.md` does not exist, so the intended sampling policy is undocumented.
+Implementation Notes
+- `infra/otel/otel-collector.yaml` now enables tail-based sampling with error, latency, and probabilistic policies.
+- `docs/observability/TRACING.md` documents the rationale, environments knobs, and verification steps.
 
 Acceptance Criteria
 - Collector applies sampling; docs explain policy and knobs.

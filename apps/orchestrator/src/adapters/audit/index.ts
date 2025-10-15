@@ -103,11 +103,14 @@ class BufferedAuditLedger implements AuditLedger {
 
   private scheduleRetry(entry: BufferedEntry, delayMs: number): void {
     this.pendingRetries += 1;
-    setTimeout(() => {
+    const handle = setTimeout(() => {
       this.pendingRetries = Math.max(0, this.pendingRetries - 1);
       this.queue.push(entry);
       this.schedule();
-    }, delayMs).unref?.();
+    }, delayMs);
+    if (typeof handle === 'object' && typeof (handle as { unref?: () => void }).unref === 'function') {
+      (handle as { unref: () => void }).unref();
+    }
   }
 
   private async writeWithTimeout(event: LedgerEvent): Promise<void> {

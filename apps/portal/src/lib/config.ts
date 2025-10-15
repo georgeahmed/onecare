@@ -18,7 +18,9 @@ export const transformAccessibilityConfig = (raw: unknown): TransformedAccessibi
     : [];
   const offerBsl = Boolean(record.offer_bsl);
   const collectPatientPrefs = Array.isArray(record.collect_patient_prefs)
-    ? record.collect_patient_prefs.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    ? record.collect_patient_prefs
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim().toLowerCase())
     : undefined;
   const enabled = interpreterLanguages.length > 0;
   return { enabled, interpreterLanguages, offerBsl, collectPatientPrefs };

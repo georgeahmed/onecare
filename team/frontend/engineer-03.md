@@ -14,7 +14,7 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (accessibility_and_language)
 
 Status: in progress
-Progress: 35%
+Progress: 80%
 
 Dependencies
 - frontend/engineer-01 (Portal UX)
@@ -27,16 +27,7 @@ Platform Checklist (pre-flight)
 
 Tasks (Incomplete)
 Completed tasks recorded in `team/frontend/Completed Tasks/engineer-03.md`.
-- [ ] FE-03.6 — RTL & bidirectional text support (dir, CSS logical props, bidi isolation). Remaining: add document direction toggles and logical CSS; provider currently only sets `lang` (`apps/portal/src/i18n/index.tsx:94`).
-- [ ] FE-03.7 — ICU messages + extraction pipeline (plural/gender; key conventions). Remaining: add automated message extraction; `apps/portal/scripts` only contains the accessibility audit tooling today.
-- [ ] FE-03.8 — Pseudo-localization + missing-key detection (build/CI checks). Remaining: introduce pseudo-locale handling and CI guardrails; `apps/portal/src/i18n/index.tsx:92` exposes only `en`/`es`.
-- [ ] FE-03.10 — Content/readability review (plain language; inclusive terms). Remaining: document review guidelines and outcomes; no localization section yet in `docs/CONVENTIONS.md`.
-- [ ] FE-03.11 — Advanced a11y: forms, errors, live regions, focus/skip links. Remaining: add skip links and richer focus management beyond current alert handling (`apps/portal/src/App.tsx:9` has no skip-to-content entry point).
-- [ ] FE-03.12 — High-contrast theme tokens and contrast audits (≥4.5:1). Remaining: expose a toggle and wire audits; `apps/portal/src/styles/tokens.css:22` defines tokens but no runtime switch.
-- [ ] FE-03.13 — Zoom/reflow compliance (200% zoom; no content loss). Remaining: validate layouts under zoom and document results; no automated or manual log recorded.
-- [ ] FE-03.14 — Media/alt text guidelines (icons/illustrations; captions if added). Remaining: author guidance doc and link from engineering docs.
-- [ ] FE-03.16 — Performance: lazy-load locale bundles; code-split translations. Remaining: switch to dynamic imports; `apps/portal/src/i18n/index.tsx:3` statically imports all message bundles.
-- [ ] FE-03.17 — Interpreter preferences: UI/validation/persistence (privacy-safe). Remaining: persist selections into the submission payload and honor `collect_patient_prefs`; current submit flow sends only `formData` (`apps/portal/src/components/IntakeForm.tsx:147` + `apps/portal/src/components/IntakeForm.tsx:312`).
-- [ ] FE-03.18 — Fallback logic & offline locale cache (graceful degradation). Remaining: add offline caching for locale resources and fallback behaviour when storage/navigator checks fail.
-- [ ] FE-03.19 — A11y/i18n QA matrix (SR combos, devices, browsers) & test plan. Remaining: capture the matrix in `docs/USAGE.md`.
-- [ ] FE-03.20 — Localization authoring guide (glossary, style, review process). Remaining: add the guide to `docs/CONVENTIONS.md` and reference it from portal docs.
+- [ ] FE-03.10 — Content/readability review (plain language; inclusive terms). Remaining: establish review buddies and document sign-off flow; fold outcomes into the localization guide for day-to-day contributors.
+- [ ] FE-03.11 — Advanced a11y: forms, errors, live regions, focus/skip links. Remaining: ship skip links across pages, tighten focus management for summary panels, and add screen reader-specific regression tests.
+- [ ] FE-03.12 — High-contrast theme tokens and contrast audits (≥4.5:1). Remaining: document the contrast verification process and attach pa11y/axe reports per release.
+- [ ] FE-03.14 — Media/alt text guidelines (icons/illustrations; captions if added). Remaining: author guidance for imagery/audio assets and link it from engineering + design docs.

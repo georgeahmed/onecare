@@ -3,7 +3,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { MemoryBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
 
-import { InMemoryOnlineFeatureStore } from '@onecare/feature-store-online';
+import { InMemoryOnlineFeatureStore } from '../../feature-store-online/src/inMemoryOnlineStore';
 import { FeatureIngestionWorker } from '../src/worker';
 
 describe('FeatureIngestionWorker', () => {

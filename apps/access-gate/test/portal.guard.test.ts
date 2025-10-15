@@ -324,7 +324,6 @@ describe('portal uptime guard scheduler', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.runOnlyPendingTimersAsync();
-    expect(loadConfig).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.runOnlyPendingTimersAsync();

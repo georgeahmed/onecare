@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SEC-01.5.md) | [Next](SEC-01.7.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SEC-01.5.md) | [Next](../SEC-01.7.md)
 
 Task: SEC-01.6 — Egress allowlist enforcement and SSRF guard
 
@@ -14,9 +14,9 @@ Steps
 2) Optionally set up an egress proxy with allowlists; document how to request exceptions.
 3) Validate in staging by attempting disallowed connections; ensure blocks occur and are logged.
 
-Current Findings
-- There is no `infra/k8s/` directory or NetworkPolicy manifests in the repository.
-- `docs/SECURITY.md` does not outline any egress restrictions or SSRF mitigation process.
+Implementation Notes
+- `infra/k8s/networkpolicies/egress-deny.yaml` provides a deny-by-default template plus examples for whitelisting observability/NATS traffic.
+- `docs/SECURITY.md` now outlines the egress exception process and SSRF guard expectations.
 
 Acceptance Criteria
 - Egress constrained; SSRF risks reduced; exceptions process documented.

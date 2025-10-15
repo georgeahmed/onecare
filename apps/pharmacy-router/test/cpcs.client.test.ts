@@ -42,6 +42,7 @@ describe('CpcsHttpClient', () => {
     expect(client.getHeaders()).toMatchObject({
       Authorization: 'Bearer demo-key',
       'Content-Type': 'application/json',
+      Accept: 'application/json',
       'X-Test': 'value',
     });
     const result = await client.sendReferral('org-1', serviceRequest, summary, undefined, { correlationId: 'corr-env' });
@@ -124,6 +125,20 @@ describe('CpcsHttpClient', () => {
       Authorization: 'Bearer cfg-key',
       'X-Config': 'yes',
     });
+  });
+
+  it('rejects non-https base urls', () => {
+    expect(() => new CpcsHttpClient({ baseUrl: 'http://cpcs.internal' })).toThrow('cpcs_base_url_insecure');
+  });
+
+  it('rejects loopback or private endpoints', () => {
+    expect(() => new CpcsHttpClient({ baseUrl: 'https://127.0.0.1' })).toThrow('cpcs_base_url_blocked');
+    expect(() => new CpcsHttpClient({ baseUrl: 'https://10.0.0.5' })).toThrow('cpcs_base_url_blocked');
+  });
+
+  it('normalises base url paths', () => {
+    const client = new CpcsHttpClient({ baseUrl: 'https://cpcs.test/api/v1/' });
+    expect(client.getBaseUrl()).toBe('https://cpcs.test/api/v1');
   });
 
   it('throws typed error on invalid arguments', async () => {

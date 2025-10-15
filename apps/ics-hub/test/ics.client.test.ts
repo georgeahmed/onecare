@@ -124,6 +124,44 @@ describe('IcsHttpClient', () => {
     );
   });
 
+  it('enforces https endpoints and blocks private hosts', () => {
+    expect(() => new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'http://ics.example.org',
+        },
+      },
+    })).toThrow('ics_endpoint_insecure');
+
+    expect(() => new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://127.0.0.1/service',
+        },
+      },
+    })).toThrow('ics_endpoint_blocked');
+  });
+
+  it('normalises endpoint path by trimming trailing slash', async () => {
+    const dispatcher = vi.fn(async (_route, request: IcsReferralRequest, context) => {
+      expect(context.endpoint).toBe('https://ics.example/org1');
+      return { referralId: request.referralId, accepted: true };
+    });
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1/',
+          retry: { attempts: 0 },
+          circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000 },
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    await client.sendReferral(baseReferral);
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+  });
+
   it('acknowledges referral using same route', async () => {
     const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
     const ackDispatcher = vi.fn(async (_route, refId: string, ack: IcsReferralAck, context) => {

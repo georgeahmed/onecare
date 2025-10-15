@@ -2,13 +2,14 @@ import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import { mapSlotsToView, type SlotView, GpConnectClientError } from '../adapters/gpconnect.client';
 import type { GpConnectClient, SearchSlotsParams } from '../adapters/gpconnect.client';
+import { callWithGuard } from '../adapters/callWithGuard';
 import type { EnhancedAccessPolicy, RejectedSlot as EnhancedAccessRejectedSlot } from './enhancedAccess';
 import { applyEnhancedAccessFilters } from './enhancedAccess';
 import type { FhirRepository } from '@onecare/ports';
 import type { QueueNotifier } from '@onecare/ports';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import { logger, ensureTracing } from '@onecare/observability';
+import { logger, ensureTracing, createCounter } from '@onecare/observability';
 import type { MessageBus } from '@onecare/bus';
 import { withMessageGuards } from '@onecare/bus';
 import {
@@ -18,7 +19,9 @@ import {
   type BookingSearchRequest,
   type BookingSearchResponse,
   type RejectedSlot as BookingRejectedSlot,
+  type DlqEvent,
 } from '@onecare/events';
+import { createHash } from 'node:crypto';
 import {
   validateAppointmentCreatedEvent,
   validateBookingSearchRequest,
@@ -28,6 +31,8 @@ import {
 export interface BookingAuditPublisher {
   emit(event: { type: string; payload: Record<string, unknown> }): Promise<void>;
 }
+
+type RejectedSlot = BookingRejectedSlot | EnhancedAccessRejectedSlot;
 
 export interface BookingContext extends MachineContext {
   client: GpConnectClient;
@@ -55,7 +60,14 @@ export interface BookingContext extends MachineContext {
 
 ensureTracing('booking');
 
-const BOOKING_ALLOWED_TOPICS = new Set<string>([Topics.booking.appointmentCreated]);
+const BOOKING_ALLOWED_TOPICS = new Set<string>([
+  Topics.booking.appointmentCreated,
+  Topics.booking.appointmentCreatedDlq,
+]);
+
+const appointmentEventFailureCounter = createCounter('booking_event_publish_error_total');
+const appointmentEventDlqCounter = createCounter('booking_event_dlq_total');
+const MAX_EVENT_PUBLISH_ATTEMPTS = 2;
 
 export interface BookingEvent extends MachineEvent {
   type: 'booking.search' | 'booking.select' | 'booking.book' | string;
@@ -283,16 +295,32 @@ async function publishAppointmentCreated(
     throw new BookingAppointmentError('booking.create.invalid_event', eventValidation.errors);
   }
   const envelope = createEnvelope(Topics.booking.appointmentCreated, eventValidation.value, correlationId);
-  try {
-    const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
-    await bus.publish(Topics.booking.appointmentCreated, envelope, headers);
-    logger.info('booking.create.event_published', {
-      appointmentId: confirmation.appointmentId,
-      correlationId,
-    });
-  } catch (error) {
-    throw new BookingAppointmentError('booking.create.event_failed', error);
+  let attempts = 0;
+  let publishError: unknown;
+  while (attempts < MAX_EVENT_PUBLISH_ATTEMPTS) {
+    attempts += 1;
+    try {
+      const headers = createPublishHeaders(correlationId, envelope.id);
+      await bus.publish(Topics.booking.appointmentCreated, envelope, headers);
+      logger.info('booking.create.event_published', {
+        appointmentId: confirmation.appointmentId,
+        correlationId,
+        attempts,
+      });
+      return;
+    } catch (error) {
+      publishError = error;
+      appointmentEventFailureCounter.add(1, { stage: 'publish', attempts });
+      logger.error('booking.create.event_publish_failed', {
+        attempt: attempts,
+        correlationId,
+        reason: (error as Error).message,
+      });
+    }
   }
+
+  await publishAppointmentDlq(ctx, confirmation, eventValidation.value, correlationId, publishError, attempts);
+  throw new BookingAppointmentError('booking.create.event_failed', publishError);
 }
 
 export class SelectedState extends BaseState<BookingContext, BookingEvent> {
@@ -445,7 +473,11 @@ async function persistAppointment(
 
   let appointmentRef: { id: string; resourceType: string } | undefined;
   try {
-    appointmentRef = await repo.createAppointment(appointmentResource);
+    appointmentRef = await callWithGuard('fhir.createAppointment', async () => repo.createAppointment(appointmentResource), {
+      timeoutMs: 2_000,
+      maxRetries: 0,
+      correlationId: ctx.correlationId,
+    });
   } catch (error) {
     throw new Error(`appointment_write_failed:${(error as Error).message}`);
   }
@@ -463,7 +495,11 @@ async function persistAppointment(
       ],
     };
     try {
-      await repo.updateTask(ctx.originatingTaskId, patch);
+      await callWithGuard('fhir.updateTask', async () => repo.updateTask!(ctx.originatingTaskId!, patch), {
+        timeoutMs: 2_000,
+        maxRetries: 0,
+        correlationId: ctx.correlationId,
+      });
     } catch (error) {
       logger.warn('booking.task_update_failed', {
         taskId: ctx.originatingTaskId,

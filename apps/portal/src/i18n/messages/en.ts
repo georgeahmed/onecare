@@ -71,6 +71,10 @@ const en = {
   'callback.window.within48h': 'We call you back within 48 hours.',
   'callback.windows.ooh.accepting': 'Outside core hours we still accept requests.',
   'callback.windows.ooh.closed': 'Outside core hours we pause callbacks.',
+  'theme.switcher.label': 'Theme',
+  'theme.option.light': 'Light',
+  'theme.option.dark': 'Dark',
+  'theme.option.high-contrast': 'High contrast',
   'booking.section.title': 'Available appointments',
   'booking.filter.modality': 'Modality',
   'booking.filter.modality.all': 'All modalities',
@@ -128,9 +132,14 @@ const en = {
   'intake.interpreter.checkbox': 'I need an interpreter or specific accessibility support',
   'intake.interpreter.language.label': 'Preferred language for interpretation',
   'intake.interpreter.language.placeholder': 'Select a language',
+  'intake.interpreter.language.multipleHint': 'Select one or more languages that will help you communicate best.',
   'intake.interpreter.notes.label': 'Optional notes',
   'intake.interpreter.notes.hint': 'Only share details needed to coordinate support. Do not include medical history or personal identifiers.',
   'intake.interpreter.confirmBsl': 'I would like British Sign Language (BSL) support',
+  'intake.interpreter.remember.label': 'Remember this preference on this device',
+  'intake.interpreter.remember.hint': 'We store interpreter preferences locally when enabled. Uncheck to forget saved data.',
+  'schemaForm.errorSummary.title': 'Let’s fix these details',
+  'schemaForm.errorSummary.description': 'Review each item and update the information before submitting again.',
   'schemaForm.error.required': 'This field is required.',
   'schemaForm.error.invalidOption': 'Select a supported option.',
   'schemaForm.error.invalidDate': 'Enter a valid date (YYYY-MM-DD).',
@@ -141,7 +150,10 @@ const en = {
   'schemaForm.error.maxValue': 'Value exceeds the allowed maximum.',
   'schemaForm.error.multipleOf': 'Value must be a multiple of the allowed step.',
   'schemaForm.addItem': 'Add item',
-  'schemaForm.removeItem': 'Remove item'
+  'schemaForm.removeItem': 'Remove item',
+  'autosave.status.saving': 'Saving draft…',
+  'autosave.status.saved': 'Draft saved at {time}.',
+  'autosave.status.restored': 'Draft restored from {time}.'
 } as const;
 
 export default en;

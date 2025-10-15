@@ -12,5 +12,15 @@ export interface PortalSubmission {
     contentType: string;
     url: string;
   }[];
+  interpreterPreferences?: {
+    requiresInterpreter: boolean;
+    /**
+     * @minItems 1
+     * @maxItems 3
+     */
+    preferredLanguages?: [string] | [string, string] | [string, string, string];
+    notes?: string;
+    requiresInterpreterConfirmed?: boolean;
+  };
   channel: "web" | "ivr";
 }

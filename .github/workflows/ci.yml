@@ -39,6 +39,8 @@ jobs:
         run: npm ci
       - name: Codegen check (no write)
         run: npm run codegen:check
+      - name: Portal locale extraction (check)
+        run: npm run i18n:portal:check
       - name: Verify schema contracts in sync
         if: github.event_name == 'pull_request'
         run: bash scripts/ci/check_contracts_sync.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
@@ -223,6 +225,45 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: npm audit (high severity)
+        id: npm-audit
+        run: |
+          set +e
+          npm audit --audit-level=high --json > npm-audit.json
+          status=$?
+          if [ ! -s npm-audit.json ]; then
+            echo '{}' > npm-audit.json
+          fi
+          exit $status
+        continue-on-error: true
+
+      - name: License policy check
+        id: license-check
+        run: |
+          set +e
+          npx --yes license-checker --production --json > license-report.json
+          status=$?
+          if [ ! -s license-report.json ]; then
+            echo '{}' > license-report.json
+          fi
+          exit $status
+        continue-on-error: true
+
+      - name: pip-audit (services-py)
+        id: pip-audit
+        uses: pypa/gh-action-pip-audit@v1
+        with:
+          requirement: services-py/requirements-dev.txt
+          virtual-environment: venv
+        continue-on-error: true
+
       - name: Trivy filesystem scan (informational)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -233,8 +274,16 @@ jobs:
           exit-code: '1'
         continue-on-error: true
 
-      - name: gitleaks secrets scan (informational)
+      - name: gitleaks secrets scan
         uses: gitleaks/gitleaks-action@v2
         with:
           args: detect --source . --redact
-        continue-on-error: true
+
+      - name: Upload security scan artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            npm-audit.json
+            license-report.json

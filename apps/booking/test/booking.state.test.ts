@@ -162,7 +162,7 @@ describe('Booking state machine integration', () => {
         payload: expect.objectContaining({ appointmentId: 'appt-slot-123', patientId: 'patient-1' }),
         correlationId: 'corr-123',
       }),
-      { 'x-correlation-id': 'corr-123' },
+      expect.objectContaining({ 'x-correlation-id': 'corr-123' }),
     );
   });
 

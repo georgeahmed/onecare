@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { PortalSubmission } from '../src/lib/types';
-import { sanitizeSubmission } from '../src/components/IntakeForm';
+import { sanitizeSubmission, sanitizeInterpreterPreferences } from '../src/components/IntakeForm';
 
 const baseSubmission: PortalSubmission = {
   practiceId: ' practice-123 ',
@@ -79,5 +79,47 @@ describe('sanitizeSubmission', () => {
 
     const sanitized = sanitizeSubmission(submission);
     expect(sanitized.patient.locale).toBeUndefined();
+  });
+});
+
+describe('sanitizeInterpreterPreferences', () => {
+  const allowed = ['en', 'ur', 'es'] as const;
+
+  it('returns undefined when interpreter not required', () => {
+    const result = sanitizeInterpreterPreferences({ requiresInterpreter: false }, allowed);
+    expect(result).toBeUndefined();
+  });
+
+  it('normalizes languages, trims notes, and limits quantity', () => {
+    const result = sanitizeInterpreterPreferences(
+      {
+        requiresInterpreter: true,
+        preferredLanguages: [' en ', 'ur', 'fr', 'es', 'ur'],
+        notes: 'Need support during call.'
+      },
+      allowed
+    );
+
+    expect(result).toEqual({
+      requiresInterpreter: true,
+      preferredLanguages: ['en', 'ur', 'es'],
+      notes: 'Need support during call.'
+    });
+  });
+
+  it('truncates notes and preserves confirmation flag', () => {
+    const longNote = 'x'.repeat(400);
+    const result = sanitizeInterpreterPreferences(
+      {
+        requiresInterpreter: true,
+        preferredLanguages: ['es'],
+        notes: longNote,
+        requiresInterpreterConfirmed: true
+      },
+      allowed
+    );
+
+    expect(result?.notes?.length).toBeLessThanOrEqual(300);
+    expect(result?.requiresInterpreterConfirmed).toBe(true);
   });
 });

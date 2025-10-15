@@ -5,8 +5,11 @@ import { I18nProvider } from './i18n';
 import LocaleSwitcher from './components/LocaleSwitcher';
 import ThemeSwitcher from './components/ThemeSwitcher';
 import { ThemeProvider } from './theme';
+import useZoomFallback from './hooks/useZoomFallback';
 
 const App = () => {
+  useZoomFallback();
+
   return (
     <ThemeProvider>
       <I18nProvider>

@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
+import { isIP } from 'node:net';
 import type { ResolvedConfig, IcsConfig, IcsRouteConfig, IcsTlsConfig } from '@onecare/config';
 import { createHistogram, createCounter, logger, startSpan } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -503,8 +504,9 @@ function createRouteState(key: string, options: IcsRouteOptions): RouteState {
   const correlationHeader = typeof options.correlationHeader === 'string'
     ? options.correlationHeader.trim()
     : undefined;
+  const safeEndpoint = ensureSafeIcsEndpoint(options.endpoint);
   const resolved: RouteOptionsResolved = {
-    endpoint: options.endpoint,
+    endpoint: safeEndpoint,
     headers: { ...(options.headers ?? {}) },
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     retry: normalizeRetryPolicy(options.retry),
@@ -651,6 +653,61 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function ensureSafeIcsEndpoint(candidate: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new Error('ics_endpoint_missing');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('ics_endpoint_invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('ics_endpoint_insecure');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('ics_endpoint_credentials_not_allowed');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('ics_endpoint_extraneous');
+  }
+  if (isBlockedHostname(parsed.hostname)) {
+    throw new Error('ics_endpoint_blocked');
+  }
+  const normalisedPath = parsed.pathname.replace(/\/+$/u, '');
+  return `${parsed.origin}${normalisedPath === '' ? '' : normalisedPath}`;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  if (!lower) return true;
+  if (lower === 'localhost' || lower.endsWith('.localhost')) return true;
+  if (lower.endsWith('.local') || lower.endsWith('.internal')) return true;
+  if (lower === '0.0.0.0') return true;
+  if (lower === '::1') return true;
+  const ipType = isIP(lower);
+  if (ipType === 4) {
+    const segments = lower.split('.').map((segment) => Number(segment));
+    if (segments.length !== 4 || segments.some((segment) => Number.isNaN(segment) || segment < 0 || segment > 255)) {
+      return true;
+    }
+    const [a, b] = segments;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 0) return true;
+  } else if (ipType === 6) {
+    if (lower === '::1') return true;
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (lower.startsWith('fe80')) return true;
+  }
+  return false;
 }
 
 class CircuitBreaker {

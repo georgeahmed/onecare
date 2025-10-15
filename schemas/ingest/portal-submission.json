@@ -55,6 +55,33 @@
         "additionalProperties": false
       }
     },
+    "interpreterPreferences": {
+      "type": "object",
+      "properties": {
+        "requiresInterpreter": {
+          "type": "boolean"
+        },
+        "preferredLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "requiresInterpreterConfirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["requiresInterpreter"],
+      "additionalProperties": false
+    },
     "channel": { "type": "string", "enum": ["web", "ivr"] }
   },
   "required": ["practiceId", "patient", "narrative", "channel"],

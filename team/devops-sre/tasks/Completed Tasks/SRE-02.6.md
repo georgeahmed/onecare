@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](../Completed Tasks/SRE-02.5.md) | [Next](SRE-02.7.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.5.md) | [Next](SRE-02.7.md)
 
 Task: SRE-02.6 — Centralized logs stack (Loki/ELK) with correlationId parsing and retention
 
@@ -14,9 +14,10 @@ Steps
 2) Ensure `correlationId` is parsed into a label/field; provide example queries.
 3) Set retention policies; document cost implications and best practices (avoid high-cardinality labels).
 
-Current Findings
-- `docker-compose.yml` has no Loki/Promtail services; only the OTEL collector is defined (`docker-compose.yml`).
-- `docs/observability/LOGS.md` is missing, so retention guidance and query references have not been documented.
+Implementation Notes
+- `docker-compose.yml` now provisions Loki, Promtail, Prometheus, and Grafana for local tele‑metry triage.
+- Configuration lives under `infra/logs/` (Loki, Promtail, Grafana provisioning) with retention tuned to 15 days.
+- Operator guidance and correlation ID queries are documented in `docs/observability/LOGS.md`.
 
 Acceptance Criteria
 - Logs visible centrally with correlationId filters; retention documented.

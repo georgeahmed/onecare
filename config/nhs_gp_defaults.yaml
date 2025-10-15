@@ -76,7 +76,8 @@ accessibility_and_language:
   - pl
   - ar
   offer_bsl: true
-  collect_patient_prefs: []
+  collect_patient_prefs:
+  - remember_interpreter
   ivr_prompt_keys:
     intro: ivr.prompt.language.select
     confirm: ivr.prompt.language.confirm

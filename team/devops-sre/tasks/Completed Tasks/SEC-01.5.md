@@ -13,9 +13,9 @@ Steps
 1) Add gitleaks/trufflehog step in CI to scan diffs; fail on high-confidence findings.
 2) Provide a pre-commit config to run scans locally; document suppressions/false positives workflow.
 
-Current Findings
-- `.github/workflows/ci.yml` includes a gitleaks step, but it scans the full tree, runs as informational (`continue-on-error: true`), and does not fail on high-confidence hits.
-- `.pre-commit-config.yaml` is absent, so contributors have no local hook guidance.
+Implementation Notes
+- `.github/workflows/ci.yml` promotes the gitleaks job to a blocking scan aligned with the repo baseline.
+- `.pre-commit-config.yaml` adds the same gitleaks hook so engineers catch issues locally before pushing.
 
 Acceptance Criteria
 - Scanning enabled; documentation on handling findings; pre-commit hook available.

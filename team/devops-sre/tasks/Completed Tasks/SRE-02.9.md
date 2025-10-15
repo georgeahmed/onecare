@@ -12,6 +12,10 @@ Steps
 1) Configure alert dedupe/grouping and silence windows during planned maintenance; add runbook links to alert annotations.
 2) Author on-call guide with escalation policy and response timelines.
 
+Implementation Notes
+- `docs/observability/ALERTING.md` documents dedupe knobs, silence workflows, and on-call expectations with links for latency/backlog runbooks.
+- Alert templates reference the guide via the `runbook` annotation in `docs/observability/alerts/*.yaml`.
+
 Acceptance Criteria
 - Alert policy documented; examples in templates include runbook links.
 
@@ -20,4 +24,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SRE-02.9' && make team-status-write
-

@@ -141,6 +141,9 @@ describe('handlePharmacyReferral', () => {
       patientId: 'patient-201',
       condition: 'UTI',
       pharmacyOrg: 'ORG1',
+      patientAgeYears: 28,
+      patientSex: 'female',
+      severity: 'mild',
     });
   });
 });

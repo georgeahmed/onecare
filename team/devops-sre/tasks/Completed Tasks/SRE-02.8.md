@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.7.md) | [Next](SRE-02.9.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SRE-02.7.md) | [Next](../SRE-02.9.md)
 
 Task: SRE-02.8 — Metrics pipeline hardening (cardinality limits, relabeling, histograms)
 
@@ -14,9 +14,9 @@ Steps
 2) Choose histogram buckets for latencies and sizes; standardize across services.
 3) Add relabeling in Prometheus to drop high-cardinality labels; document guidance for developers.
 
-Current Findings
-- `docs/observability/METRICS.md` is absent, so label guidance and histogram standards are not recorded.
-- There is no Prometheus configuration under `infra/monitoring/`; collectors and scrapers are not defined.
+Implementation Notes
+- `docs/observability/METRICS.md` codifies label hygiene, histogram buckets, and dashboard expectations.
+- `infra/monitoring/prometheus.yml` provides a hardened scrape config (label dropping, histogram focus) and is wired into docker-compose via the `prometheus` service.
 
 Acceptance Criteria
 - Metrics pipeline stable; docs guide label usage and histograms.

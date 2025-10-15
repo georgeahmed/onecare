@@ -380,23 +380,36 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
         return next;
       });
 
-    const runValidation = (candidate: PortalSubmission): Record<string, string> => {
-      const issues = collectValidationIssues(schema, candidate);
-      return buildErrorMap(issues, intl, fieldConfig);
-    };
+    const runValidation = useCallback(
+      (candidate: PortalSubmission): Record<string, string> => {
+        const issues = collectValidationIssues(schema, candidate);
+        return buildErrorMap(issues, intl, fieldConfig);
+      },
+      [schema, intl, fieldConfig]
+    );
+
+    const syncErrors = useCallback(
+      (nextErrors: Record<string, string>) => {
+        let emitted = nextErrors;
+        setErrors((prev) => {
+          if (shallowEqualRecords(prev, nextErrors)) {
+            emitted = prev;
+            return prev;
+          }
+          return nextErrors;
+        });
+        if (onErrorsChange) {
+          onErrorsChange(emitted);
+        }
+      },
+      [onErrorsChange]
+    );
 
     const updateValue = (path: PathSegment[], nextValue: unknown): PortalSubmission => {
       const candidate = setValueAtPath(value, path, nextValue);
       onChange(candidate);
-      setErrors((prev) => {
-        const nextErrors = runValidation(candidate);
-        const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(nextErrors);
-        if (prevKeys.length === nextKeys.length && prevKeys.every((key) => prev[key] === nextErrors[key])) {
-          return prev;
-        }
-        return nextErrors;
-      });
+      const nextErrors = runValidation(candidate);
+      syncErrors(nextErrors);
       return candidate;
     };
 
@@ -412,7 +425,7 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
 
     const validateAll = () => {
       const errorMap = runValidation(value);
-      setErrors(errorMap);
+      syncErrors(errorMap);
       const keys = Object.keys(errorMap);
       if (keys.length > 0) {
         setTouched(new Set(keys));
@@ -425,6 +438,12 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
     useImperativeHandle(ref, () => ({
       validateAll
     }));
+
+    useEffect(() => {
+      if (onErrorsChange) {
+        onErrorsChange({});
+      }
+    }, [onErrorsChange]);
 
     const renderObject = (
       currentSchema: ObjectJsonSchema,

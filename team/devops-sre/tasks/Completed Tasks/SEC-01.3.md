@@ -13,8 +13,8 @@ Steps
 2) Add recommended headers: X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy.
 3) Document how to apply via reverse proxy or app server and how to run in report-only mode first.
 
-Current Findings
-- `docs/SECURITY_HEADERS.md` is missing; there is currently no documented CSP or header policy in the repo.
+Implementation Notes
+- `docs/SECURITY_HEADERS.md` now defines the baseline CSP, required headers, and deployment examples for NGINX and FastAPI.
 
 Acceptance Criteria
 - Policy documented; rollout guidance present.

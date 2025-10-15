@@ -427,19 +427,18 @@ describe('TaskCreatedState', () => {
     expect(taskPayload.owner).toEqual({ reference: 'Organization/demo-triage' });
 
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith(
-      Topics.tasks.created,
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          taskId: 'task-123',
-          patientId: 'patient-001',
-          priority: 'URGENT',
-          owner: 'Organization/demo-triage',
-        }),
-        correlationId: 'corr-abc',
-      }),
-      { 'x-correlation-id': 'corr-abc' },
-    );
+    const publishCall = publish.mock.calls[0];
+    expect(publishCall[0]).toBe(Topics.tasks.created);
+    expect(publishCall[1]).toMatchObject({
+      correlationId: 'corr-abc',
+      payload: {
+        taskId: 'task-123',
+        patientId: 'patient-001',
+        priority: 'URGENT',
+        owner: 'Organization/demo-triage',
+      },
+    });
+    expect(publishCall[2]).toMatchObject({ 'x-correlation-id': 'corr-abc' });
 
     expect(ctx.taskId).toBe('task-123');
     expect(ctx.taskEventPublished).toBe(true);

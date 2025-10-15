@@ -227,6 +227,7 @@ describe('InboundState', () => {
       retryAfterMs: expect.any(Number),
     });
     expect(second.routingOutcome?.retryAfterMs).toBeGreaterThan(0);
+    expect(second.responseHeaders?.['Retry-After']).toBeDefined();
     const rateLimitCall = warnSpy.mock.calls.find(([msg]) => msg === 'ics.routing.rate_limited');
     expect(rateLimitCall?.[1]).toMatchObject({
       organisationId: 'org1',
@@ -341,6 +342,11 @@ describe('ValidatedState', () => {
 });
 
 describe('RoutedState', () => {
+  beforeEach(() => {
+    resetMetrics();
+    vi.restoreAllMocks();
+  });
+
   it('sends referral and publishes ack once', async () => {
     const envelope = buildEnvelope({ referralId: 'ref-send' }, { id: 'env-send', correlationId: 'corr-ack' });
     const client = createClientStub();
@@ -377,6 +383,14 @@ describe('RoutedState', () => {
     expect(ctx.ackPublished).toBe(true);
     expect(ctx.ackLatencyMs).toBeGreaterThanOrEqual(0);
     expect(ackPublish.headers?.['x-correlation-id']).toBe('corr-ack');
+    const ackRecords = getCounterRecords('ics.ack.published_total');
+    expect(ackRecords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attributes: expect.objectContaining({ destinationOrgId: 'dest-1', accepted: 'true' }),
+        }),
+      ]),
+    );
 
     const duplicateBus = new RecordingBus();
     const duplicateCtx = createContext(
@@ -395,6 +409,14 @@ describe('RoutedState', () => {
     await state.handle(duplicateCtx, baseEvent);
     expect(sendReferral).not.toHaveBeenCalled();
     expect(duplicateBus.publishes).toHaveLength(0);
+    const duplicateRecords = getCounterRecords('ics.ack.duplicate_total');
+    expect(duplicateRecords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attributes: expect.objectContaining({ destinationOrgId: 'dest-1' }),
+        }),
+      ]),
+    );
   });
 });
 

@@ -1,4 +1,6 @@
 import type { Handler, Message, MessageBus, Subscription } from './types';
+import type { IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 
 const GUARDED_SYMBOL = Symbol.for('onecare.bus.guarded');
 const CORRELATION_HEADER = 'x-correlation-id';
@@ -8,12 +10,18 @@ export interface MessageBusGuardOptions {
   allowedTopics: Iterable<string>;
   enforceEnvelope?: boolean;
   requireCorrelationHeader?: boolean;
+  idempotencyStore?: IdempotencyStore | null;
+  idempotencyTtlSeconds?: number;
+  onDuplicate?: (message: Message) => Promise<void> | void;
 }
 
 interface NormalizedGuardOptions {
   allowedTopics: Set<string>;
   enforceEnvelope: boolean;
   requireCorrelationHeader: boolean;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds: number;
+  onDuplicate?: (message: Message) => Promise<void> | void;
 }
 
 interface EnvelopeCandidate {
@@ -48,6 +56,24 @@ class GuardedMessageBus implements MessageBus {
     this.assertAllowedTopic(topic);
     return this.inner.subscribe(topic, async (message) => {
       const normalized = this.normalizeIncoming(message);
+      if (!normalized) {
+        return;
+      }
+      if (this.options.idempotencyStore) {
+        await executeWithIdempotency({
+          store: this.options.idempotencyStore,
+          key: buildIdempotencyKey(topic, normalized, this.options),
+          ttlSeconds: this.options.idempotencyTtlSeconds,
+          execute: async () => {
+            await handler(normalized as Message<T>);
+            return true as const;
+          },
+          onDuplicate: async () => {
+            await Promise.resolve(this.options.onDuplicate?.(normalized));
+          },
+        });
+        return;
+      }
       await handler(normalized as Message<T>);
     });
   }
@@ -232,11 +258,39 @@ function normalizeOptions(options: MessageBusGuardOptions): NormalizedGuardOptio
   if (allowedTopics.size === 0) {
     throw new Error('[MessageBusGuard] allowedTopics must contain at least one topic');
   }
+  const ttlSeconds = normalizeTtlSeconds(options.idempotencyTtlSeconds);
   return {
     allowedTopics,
     enforceEnvelope: options.enforceEnvelope !== false,
     requireCorrelationHeader: options.requireCorrelationHeader !== false,
+    idempotencyStore: options.idempotencyStore ?? undefined,
+    idempotencyTtlSeconds: ttlSeconds,
+    onDuplicate: options.onDuplicate,
   };
+}
+
+function normalizeTtlSeconds(candidate: number | undefined): number {
+  if (!Number.isFinite(candidate) || candidate === undefined) {
+    return 600;
+  }
+  const parsed = Number(candidate);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 600;
+  }
+  return Math.min(86_400, Math.max(30, Math.floor(parsed)));
+}
+
+function buildIdempotencyKey(topic: string, message: Message, options: NormalizedGuardOptions): string {
+  const headers = message.headers ?? {};
+  const located = findHeader(headers, MESSAGE_ID_HEADER);
+  const fromHeader = located?.value?.trim();
+  const envelope = message.payload as EnvelopeCandidate;
+  const fallback = typeof envelope?.id === 'string' ? envelope.id.trim() : undefined;
+  const idCandidate = fromHeader && fromHeader.length > 0 ? fromHeader : fallback;
+  if (!idCandidate || idCandidate.length === 0) {
+    return `bus:${topic}:unknown`;
+  }
+  return `bus:${topic}:${idCandidate}`;
 }
 
 export function withMessageGuards(bus: MessageBus, options: MessageBusGuardOptions): MessageBus {

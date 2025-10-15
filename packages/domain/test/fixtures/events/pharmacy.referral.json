@@ -30,7 +30,9 @@
         "exclusionFlags": ["pregnant", "allergy-penicillin"],
         "slot": {
           "start": "2025-01-08T09:00:00.000Z",
-          "end": "2025-01-08T09:15:00.000Z"
+          "end": "2025-01-08T09:15:00.000Z",
+          "locationOdsCode": "ODS1",
+          "reference": "slot-1"
         }
       }
     }

@@ -15,7 +15,7 @@ const clone = <T>(value: T): T => {
   return JSON.parse(JSON.stringify(value)) as T;
 };
 
-const registry: FeatureRegistry = clone(registryJson as FeatureRegistry);
+const registry = clone(registryJson) as unknown as FeatureRegistry;
 const featureIndex = new Map<string, FeatureSetDefinition>();
 const entityIndex = new Map<string, EntityDefinition>();
 

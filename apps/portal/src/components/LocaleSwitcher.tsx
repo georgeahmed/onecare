@@ -1,6 +1,6 @@
 import { ChangeEvent, useMemo, useId } from 'react';
 import { useIntl } from 'react-intl';
-import { getAvailableLocales, getLocaleMetadata, type Locale, supportedLocales, useLocale } from '../i18n';
+import { getAvailableLocales, getLocaleMetadata, type Locale, useLocale } from '../i18n';
 
 const LocaleSwitcher = () => {
   const { locale, setLocale } = useLocale();
@@ -24,9 +24,8 @@ const LocaleSwitcher = () => {
           const metadata = getLocaleMetadata(item);
           const labelId = metadata.labelId;
           const optionLabel = intl.formatMessage({ id: labelId, defaultMessage: item.toUpperCase() });
-          const isDebugLocale = !supportedLocales.includes(item as (typeof supportedLocales)[number]);
           return (
-            <option key={item} value={item} dir={metadata.direction} aria-label={optionLabel} data-debug={isDebugLocale || undefined}>
+            <option key={item} value={item} dir={metadata.direction} aria-label={optionLabel}>
               {optionLabel}
             </option>
           );

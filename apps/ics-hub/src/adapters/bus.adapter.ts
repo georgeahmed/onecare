@@ -240,3 +240,7 @@ export async function publishReferralAck(
   const envelope = createEnvelope(Topics.ics.referralAck, ack, correlationId);
   await publishWithGuard(bus, envelope.topic, envelope, correlationId, options);
 }
+
+export function __resetPublishCircuitBreakersForTest(): void {
+  circuitBreakers.clear();
+}

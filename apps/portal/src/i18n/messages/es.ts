@@ -71,6 +71,10 @@ const es = {
   'callback.window.within48h': 'Le llamamos dentro de 48 horas.',
   'callback.windows.ooh.accepting': 'Fuera del horario central seguimos aceptando solicitudes.',
   'callback.windows.ooh.closed': 'Fuera del horario central detenemos las devoluciones de llamada.',
+  'theme.switcher.label': 'Tema',
+  'theme.option.light': 'Claro',
+  'theme.option.dark': 'Oscuro',
+  'theme.option.high-contrast': 'Alto contraste',
   'booking.section.title': 'Citas disponibles',
   'booking.filter.modality': 'Modalidad',
   'booking.filter.modality.all': 'Todas las modalidades',
@@ -128,9 +132,14 @@ const es = {
   'intake.interpreter.checkbox': 'Necesito un intérprete o apoyo de accesibilidad',
   'intake.interpreter.language.label': 'Idioma preferido para la interpretación',
   'intake.interpreter.language.placeholder': 'Selecciona un idioma',
+  'intake.interpreter.language.multipleHint': 'Selecciona uno o varios idiomas que te ayuden a comunicarte mejor.',
   'intake.interpreter.notes.label': 'Notas opcionales',
   'intake.interpreter.notes.hint': 'Indica solo lo necesario para coordinar el apoyo. No incluyas historial médico ni datos personales.',
   'intake.interpreter.confirmBsl': 'Necesito apoyo en Lengua de Señas Británica (BSL)',
+  'intake.interpreter.remember.label': 'Recordar esta preferencia en este dispositivo',
+  'intake.interpreter.remember.hint': 'Guardamos las preferencias localmente cuando está activado. Desmarca para borrar los datos guardados.',
+  'schemaForm.errorSummary.title': 'Revisemos algunos datos',
+  'schemaForm.errorSummary.description': 'Corrige cada elemento antes de enviar nuevamente la solicitud.',
   'schemaForm.error.required': 'Este campo es obligatorio.',
   'schemaForm.error.invalidOption': 'Seleccione una opción admitida.',
   'schemaForm.error.invalidDate': 'Ingrese una fecha válida (AAAA-MM-DD).',
@@ -141,7 +150,10 @@ const es = {
   'schemaForm.error.maxValue': 'El valor supera el máximo permitido.',
   'schemaForm.error.multipleOf': 'El valor debe ser múltiplo del paso permitido.',
   'schemaForm.addItem': 'Agregar elemento',
-  'schemaForm.removeItem': 'Quitar elemento'
+  'schemaForm.removeItem': 'Quitar elemento',
+  'autosave.status.saving': 'Guardando borrador…',
+  'autosave.status.saved': 'Borrador guardado a las {time}.',
+  'autosave.status.restored': 'Borrador restaurado de las {time}.'
 } as const;
 
 export default es;

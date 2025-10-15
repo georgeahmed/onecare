@@ -13,6 +13,35 @@ Style
 - No business logic in adapters; keep side-effects in adapters, transitions in states.
 - Emit metrics/audit on transitions.
 
+Localization Authoring Guide
+- Glossary
+  - `practice` → OneCare clinic; use “practice” consistently (no synonyms).
+  - `patient` → “person seeking care” when space allows; otherwise “patient”.
+  - `interpreter` → “language interpreter”; avoid “translator” unless translating documents.
+- Tone & Readability
+  - Write plainly at an 8th-grade reading level; avoid idioms and clinical jargon.
+  - Prefer active voice and short sentences (20 words or fewer).
+  - Provide actionable guidance first, then optional background context.
+- Key Naming Conventions
+  - Keys follow `domain.section.message` (e.g. `intake.interpreter.notes.label`).
+  - Shared UI affordances use `ui.*`; error envelope strings map to codes in `docs/ERRORS.md`.
+  - Add new keys to `apps/portal/src/i18n/messages/en.ts` and mirror them in every locale file.
+- Workflow
+  1. Add English copy in `messages/en.ts` and update translated bundles (`messages/es.ts`).
+  2. Run `npx tsx apps/portal/scripts/i18n/extract.ts` to regenerate `apps/portal/locales/*.json`.
+  3. Run `npm run i18n:portal:check` (or CI) to confirm no keys are missing or stale.
+  4. Use the “Pseudo (debug)” locale in dev to surface truncation, overflow, and placeholder mistakes.
+  5. Document any reviewer context or glossary additions alongside the change set.
+- Content & Readability Review Lane
+  - Open a review ticket and assign the Content Reviewer rotation (see team/frontend/engineer-01.md for roster).
+  - Reviewer checklist: verify plain-language tone, sentence length, glossary adherence, and inclusive alternatives.
+  - Capture decisions in `docs/ADR/` when wording changes product behaviour or patient expectations.
+  - Update the localization glossary and link the ticket in the PR description; add QA notes to `docs/USAGE.md` matrix when new flows ship.
+- Review & QA
+  - Validate pluralisation/gender in ICU strings before handing off to translation.
+  - Exercise the QA matrix in `docs/USAGE.md` (screen reader + browser/device combos) for new flows.
+  - Capture updates in the localization glossary and notify translators via shared channel.
+
 Service Platform Checklist Template
 - Broker & Topics
   - Broker reachable (NATS/Kafka) with TLS/credentials; firewall/egress allowed. See: infra/runbooks/tls-credentials.md

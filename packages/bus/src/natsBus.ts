@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { createCounter, createHistogram } from '@onecare/observability';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
 import type { ErrorObject } from 'ajv';
@@ -21,6 +23,13 @@ import { MemoryBus } from './memoryBus';
 import { unwrapGuardedBus } from './guardedBus';
 const dlqSchemaPath = resolve(__dirname, '../../../schemas/common/dlq-event.json');
 const dlqSchema = JSON.parse(readFileSync(dlqSchemaPath, 'utf8')) as Record<string, unknown>;
+const publishLatencyMetric = createHistogram('bus.nats.publish.latency_ms');
+const handlerLatencyMetric = createHistogram('bus.nats.handler.latency_ms');
+const publishErrorMetric = createCounter('bus.nats.publish.errors');
+const handlerErrorMetric = createCounter('bus.nats.handler.errors');
+const dlqPublishMetric = createCounter('bus.nats.dlq.published');
+const dlqErrorMetric = createCounter('bus.nats.dlq.errors');
+const retryScheduledMetric = createCounter('bus.nats.retries.scheduled');
 
 export interface NatsBusOptions {
   url?: string;
@@ -95,6 +104,8 @@ export class NatsBus implements MessageBus {
   private dlqPublishedCount = 0;
   private dlqPublishFailuresCount = 0;
   private pendingLag = 0;
+  private lastPublishLatencyMs = 0;
+  private lastHandlerLatencyMs = 0;
 
   constructor(private readonly opts: NatsBusOptions = {}) {
     this.url = (opts.url ?? process.env.NATS_URL ?? 'nats://localhost:4222').trim();
@@ -146,10 +157,11 @@ export class NatsBus implements MessageBus {
   }
 
   async publish<T>(topic: string, payload: T, headers?: Record<string, string>): Promise<void> {
+    const started = performance.now();
     try {
       const js = await this.getJetStream();
       const data = this.encoder.encode(JSON.stringify(payload));
-      const publishOptions: JetStreamPublishOptions = {};
+      const publishOptions: Partial<JetStreamPublishOptions> = {};
       const messageId = this.deriveMessageId(payload, headers);
       if (headers && Object.keys(headers).length > 0) {
         publishOptions.headers = this.toMsgHeaders(headers);
@@ -159,8 +171,15 @@ export class NatsBus implements MessageBus {
       }
       await js.publish(topic, data, publishOptions);
       this.publishedCount += 1;
+      const duration = performance.now() - started;
+      this.lastPublishLatencyMs = duration;
+      publishLatencyMetric.record(duration, { topic, result: 'success' });
     } catch (err) {
       this.connected = false;
+      const duration = performance.now() - started;
+      this.lastPublishLatencyMs = duration;
+      publishLatencyMetric.record(duration, { topic, result: 'error' });
+      publishErrorMetric.add(1, { topic });
       throw err;
     }
   }
@@ -402,14 +421,22 @@ export class NatsBus implements MessageBus {
     if (info && typeof info.pending === 'number' && Number.isFinite(info.pending)) {
       this.pendingLag = info.pending;
     }
+    const handlerStarted = performance.now();
     try {
       await handler({
         topic: messageTopic,
         payload: payload as T,
         headers,
       });
+      const duration = performance.now() - handlerStarted;
+      this.lastHandlerLatencyMs = duration;
+      handlerLatencyMetric.record(duration, { topic: messageTopic, result: 'success' });
       await msg.ack();
     } catch (err) {
+      const duration = performance.now() - handlerStarted;
+      this.lastHandlerLatencyMs = duration;
+      handlerLatencyMetric.record(duration, { topic: messageTopic, result: 'error' });
+      handlerErrorMetric.add(1, { topic: messageTopic });
       await this.handleFailure(msg, messageTopic, payload, headers, err);
     }
   }

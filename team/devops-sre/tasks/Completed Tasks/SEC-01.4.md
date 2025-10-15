@@ -14,9 +14,9 @@ Steps
 2) Define a license allowlist (e.g., MIT, Apache-2.0, BSD) and flag unknown/forbidden licenses.
 3) Document remediation workflow and exception process.
 
-Current Findings
-- `.github/workflows/ci.yml` only runs Trivy and Gitleaks scans; there is no npm/pip audit step or license enforcement job.
-- `docs/SECURITY.md` lacks a dependency scanning or license policy section.
+Implementation Notes
+- `.github/workflows/ci.yml` now runs `npm audit`, `pip-audit`, and a license allowlist check, uploading JSON artefacts for review.
+- `docs/SECURITY.md` documents the allowlist, triage process, and expectations for vulnerability remediation.
 
 Acceptance Criteria
 - Scans run; license policy documented; exceptions tracked.

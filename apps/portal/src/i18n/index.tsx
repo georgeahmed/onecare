@@ -41,7 +41,15 @@ const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
 export const LOCALE_STORAGE_KEY = 'onecare.portal.locale';
 const LOCALE_CACHE_PREFIX = 'onecare.portal.locale.messages.';
 
-const isDevEnvironment = typeof import.meta !== 'undefined' ? import.meta.env?.DEV ?? false : process.env.NODE_ENV !== 'production';
+type MaybeNodeProcess = { process?: { env?: Record<string, string | undefined> } };
+
+const nodeEnv =
+  typeof globalThis !== 'undefined'
+    ? ((globalThis as MaybeNodeProcess).process?.env?.NODE_ENV ?? undefined)
+    : undefined;
+
+const isDevEnvironment =
+  typeof import.meta !== 'undefined' ? import.meta.env?.DEV ?? false : nodeEnv !== 'production';
 
 const availableLocalesList: Locale[] = (Object.keys(LOCALE_DEFINITIONS) as Locale[]).filter((key) => {
   const definition = LOCALE_DEFINITIONS[key];

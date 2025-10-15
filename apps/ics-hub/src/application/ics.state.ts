@@ -435,47 +435,88 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
     const ttlSeconds = resolveIcsIdempotencyTtl(ctx);
     ctx.ackPublishIdempotencyKey = idempotencyKey;
 
-    const startedAt = Date.now();
-
     const { status, result } = await executeWithIdempotency({
       store: ctx.idempotencyStore,
       key: idempotencyKey,
       ttlSeconds,
       execute: async () => {
-        const ack = await ctx.client!.sendReferral(ctx.referral!, {
-          correlationId,
-          organisationIdOverride: destinationOrgId,
+        const span = startSpan('ics.referral.ack', {
+          attributes: {
+            'ics.destination_org': destinationOrgId ?? 'unknown-org',
+            'ics.referral_id': ctx.referral?.referralId ?? 'unknown-referral',
+          },
         });
-        ctx.ack = ack;
-        await publishReferralAck(ctx.bus!, ack, correlationId, ctx.ackPublishOptions);
-        ctx.ackPublished = true;
-        ctx.ackLatencyMs = typeof ctx.receivedAtMs === 'number' ? Date.now() - ctx.receivedAtMs : Date.now() - startedAt;
-        pushAudit(
-          ctx,
-          'ics.referral.ack_published',
-          {
+        const attemptStartedAt = Date.now();
+        try {
+          const ack = await ctx.client!.sendReferral(ctx.referral!, {
+            correlationId,
+            organisationIdOverride: destinationOrgId,
+          });
+          ctx.ack = ack;
+          await publishReferralAck(ctx.bus!, ack, correlationId, ctx.ackPublishOptions);
+          ctx.ackPublished = true;
+          const latency =
+            typeof ctx.receivedAtMs === 'number'
+              ? Date.now() - ctx.receivedAtMs
+              : Date.now() - attemptStartedAt;
+          ctx.ackLatencyMs = latency;
+          const metricLabels = {
+            destinationOrgId,
+            accepted: ack.accepted ? 'true' : 'false',
+          };
+          ackPublishedCounter.add(1, metricLabels);
+          if (Number.isFinite(latency) && latency >= 0) {
+            ackLatencyHistogram.record(latency, metricLabels);
+          }
+          pushAudit(
+            ctx,
+            'ics.referral.ack_published',
+            {
+              referralId: ack.referralId,
+              destinationOrgId,
+              accepted: ack.accepted,
+            },
+            correlationId,
+          );
+          logger.info('ics.referral.ack_published', {
             referralId: ack.referralId,
             destinationOrgId,
-            accepted: ack.accepted,
-          },
-          correlationId,
-        );
-        logger.info('ics.referral.ack_published', {
-          referralId: ack.referralId,
-          destinationOrgId,
-          correlationId,
-        });
-        return ack;
+            correlationId,
+          });
+          span.setStatus({ code: SpanStatusCode.OK });
+          return ack;
+        } catch (error) {
+          ackFailureCounter.add(1, { destinationOrgId });
+          if (error instanceof Error) {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            logger.error('ics.referral.ack_failed', {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              correlationId,
+              reason: error.message,
+            });
+          } else {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: 'unknown_error' });
+            logger.error('ics.referral.ack_failed', {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              correlationId,
+              reason: 'unknown_error',
+            });
+          }
+          throw error;
+        } finally {
+          span.end();
+        }
       },
       onDuplicate: () => {
         ctx.ackPublished = true;
-      },
-      onError: (error) => {
-        logger.error('ics.referral.ack_failed', {
+        ackDuplicateCounter.add(1, { destinationOrgId });
+        logger.warn('ics.referral.ack_duplicate', {
           referralId: ctx.referral?.referralId,
           destinationOrgId,
           correlationId,
-          reason: error instanceof Error ? error.message : 'unknown_error',
         });
       },
     });
@@ -552,6 +593,17 @@ export function evaluateAutomation(
     now: options.now,
   });
   ctx.automationTasks = tasks;
+  if (tasks.length > 0) {
+    const publishKey = buildAutomationPublishKey(ctx, event, tasks);
+    if (publishKey) {
+      ctx.automationPublishIdempotencyKey = publishKey;
+    }
+    const debounceTtl = deriveAutomationDebounceTtl(tasks);
+    if (debounceTtl) {
+      const currentTtl = typeof ctx.idempotencyTtlSeconds === 'number' ? ctx.idempotencyTtlSeconds : 0;
+      ctx.idempotencyTtlSeconds = Math.max(currentTtl, debounceTtl);
+    }
+  }
   return tasks;
 }
 
@@ -612,6 +664,29 @@ function resolveIcsIdempotencyTtl(ctx: IcsContext): number {
 function deriveAutomationPublishKey(ctx: IcsContext): string {
   if (ctx.automationPublishIdempotencyKey) return ctx.automationPublishIdempotencyKey;
   return `ics:automation:${ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
+}
+
+function buildAutomationPublishKey(
+  ctx: IcsContext,
+  event: AutomationTriggerEvent,
+  tasks: AutomationTaskCreation[],
+): string {
+  const orgSegment = ctx.organisationId ?? 'unknown-org';
+  const sourceTaskId = event.current?.taskId ?? 'unknown-task';
+  const ruleSegment = tasks
+    .map((task) => `${task.ruleName}:${task.task.patientId}`)
+    .sort()
+    .join('|') || 'none';
+  const correlationSegment = event.correlationId ?? ctx.correlationId ?? 'none';
+  return `ics:automation:${orgSegment}:${sourceTaskId}:${ruleSegment}:${correlationSegment}`;
+}
+
+function deriveAutomationDebounceTtl(tasks: AutomationTaskCreation[]): number | undefined {
+  const windows = tasks
+    .map((task) => task.debounceWindowSeconds)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  if (windows.length === 0) return undefined;
+  return Math.max(...windows);
 }
 
 export class AckedState extends BaseState<IcsContext, IcsEvent> {

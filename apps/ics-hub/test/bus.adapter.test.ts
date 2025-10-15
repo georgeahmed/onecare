@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import type { MessageBus } from '@onecare/bus';
-import { publishWithGuard, publishAutomationTasks, replayDlqMessage, type DLQMessage } from '../src/adapters/bus.adapter';
+import { publishWithGuard, publishAutomationTasks, __resetPublishCircuitBreakersForTest, type DLQMessage } from '../src/adapters/bus.adapter';
+import { replayDlqMessage } from '../src/dev/replay';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { AutomationTaskCreation } from '../src/application/automation.rules';
 
@@ -37,6 +38,9 @@ class HangingBus implements MessageBus {
 }
 
 describe('publishWithGuard', () => {
+  beforeEach(() => {
+    __resetPublishCircuitBreakersForTest();
+  });
   it('retries and succeeds before DLQ', async () => {
     const bus = new FlakyBus(2);
     const envelope = createEnvelope(Topics.ics.referralAck, { ok: true }, 'cid-1');
@@ -160,6 +164,9 @@ describe('publishAutomationTasks', () => {
 });
 
 describe('replayDlqMessage', () => {
+  beforeEach(() => {
+    __resetPublishCircuitBreakersForTest();
+  });
   it('replays payload with original topic header', async () => {
     const bus = new RecordingBus();
     await replayDlqMessage(bus, {

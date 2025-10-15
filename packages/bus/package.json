@@ -8,7 +8,9 @@
     "typecheck": "tsc -p tsconfig.json --pretty"
   },
   "dependencies": {
-    "nats": "^2.17.0"
+    "nats": "^2.17.0",
+    "@onecare/ports": "file:packages/ports",
+    "@onecare/observability": "file:packages/observability"
   },
   "overrides": {
     "@onecare/events": "file:packages/events"

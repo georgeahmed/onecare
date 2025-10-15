@@ -39,11 +39,5 @@ Platform Checklist (pre-flight)
 
 Tasks
 - Completed items archived in `team/backend/Completed Tasks/engineer-05.md`.
-- [ ] BE-05.4 — Contract validators & codegen (schemas; TS/Py; compiled validators; contract tests)
-- [ ] BE-05.6 — DLQ and retry policy (bounded retries; poison quarantine; minimal context)
-- [ ] BE-05.8 — Security & privacy (PHI minimization; input sanitation; SSRF guardrails to CPCS)
-- [ ] BE-05.9 — Performance baselines (referral path p50/p95; throughput; budgets)
-- [ ] BE-05.10 — Health/readiness & graceful shutdown (adapter health; draining inflight)
 - [ ] BE-05.11 — Documentation & ADRs (router rules, CPCS contracts, failure mapping)
 - [ ] BE-05.12 — Patient notification adapter (idempotent, backoff; consent checks; minimal payloads)
-- [ ] BE-05.15 — Rate limits & backpressure (protect referral endpoint; 429/503 envelopes; metrics)

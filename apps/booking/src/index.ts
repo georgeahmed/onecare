@@ -132,7 +132,7 @@ async function handleSearch(
   }
 
   const context = createContext('booking-search', options, correlationId);
-  context.searchParams = validation.value;
+  context.searchParams = validation.value as unknown as Record<string, unknown>;
   try {
     await searchState.handle(context, { type: 'booking.search' });
   } catch (error) {
@@ -171,13 +171,13 @@ async function handleBooking(
       sendError(res, 'invalid_input', 'Invalid search parameters', correlationId, { errors: validation.errors });
       return;
     }
-    parsed.searchParams = validation.value;
+    parsed.searchParams = validation.value as unknown as Record<string, unknown>;
   }
 
   const context = createContext(`booking-${parsed.slot.id}`, options, correlationId);
   context.patientId = parsed.patientId;
   context.narrative = parsed.narrative;
-  context.searchParams = parsed.searchParams;
+  context.searchParams = parsed.searchParams as Record<string, unknown> | undefined;
   context.queueName = parsed.queueName ?? options.queueName ?? 'booking.notifications';
   context.originatingTaskId = parsed.originatingTaskId;
   context.selectedSlot = {

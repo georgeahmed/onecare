@@ -22,5 +22,33 @@ Engineer: Frontend 03 — Completed Tasks
   Evidence: `apps/portal/src/components/ErrorAlert.tsx:7` maps error codes to translated titles/descriptions; `docs/ERRORS.md:21` documents how envelopes map to UI guidance for portal surfaces.
 
 
+- [x] FE-03.6 — RTL & bidirectional text support (dir, CSS logical props, bidi isolation)  
+  Evidence: `apps/portal/src/i18n/index.tsx:136` computes locale directions and applies them to the document; `apps/portal/src/components/LocaleSwitcher.tsx:23` renders options with explicit `dir` metadata; `apps/portal/src/styles/global.css:332` swaps physical alignment for logical properties so slot cards respect RTL layouts.
+
+- [x] FE-03.7 — ICU messages + extraction pipeline (plural/gender; key conventions)  
+  Evidence: `apps/portal/scripts/i18n/extract.ts:8` exports locale bundles and enforces key parity; `.github/workflows/ci.yml:42` adds the extraction check to CI; `package.json:15` exposes `i18n:portal` commands for local authors.
+
+- [x] FE-03.8 — Pseudo-localization + missing-key detection (build/CI checks)  
+  Evidence: `apps/portal/src/i18n/pseudo.ts:1` generates pseudo-localized strings; `apps/portal/src/i18n/index.tsx:111` loads the pseudo locale on demand; `apps/portal/locales/pseudo.json` is generated alongside real locales for quick QA.
+
+- [x] FE-03.16 — Performance: lazy-load locale bundles; code-split translations  
+  Evidence: `apps/portal/src/i18n/index.tsx:111` dynamically imports non-default locales; `apps/portal/src/i18n/index.tsx:138` caches loaded bundles in-memory and in localStorage to avoid repeat fetches.
+
+- [x] FE-03.17 — Interpreter preferences: UI/validation/persistence (privacy-safe)  
+  Evidence: `schemas/ingest/portal-submission.json:58` defines the contract for interpreter preferences; `apps/portal/src/components/IntakeForm.tsx:159` sanitizes and submits the interpreter payload while persisting (with consent); `apps/portal/src/lib/interpreterPreferencesStorage.ts:1` encapsulates the local storage guardrails; `apps/portal/src/components/InterpreterPreferences.tsx:18` supports multi-select, notes, and “remember” consent.
+
+- [x] FE-03.18 — Fallback logic & offline locale cache (graceful degradation)  
+  Evidence: `apps/portal/src/i18n/index.tsx:138` reads/writes locale bundles through the offline cache before hitting the network; `apps/portal/src/hooks/useZoomFallback.ts:18` toggles responsive fallbacks at high zoom; `apps/portal/src/styles/global.css:216` stacks header/navigation when the zoom guard trips.
+
+- [x] FE-03.13 — Zoom/reflow compliance (200% zoom; no content loss)  
+  Evidence: `apps/portal/src/hooks/useZoomFallback.ts:18` stamps high-zoom state for runtime fallbacks; `apps/portal/src/styles/global.css:216` restructures header/nav under the zoom trigger; `docs/USAGE.md:53` adds the keyboard + 200 % zoom QA scenario.
+
+- [x] FE-03.19 — A11y/i18n QA matrix (SR combos, devices, browsers) & test plan  
+  Evidence: `docs/USAGE.md:41` adds the combined localization & accessibility QA matrix plus execution checklist.
+
+- [x] FE-03.20 — Localization authoring guide (glossary, style, review process)  
+  Evidence: `docs/CONVENTIONS.md:16` documents glossary, writing style, key conventions, and review workflow for new strings.
+
+
 Status: planned
 Progress: 0%

@@ -172,7 +172,7 @@ function createIdempotencyStore(): IdempotencyStore {
         callId: 'call-001',
         transcript: 'thank you for calling',
       });
-      expect(headers).toEqual({ 'x-correlation-id': 'corr-123' });
+      expect(headers).toMatchObject({ 'x-correlation-id': 'corr-123' });
       expect(ctx.callTranscribedEnvelope).toEqual(envelope);
       expect(ctx.callTranscribedPublishedAt).toBe(1_725_000_000_000);
     });
@@ -300,13 +300,18 @@ function createIdempotencyStore(): IdempotencyStore {
       });
       expect(ctx.intentRoutingDecision).toBe('auto');
       expect(publishSpy).toHaveBeenCalledTimes(3);
-      expect(publishSpy).toHaveBeenCalledWith(
-        Topics.telephony.intentClassified,
-        expect.objectContaining({
-          payload: expect.objectContaining({ callId: 'call-003', intent: 'telephony.callback' }),
-        }) as TypedEnvelope<IntentClassified>,
-        { 'x-correlation-id': 'corr-789' },
-      );
+      const classificationCall = publishSpy.mock.calls.find((call) => call[0] === Topics.telephony.intentClassified);
+      expect(classificationCall).toBeDefined();
+      const [, classificationEnvelope, classificationHeaders] = classificationCall as [
+        string,
+        TypedEnvelope<IntentClassified>,
+        Record<string, string> | undefined,
+      ];
+      expect(classificationEnvelope.payload).toMatchObject({
+        callId: 'call-003',
+        intent: 'telephony.callback',
+      });
+      expect(classificationHeaders).toMatchObject({ 'x-correlation-id': 'corr-789' });
       const publishTopics = publishSpy.mock.calls.map((call) => call[0]);
       expect(publishTopics).toContain(Topics.triage.input);
     });

@@ -74,3 +74,7 @@ Access to the above paths is gated by Vault policies and audited. Request access
 - Kubernetes deployments must apply the deny-by-default NetworkPolicy template in `infra/k8s/networkpolicies/egress-deny.yaml` and then explicitly allow necessary hosts/ports.
 - For HTTP clients, enforce SSRF mitigations by validating hostnames and IPs against the allowlist before issuing requests (see `apps/orchestrator/src/index.ts` for existing URL guards).
 - Document every exception request (team, hostname, expiry) in the environment runbooks and review quarterly.
+
+## Pentest Playbook
+
+See [`docs/SECURITY_PENTEST.md`](./SECURITY_PENTEST.md) for the pre-engagement checklist, communication plan, and seeded hardening backlog.

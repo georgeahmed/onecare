@@ -7,7 +7,7 @@ import { I18nProvider } from '../src/i18n';
 const config = {
   interpreterLanguages: ['en', 'ur'],
   offerBsl: true,
-  collectPatientPrefs: []
+  collectPatientPrefs: ['remember_interpreter']
 };
 
 describe('InterpreterPreferences', () => {
@@ -26,13 +26,15 @@ describe('InterpreterPreferences', () => {
       <I18nProvider>
         <InterpreterPreferences
           config={config}
-          value={{ requiresInterpreter: true, preferredLanguage: 'en' }}
+          value={{ requiresInterpreter: true, preferredLanguages: ['en'], rememberSelection: true }}
           onChange={() => undefined}
+          allowPersistence
         />
       </I18nProvider>
     );
 
     expect(html).toContain('Interpreter and accessibility preferences');
-    expect(html).toContain('Select a language');
+    expect(html).toContain('multiple');
+    expect(html).toContain('Remember this preference on this device');
   });
 });

@@ -38,6 +38,27 @@ Lint, Format, Test
 - Test (TS via Vitest): npm run test
 - Test (Python via Pytest): ./services-py/run-tests.sh
 
+Localization & Accessibility Tooling
+- Extract locale bundles: `npx tsx apps/portal/scripts/i18n/extract.ts`
+- Drift check (CI safe): `npm run i18n:portal:check`
+- Pseudo-locale: choose “Pseudo (debug)” from the portal language switcher (dev only) to surface truncation/missing keys.
+- Accessibility audit: `npm run a11y:portal` (runs pa11y against intake + booking flows).
+- High-contrast theme: switch via the header “Theme” menu; tokens live in `apps/portal/src/styles/tokens.css`.
+
+QA Matrix (Accessibility + i18n)
+| Scenario | Assistive Tech | Browser / Device | Notes |
+|----------|----------------|------------------|-------|
+| Intake happy path (web, interpreter required) | NVDA | Chrome on Windows 11 | Verify focus order, form error recovery, interpreter fields, high-contrast toggle |
+| Intake diversion / error state | VoiceOver | Safari on macOS | Confirm error alerts announce via live regions, pseudo-locale coverage |
+| Booking flow (slot selection + conflict) | Keyboard only + high zoom (200 %) | Firefox on Windows | Check zoom fallback (`data-zoom="high"`), ensure layouts reflow without horizontal scroll |
+| Intake + booking locale switch | VoiceOver | iOS Safari | Switch between English ↔ Spanish ↔ Pseudo; ensure announcements respect locale and nav works |
+| Callback windows review | TalkBack | Chrome on Android | Validate ordered lists, language fallback offline, high-contrast theme |
+
+Runbook
+- Before releasing new strings: run extraction, regenerate locales, and request translation review via shared glossary.
+- Record QA runs (matrix above) in the PR checklist; capture defects in `team/frontend/tasks/*`.
+- For zoom fallbacks verify `<html data-zoom="high">` is applied at ≥200 % and that header/nav stack vertically (see CSS in `apps/portal/src/styles/global.css`).
+
 Codegen (Contracts)
 - TS contracts from JSON Schemas: npm run codegen
 - Dry check (no generation): npm run codegen:check
