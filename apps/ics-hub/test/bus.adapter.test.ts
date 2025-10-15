@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageBus } from '@onecare/bus';
-import { publishWithGuard, publishAutomationTasks, type DLQMessage } from '../src/adapters/bus.adapter';
+import { publishWithGuard, publishAutomationTasks, replayDlqMessage, type DLQMessage } from '../src/adapters/bus.adapter';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { AutomationTaskCreation } from '../src/application/automation.rules';
 
@@ -70,6 +70,27 @@ describe('publishWithGuard', () => {
     expect(dlqEnvelope.payload.error).toBe('publish_timeout');
     expect(dlq!.headers?.['x-original-topic']).toBe('ics.referral.ack');
   });
+
+  it('opens circuit after repeated failures and short-circuits subsequent attempts', async () => {
+    const bus = new FlakyBus(10);
+    const envelope = createEnvelope(Topics.ics.referralAck, { ok: true }, 'cid-circuit');
+    await publishWithGuard(bus, envelope.topic, envelope, 'cid-circuit', {
+      timeoutMs: 0,
+      maxRetries: 0,
+      baseDelayMs: 1,
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 10_000 },
+    });
+    await publishWithGuard(bus, envelope.topic, envelope, 'cid-circuit', {
+      timeoutMs: 0,
+      maxRetries: 0,
+      baseDelayMs: 1,
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 10_000 },
+    });
+    const ackAttempts = bus.publishes.filter((entry) => entry.topic === Topics.ics.referralAck);
+    expect(ackAttempts).toHaveLength(0);
+    const dlqAttempts = bus.publishes.filter((entry) => entry.topic === Topics.broker.deadLetter);
+    expect(dlqAttempts).toHaveLength(2);
+  });
 });
 
 class RecordingBus implements MessageBus {
@@ -135,5 +156,22 @@ describe('publishAutomationTasks', () => {
     const bus = new RecordingBus();
     await publishAutomationTasks(bus, [], { taskPublish: { timeoutMs: 0 } });
     expect(bus.publishes).toHaveLength(0);
+  });
+});
+
+describe('replayDlqMessage', () => {
+  it('replays payload with original topic header', async () => {
+    const bus = new RecordingBus();
+    await replayDlqMessage(bus, {
+      originalTopic: Topics.ics.referralAck,
+      payload: { referralId: 'ref-1', accepted: true },
+      correlationId: 'corr-replay',
+      ts: '2025-01-01T00:00:00.000Z',
+    });
+    expect(bus.publishes).toHaveLength(1);
+    const call = bus.publishes[0];
+    expect(call.topic).toBe(Topics.ics.referralAck);
+    expect(call.headers?.['x-correlation-id']).toBe('corr-replay:replay');
+    expect(call.headers?.['x-original-topic']).toBe(Topics.ics.referralAck);
   });
 });

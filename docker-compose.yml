@@ -160,6 +160,93 @@ services:
       nats:
         condition: service_healthy
 
+  loki:
+    image: grafana/loki:2.9.6
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config/loki-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/logs/loki-config.yaml:/etc/loki/config/loki-config.yaml:ro
+      - loki-data:/loki
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  promtail:
+    image: grafana/promtail:2.9.6
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config/promtail-config.yaml"]
+    volumes:
+      - ./infra/logs/promtail-config.yaml:/etc/promtail/config/promtail-config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_FEATURE_TOGGLES_ENABLE=tempoSearch,lokiLogsStreaming
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infra/logs/grafana-provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
 volumes:
   nats-data:
   analytics-metrics:
+  loki-data:
+  prometheus-data:
+  grafana-data:

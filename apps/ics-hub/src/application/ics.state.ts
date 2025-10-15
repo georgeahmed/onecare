@@ -3,12 +3,23 @@ import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { IcsClient } from '../adapters/ics.client';
 import type { IcsOrganisationPolicy, ResolvedConfig } from '@onecare/config';
 import { getIcsOrganisationPolicies } from '@onecare/config';
-import { createCounter, logger } from '@onecare/observability';
-import type { TypedEnvelope, IcsReferralRequest, AuditEvent, ErrorEnvelope } from '@onecare/events';
+import { createCounter, createHistogram, logger, startSpan } from '@onecare/observability';
+import type {
+  TypedEnvelope,
+  IcsReferralRequest,
+  AuditEvent,
+  ErrorEnvelope,
+  IcsReferralAck,
+} from '@onecare/events';
 import type { MessageBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import { publishAutomationTasks, type AutomationPublishOptions } from '../adapters/bus.adapter';
+import {
+  publishAutomationTasks,
+  publishReferralAck,
+  type AutomationPublishOptions,
+  type PublishOptions as BusPublishOptions,
+} from '../adapters/bus.adapter';
 import { buildRouteDecision, type RouteDecision, type RoutingConfig } from './routing';
 import { validateReferralIngress } from './ingress';
 import { createErrorEnvelope } from './errors';
@@ -21,10 +32,15 @@ import {
   type AutomationIntent,
   type AutomationTaskCreation,
 } from './automation.rules';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 const routingDecisionCounter = createCounter('ics.routing.decisions_total');
 const routingBlockedCounter = createCounter('ics.routing.blocked_total');
 const routingRateLimitedCounter = createCounter('ics.routing.rate_limited_total');
+const ackPublishedCounter = createCounter('ics.ack.published_total');
+const ackFailureCounter = createCounter('ics.ack.failed_total');
+const ackDuplicateCounter = createCounter('ics.ack.duplicate_total');
+const ackLatencyHistogram = createHistogram('ics.ack.latency_ms');
 
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_ICS_IDEMPOTENCY_TTL_SECONDS = 5 * 60;
@@ -116,6 +132,7 @@ export interface IcsContext extends MachineContext {
   destinationOrgId?: string;
   auditIntents?: AuditEvent[];
   invalid?: boolean;
+  receivedAtMs?: number;
   automationConfig?: AutomationTriggerConfig;
   automationEvent?: AutomationTriggerEvent;
   automationIntents?: AutomationIntent[];
@@ -124,6 +141,13 @@ export interface IcsContext extends MachineContext {
   idempotencyStore?: IdempotencyStore;
   idempotencyTtlSeconds?: number;
   automationPublishIdempotencyKey?: string;
+  ack?: IcsReferralAck;
+  ackPublished?: boolean;
+  ackPublishIdempotencyKey?: string;
+  ackPublishOptions?: BusPublishOptions;
+  ackLatencyMs?: number;
+  responseHeaders?: Record<string, string>;
+  retryAfterSeconds?: number;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -182,6 +206,12 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       throw new Error('ics_client_missing');
     }
 
+    ctx.responseHeaders = {};
+    ctx.retryAfterSeconds = undefined;
+    ctx.receivedAtMs = this.now();
+    ctx.ackPublished = false;
+    ctx.ack = undefined;
+
     const validation = validateReferralIngress(ctx.rawEnvelope ?? ctx.referralEnvelope);
     if (!validation.ok) {
       ctx.invalid = true;
@@ -194,9 +224,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
         httpStatus: 400,
         error: validation.error,
       };
-      this.recordAudit(ctx, 'ics.referral.validation_failed', {
-        reason: validation.reason,
-      });
+      pushAudit(ctx, 'ics.referral.validation_failed', { reason: validation.reason }, undefined, this.now);
       routingDecisionCounter.add(1, { outcome: 'invalid' });
       return 'Validated';
     }
@@ -225,19 +253,31 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
           ctx.correlationId,
         ),
       };
-      this.recordAudit(ctx, 'ics.referral.validation_failed', {
-        reason: 'organisation_missing',
-        referralId: envelope.payload.referralId,
-      });
+      pushAudit(
+        ctx,
+        'ics.referral.validation_failed',
+        {
+          reason: 'organisation_missing',
+          referralId: envelope.payload.referralId,
+        },
+        undefined,
+        this.now,
+      );
       routingDecisionCounter.add(1, { outcome: 'invalid' });
       return 'Validated';
     }
 
     const correlationId = ctx.correlationId;
-    this.recordAudit(ctx, 'ics.referral.received', {
-      referralId: envelope.payload.referralId,
-      organisationId: requestedOrg,
-    }, correlationId);
+    pushAudit(
+      ctx,
+      'ics.referral.received',
+      {
+        referralId: envelope.payload.referralId,
+        organisationId: requestedOrg,
+      },
+      correlationId,
+      this.now,
+    );
 
     const normalisedOrg = normaliseOrgId(requestedOrg);
     ctx.organisationId = normalisedOrg;
@@ -245,11 +285,17 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     const routeDecision = buildRouteDecision(envelope.payload, this.routingConfig);
     ctx.routeDecision = routeDecision;
     ctx.destinationOrgId = routeDecision.destinationOrgId;
-    this.recordAudit(ctx, 'ics.referral.route_decided', {
-      referralId: envelope.payload.referralId,
-      destinationOrgId: routeDecision.destinationOrgId,
-      policy: routeDecision.policy,
-    }, correlationId);
+    pushAudit(
+      ctx,
+      'ics.referral.route_decided',
+      {
+        referralId: envelope.payload.referralId,
+        destinationOrgId: routeDecision.destinationOrgId,
+        policy: routeDecision.policy,
+      },
+      correlationId,
+      this.now,
+    );
 
     const policy = this.policies.get(normalisedOrg);
     if (!policy) {
@@ -302,6 +348,12 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
           correlationId,
         ),
       };
+      if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+        const seconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+        ctx.retryAfterSeconds = seconds;
+        ctx.responseHeaders ??= {};
+        ctx.responseHeaders['Retry-After'] = String(seconds);
+      }
       logger.warn('ics.routing.rate_limited', {
         organisationId: normalisedOrg,
         correlationId,
@@ -325,25 +377,6 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     return 'Validated';
   }
 
-  private timestamp(): string {
-    return new Date(this.now()).toISOString();
-  }
-
-  private recordAudit(
-    ctx: IcsContext,
-    type: string,
-    details: Record<string, unknown>,
-    correlationId?: string,
-  ): void {
-    const event: AuditEvent = {
-      type,
-      timestamp: this.timestamp(),
-      correlationId: correlationId ?? null,
-      actor: null,
-      details,
-    };
-    ctx.auditIntents?.push(event);
-  }
 }
 
 export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
@@ -386,7 +419,71 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
     super('Routed');
   }
 
-  async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (!ctx.client) {
+      throw new Error('ics_client_missing');
+    }
+    if (!ctx.referral) {
+      throw new Error('ics_referral_missing');
+    }
+    if (!ctx.bus) {
+      throw new Error('ics_bus_missing');
+    }
+    const destinationOrgId = ctx.routeDecision?.destinationOrgId ?? ctx.organisationId ?? ctx.referral.org;
+    const correlationId = ctx.correlationId;
+    const idempotencyKey = deriveAckIdempotencyKey(ctx, destinationOrgId);
+    const ttlSeconds = resolveIcsIdempotencyTtl(ctx);
+    ctx.ackPublishIdempotencyKey = idempotencyKey;
+
+    const startedAt = Date.now();
+
+    const { status, result } = await executeWithIdempotency({
+      store: ctx.idempotencyStore,
+      key: idempotencyKey,
+      ttlSeconds,
+      execute: async () => {
+        const ack = await ctx.client!.sendReferral(ctx.referral!, {
+          correlationId,
+          organisationIdOverride: destinationOrgId,
+        });
+        ctx.ack = ack;
+        await publishReferralAck(ctx.bus!, ack, correlationId, ctx.ackPublishOptions);
+        ctx.ackPublished = true;
+        ctx.ackLatencyMs = typeof ctx.receivedAtMs === 'number' ? Date.now() - ctx.receivedAtMs : Date.now() - startedAt;
+        pushAudit(
+          ctx,
+          'ics.referral.ack_published',
+          {
+            referralId: ack.referralId,
+            destinationOrgId,
+            accepted: ack.accepted,
+          },
+          correlationId,
+        );
+        logger.info('ics.referral.ack_published', {
+          referralId: ack.referralId,
+          destinationOrgId,
+          correlationId,
+        });
+        return ack;
+      },
+      onDuplicate: () => {
+        ctx.ackPublished = true;
+      },
+      onError: (error) => {
+        logger.error('ics.referral.ack_failed', {
+          referralId: ctx.referral?.referralId,
+          destinationOrgId,
+          correlationId,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        });
+      },
+    });
+
+    if (status === 'executed' && result) {
+      ctx.ack = result;
+    }
+
     return 'Acked';
   }
 }
@@ -525,4 +622,32 @@ export class AckedState extends BaseState<IcsContext, IcsEvent> {
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
     return 'Acked';
   }
+}
+
+function pushAudit(
+  ctx: IcsContext,
+  type: string,
+  details: Record<string, unknown>,
+  correlationId?: string,
+  timestampProvider: () => number = Date.now,
+): void {
+  const stamp = new Date(timestampProvider()).toISOString();
+  const event: AuditEvent = {
+    type,
+    timestamp: stamp,
+    correlationId: correlationId ?? null,
+    actor: null,
+    details,
+  };
+  ctx.auditIntents?.push(event);
+}
+
+function deriveAckIdempotencyKey(ctx: IcsContext, destinationOrgId: string): string {
+  if (ctx.ackPublishIdempotencyKey) {
+    return ctx.ackPublishIdempotencyKey;
+  }
+  const referralId = ctx.referral?.referralId ?? 'unknown-referral';
+  const envelopeId = ctx.referralEnvelope?.id ?? 'unknown-envelope';
+  const orgId = destinationOrgId?.trim().length ? destinationOrgId : 'unknown-org';
+  return `ics:ack:${orgId}:${referralId}:${envelopeId}`;
 }

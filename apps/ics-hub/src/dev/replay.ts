@@ -1,5 +1,6 @@
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
+import { publishWithGuard } from '../adapters/bus.adapter';
 
 export interface DLQEnvelope<T = unknown> {
   originalTopic: string;
@@ -19,7 +20,18 @@ export async function replayDlqMessage<T>(bus: MessageBus, dlq: DLQEnvelope<T>):
   if (replayCorrelation) {
     headers['x-correlation-id'] = replayCorrelation;
   }
-  await bus.publish(envelope.topic, envelope, headers);
+  await publishWithGuard(
+    bus,
+    envelope.topic,
+    envelope,
+    replayCorrelation,
+    {
+      timeoutMs: 500,
+      maxRetries: 1,
+      baseDelayMs: 10,
+    },
+    headers,
+  );
 }
 
 // Example usage (dev): replay one DLQ message

@@ -23,7 +23,7 @@ Resilience & Idempotency
 - [ ] Outbound guardrails: timeouts, retries with jitter, circuit breaker with half‑open, error classification. (BE‑01.8a..8c)
 - [ ] Fallback behavior for safety gate per config (‘rules’) with budgets. (BE‑01.8d)
 - [ ] Reliable publish with ack/timeout/retry; DLQ event on max attempts. (BE‑01.3H, BE‑01.16)
-- [ ] Audit writes non‑blocking, redacted, and resilient (bounded queue). (BE‑01.4H, BE‑01.13)
+- [x] Audit writes non‑blocking, redacted, and resilient (buffered queue + retry). (BE‑01.4H, BE‑01.13; see apps/orchestrator/src/adapters/audit/index.ts & apps/orchestrator/test/auditAdapter.test.ts)
 
 Observability & SLOs
 - [ ] OTel traces across HTTP → states → outbound ports; correlationId propagated end‑to‑end. (BE‑01.11)

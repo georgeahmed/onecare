@@ -9,6 +9,9 @@ import type {
 } from '@onecare/config';
 import { getPharmacyEligibilityRules } from '@onecare/config';
 import { logger } from '@onecare/observability';
+import type { PharmacyOutcome, PharmacyReferral } from '@onecare/events';
+import type { FhirBundle, FhirRepository, FhirResourceRef, IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 import {
   isEligible,
   type EligibilityDocument,
@@ -22,10 +25,10 @@ import type {
   ReferralResult,
   ReferralOptions,
 } from '../adapters/cpcs.client';
-import type { FhirBundle, FhirRepository, FhirResourceRef, IdempotencyStore } from '@onecare/ports';
-import { executeWithIdempotency } from '@onecare/ports';
+import { assertValidPharmacyOutcome } from '../adapters/contracts';
 
 export interface PharmacyContext extends MachineContext {
+  patientId?: string;
   document?: EligibilityDocument;
   patient?: EligibilityPatient;
   ruleset?: PharmacyEligibilityRuleset;
@@ -43,6 +46,8 @@ export interface PharmacyContext extends MachineContext {
   referralError?: unknown;
   escalationTaskRef?: FhirResourceRef;
   outcomeBundle?: FhirBundle;
+  referralPayload?: PharmacyReferral;
+  outcomePayload?: PharmacyOutcome;
   eligibilityDecision?: EligibilityDecision;
   eligibilityRule?: PharmacyEligibilityRule;
   idempotencyStore?: IdempotencyStore;
@@ -228,6 +233,8 @@ export class OutcomeRecordedState extends BaseState<PharmacyContext, PharmacyEve
       eligibilityReason: ctx.eligibilityDecision?.reason ?? 'eligible',
     });
     const bundle = buildOutcomeBundle(ctx);
+    const outcomePayload = buildOutcomePayload(ctx);
+    assertValidPharmacyOutcome(outcomePayload);
     const key = derivePharmacyOutcomeKey(ctx);
     const ttlSeconds = resolvePharmacyIdempotencyTtl(ctx);
     const { status } = await executeWithIdempotency({
@@ -270,6 +277,7 @@ export class OutcomeRecordedState extends BaseState<PharmacyContext, PharmacyEve
     if (status === 'skipped') {
       ctx.outcomeBundle = ctx.outcomeBundle ?? bundle;
     }
+    ctx.outcomePayload = outcomePayload;
     return 'OutcomeRecorded';
   }
 }
@@ -349,10 +357,13 @@ export interface PatientNotification {
 
 function buildServiceRequest(ctx: PharmacyContext): CpcsServiceRequest {
   const timestamp = new Date().toISOString();
-  const patientReference =
-    ctx.patient && typeof (ctx.patient as Record<string, unknown>).id === 'string'
-      ? `Patient/${(ctx.patient as Record<string, unknown>).id as string}`
-      : 'Patient/unknown';
+  const rawPatientId =
+    typeof ctx.patientId === 'string' && ctx.patientId.trim().length > 0
+      ? ctx.patientId.trim()
+      : typeof ctx.patient?.id === 'string' && ctx.patient.id.trim().length > 0
+        ? ctx.patient.id.trim()
+        : undefined;
+  const patientReference = rawPatientId ? `Patient/${rawPatientId}` : 'Patient/unknown';
   return {
     id: `sr-${ctx.id}`,
     patientReference,
@@ -448,6 +459,53 @@ function buildOutcomeBundle(ctx: PharmacyContext): FhirBundle {
       },
     ],
   } as FhirBundle;
+}
+
+function buildOutcomePayload(ctx: PharmacyContext): PharmacyOutcome {
+  if (!ctx.serviceRequest?.id) {
+    throw new Error('service_request_missing');
+  }
+  if (!ctx.referralOrgId) {
+    throw new Error('referral_org_missing');
+  }
+  if (!ctx.referralResult) {
+    throw new Error('referral_result_missing');
+  }
+
+  const payload: PharmacyOutcome = {
+    serviceRequestId: ctx.serviceRequest.id,
+    organisationId: ctx.referralOrgId,
+    status: ctx.referralResult.status,
+    referralReference: ctx.referralResult.reference,
+    recordedAt: new Date().toISOString(),
+  };
+
+  if (ctx.referralResult.code) {
+    payload.code = ctx.referralResult.code;
+  }
+  if (ctx.referralResult.message) {
+    payload.message = ctx.referralResult.message;
+  }
+  if (ctx.referralSummary) {
+    payload.summary = ctx.referralSummary;
+  }
+  if (ctx.document?.conditionCode) {
+    payload.condition = ctx.document.conditionCode;
+  }
+  if (ctx.document?.severity) {
+    payload.severity = ctx.document.severity;
+  }
+  if (ctx.referralSlot) {
+    payload.slot = {
+      start: ctx.referralSlot.start,
+      end: ctx.referralSlot.end,
+    };
+  }
+  if (shouldEscalateAfterReferral(ctx)) {
+    payload.escalated = true;
+  }
+
+  return payload;
 }
 
 function resolvePharmacyIdempotencyTtl(ctx: PharmacyContext): number {

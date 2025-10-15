@@ -19,3 +19,4 @@ Rollups
 
 Quality Checks
 - Run `npm run metrics:quality` (or `node scripts/analytics_quality.js`) to generate a markdown report highlighting missing fields and numeric outliers. Configure via `ANALYTICS_QUALITY_ZSCORE`, `ANALYTICS_SINK_PATH`, and `ANALYTICS_QUALITY_REPORT` or CLI flags (`--input`, `--output`, `--zscore`).
+- Set `ANALYTICS_QUALITY_QUARANTINE` (or `--quarantine`) to capture quarantined records as NDJSON for follow-up triage.

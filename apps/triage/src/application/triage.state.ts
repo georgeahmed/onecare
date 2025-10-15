@@ -14,11 +14,13 @@ import type { MessageBus } from '@onecare/bus';
 import { withMessageGuards } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
+import { extractFeatures } from './features';
 import { logFeatureVector } from '../featuresHook';
 
 export interface TriageContext extends MachineContext {
   config: ResolvedConfig;
   features: TriageFeatureVector;
+  rawFeatures?: Record<string, unknown>;
   patientId?: string;
   narrative?: string;
   now?: number;
@@ -212,7 +214,9 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
       return 'Duplicate';
     }
 
-    ctx.score = computeTriageScore(ctx.config, ctx.features ?? {});
+    const normalizedFeatures = extractFeatures(ctx.rawFeatures ?? ctx.features ?? {}, ctx.config);
+    ctx.features = normalizedFeatures;
+    ctx.score = computeTriageScore(ctx.config, normalizedFeatures);
     return 'Scored';
   }
 }

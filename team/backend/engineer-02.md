@@ -23,7 +23,7 @@ Contracts & Validation
 - ADR: docs/adr/2025-10-11-bus-injection.md
 
 Status: in-progress
-Progress: 26%
+Progress: 34%
 
 Dependencies
 - devops-sre/engineer-01 (Broker infra)
@@ -42,14 +42,11 @@ Tasks
 Completed tasks have moved to `team/backend/Completed Tasks/engineer-02.md`.
 
 Incomplete
-- [ ] BE-02.5a — Connection resilience (pending jittered backoff and status emitters in bus/orchestrator).
-- [ ] BE-02.5b — Metrics for reconnects, drops, and lag (no reconnect/lag metrics or instrumentation yet).
-- [ ] BE-02.6a — At-least-once semantics + dedupe keys (failures ack after DLQ; dedupe keys untouched).
 - [ ] BE-02.6b — Idempotency on consume (key propagation) (no idempotency store integration or key propagation).
 - [ ] BE-02.7 — Ordering/partitioning (keyed subjects; per-tenant ordering guarantees) (subjects remain unpartitioned).
 - [ ] BE-02.8 — Flow control/backpressure (prefetch/credits, size limits; pressure signals) (no adaptive flow control or pressure signals).
 - [ ] BE-02.9 — Security hardening (TLS, creds, subject ACLs; secret rotation readiness) (TLS creds/rotation not implemented).
-- [ ] BE-02.10 — Observability (latency histograms, error/retry counters, spans; correlationId propagation) (no bus-level metrics or tracing spans).
+- [ ] BE-02.10 — Observability (latency histograms, error/retry counters, spans; correlationId propagation) (basic counters/histograms in place; spans and latency instrumentation still pending).
 - [ ] BE-02.11 — Health/readiness (ping bus, durable sub status; probe cache) (lack readiness probes beyond basic `busReady` flag).
 - [ ] BE-02.13 — Advanced DLQ/retry (bounded retries, poison detection, requeue tooling) (no advanced retry/DLQ tooling).
 - [ ] BE-02.14 — Parity tests vs MemoryBus (deterministic; no network in unit) (parity test suite not started).

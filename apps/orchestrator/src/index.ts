@@ -8,7 +8,14 @@ import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, PortalSubmission, Topics, AuditEvent } from '@onecare/events';
 import { validate } from '@onecare/domain';
-import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
+import {
+  initTracing,
+  logger,
+  setCorrelationId,
+  withCorrelationContext,
+  createCounter,
+  createHistogram,
+} from '@onecare/observability';
 import { deriveIdempotencyKey, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
@@ -34,6 +41,13 @@ import type { GateDenialReason } from './application/orchestrator.state';
 const port = resolveServerPort();
 const busImpl = (process.env.BUS_IMPL ?? '').trim().toLowerCase();
 const wantsNats = busImpl !== 'memory' && Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
+const reconnectBaseDelayMs = parseReconnectBaseDelay(process.env.NATS_RECONNECT_BASE_DELAY_MS);
+const reconnectMaxDelayMs = parseReconnectMaxDelay(process.env.NATS_RECONNECT_MAX_DELAY_MS, reconnectBaseDelayMs);
+const reconnectJitterRatio = parseReconnectJitterRatio(process.env.NATS_RECONNECT_JITTER_RATIO);
+const reconnectScheduleCounter = createCounter('bus.reconnect.scheduled');
+const reconnectEventCounter = createCounter('bus.reconnect.events');
+const disconnectEventCounter = createCounter('bus.disconnect.events');
+const reconnectDelayHistogram = createHistogram('bus.reconnect.delay');
 function resolvePracticeId(): string {
   const envValue = process.env.PRACTICE_ID?.trim();
   if (envValue) return envValue;
@@ -140,6 +154,37 @@ function parseBooleanFlag(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
+function parseReconnectBaseDelay(raw: string | undefined): number {
+  const fallback = 1_500;
+  const parsed = raw ? Number(raw.trim()) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  const coerced = Math.floor(parsed);
+  return Math.min(Math.max(100, coerced), 60_000);
+}
+
+function parseReconnectMaxDelay(raw: string | undefined, base: number): number {
+  const fallback = 30_000;
+  const parsed = raw ? Number(raw.trim()) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return Math.max(base, fallback);
+  }
+  const coerced = Math.floor(parsed);
+  return Math.max(base, Math.min(coerced, 5 * 60_000));
+}
+
+function parseReconnectJitterRatio(raw: string | undefined): number {
+  const fallback = 0.2;
+  const parsed = raw ? Number(raw.trim()) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  if (parsed <= 0) return 0;
+  if (parsed >= 1) return 1;
+  return parsed;
+}
+
 const featureLoggingOn = parseBooleanFlag(process.env.FEATURE_LOGGING);
 let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore() : null;
 const fhirBaseUrl = resolveFhirBaseUrl();
@@ -216,6 +261,7 @@ let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
 let _natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
+let reconnectAttempts = 0;
 const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const BOOKING_RESOURCES = ['Slot'] as const;
 const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
@@ -377,12 +423,30 @@ function buildConnectionOptions(): ConnectionOptions {
 
 function scheduleReconnect(delayMs?: number) {
   if (reconnectTimer) return;
-  const fallbackDelay = Number(process.env.NATS_RECONNECT_DELAY_MS ?? '1500');
-  const delay = typeof delayMs === 'number' && delayMs > 0 ? delayMs : (!Number.isNaN(fallbackDelay) && fallbackDelay > 0 ? fallbackDelay : 1500);
+  reconnectAttempts += 1;
+  const computedDelay =
+    typeof delayMs === 'number' && delayMs > 0 ? Math.floor(delayMs) : calculateReconnectDelay(reconnectAttempts);
+  reconnectDelayHistogram.record(computedDelay, { attempt: reconnectAttempts });
+  reconnectScheduleCounter.add(1, { attempt: reconnectAttempts, delayMs: computedDelay });
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
     void establishBusConnection();
-  }, delay);
+  }, computedDelay);
+}
+
+function calculateReconnectDelay(attempt: number): number {
+  const boundedAttempt = Math.max(1, attempt);
+  const exponential = Math.min(
+    reconnectMaxDelayMs,
+    reconnectBaseDelayMs * Math.pow(2, Math.max(0, boundedAttempt - 1)),
+  );
+  if (reconnectJitterRatio <= 0) {
+    return exponential;
+  }
+  const jitterSpan = Math.max(1, Math.floor(exponential * reconnectJitterRatio));
+  const min = Math.max(100, exponential - jitterSpan);
+  const max = exponential + jitterSpan;
+  return Math.round(min + Math.random() * (max - min));
 }
 
 function monitorNats(conn: NatsConnection) {
@@ -390,6 +454,9 @@ function monitorNats(conn: NatsConnection) {
     for await (const status of conn.status()) {
       const event = status.type;
       if (event === 'reconnect') {
+        reconnectEventCounter.add(1, { event });
+        reconnectAttempts = 0;
+        markNatsBusConnected(bus, true);
         busReady = true;
         logger.info('NATS connection restored', { event });
       } else if (
@@ -400,6 +467,8 @@ function monitorNats(conn: NatsConnection) {
         event === 'ldm' ||
         event === 'error'
       ) {
+        disconnectEventCounter.add(1, { event });
+        markNatsBusConnected(bus, false);
         busReady = false;
         logger.warn('NATS connection disrupted', { event });
         if (event === 'disconnect' || event === 'error') {
@@ -410,11 +479,13 @@ function monitorNats(conn: NatsConnection) {
       }
     }
     busReady = false;
+    markNatsBusConnected(bus, false);
     logger.warn('NATS status iterator completed unexpectedly');
     scheduleReconnect();
   })().catch((err: unknown) => {
     logger.error('NATS status monitoring failed', { err: err instanceof Error ? err.message : err });
     busReady = false;
+    markNatsBusConnected(bus, false);
     scheduleReconnect();
   });
 }
@@ -437,6 +508,7 @@ async function establishBusConnection(): Promise<void> {
     bus = buildMessageBus({ connection: conn });
     markNatsBusConnected(bus, true);
     busReady = true;
+    reconnectAttempts = 0;
     monitorNats(conn);
     logger.info('Connected to NATS', { servers: options.servers });
   } catch (err: unknown) {

@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { PortalSubmission } from '../../lib/types';
 import defaultFieldConfig, { type FieldConfig, type FieldConfigMap, type FieldOption } from './fieldMap';
@@ -72,7 +72,7 @@ export type ValidationIssue =
 
 const toPathKey = (path: PathSegment[]): string => path.map((segment) => segment.toString()).join('.');
 
-const toFieldId = (key: string): string =>
+export const toFieldId = (key: string): string =>
   key ? `schema-field-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}` : 'schema-field-root';
 
 const normalizeConfigKey = (key: string): string => key.replace(/\.\d+/g, '[]');
@@ -120,6 +120,15 @@ const humanizeSegment = (segment: string): string =>
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const shallowEqualRecords = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+  return aKeys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
+};
 
 const getValueAtPath = (value: unknown, path: PathSegment[]): unknown =>
   path.reduce<unknown>((current, segment) => {
@@ -354,10 +363,11 @@ export interface SchemaFormProps<TValue> {
   value: TValue;
   onChange: (next: TValue) => void;
   fieldConfig?: FieldConfigMap;
+  onErrorsChange?: (errors: Record<string, string>) => void;
 }
 
 const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission>>(
-  ({ schema, value, onChange, fieldConfig = defaultFieldConfig }, ref) => {
+  ({ schema, value, onChange, fieldConfig = defaultFieldConfig, onErrorsChange }, ref) => {
     const intl = useIntl();
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [touched, setTouched] = useState<Set<string>>(() => new Set());

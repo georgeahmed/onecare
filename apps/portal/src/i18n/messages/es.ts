@@ -4,6 +4,7 @@ const es = {
   'app.localeSwitcher.label': 'Idioma',
   'locale.name.en': 'Inglés',
   'locale.name.es': 'Español',
+  'locale.name.pseudo': 'Pseudo (depuración)',
   'intake.practiceId.label': 'ID del centro',
   'intake.patientId.label': 'ID del paciente',
   'intake.patient.dob.label': 'Fecha de nacimiento',

@@ -14,7 +14,7 @@ Start Here
 - Schemas: schemas/analytics/metric.json
 
 Status: in-progress
-Progress: 35%
+Progress: 50%
 
 Dependencies
 - devops-sre/engineer-02 (Observability stack)
@@ -36,16 +36,16 @@ Completed
 - [x] DE-01.5 — Data hygiene checks (missing fields, outliers) + report
 - [x] DE-01.6 — Analytics payload schema validation
 - [x] DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
+- [x] DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
+- [x] DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails)
+- [x] DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report)
 
 Incomplete
-- [ ] DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ) (Outstanding: lacks retry/backoff with jitter, metrics emission, and explicit DLQ publishing; current implementation only guards idempotency.)
 - [ ] DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction) (Outstanding: no analytics storage ADR or Parquet layout/compaction tooling in repo.)
-- [ ] DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails) (Outstanding: consumer writes labels verbatim; no allowlist/redaction logic or tests.)
-- [ ] DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report) (Outstanding: no DQ/quarantine runner or analytics DQ documentation found.)
 - [ ] DE-01.12 — Incremental rollups (windowed p50/p95, idempotent upserts, backfill) (Outstanding: only daily rollup script present; no sliding window upserts or backfill mode.)
 - [ ] DE-01.13 — Backfill & reprocessing framework (range runs, job metadata, idempotency) (Outstanding: no backfill CLI/ledger or resumable framework implemented.)
 - [ ] DE-01.14 — Lineage & metadata (OpenLineage hooks; dataset/version tags) (Outstanding: no lineage emission hooks or supporting docs discovered.)
-- [ ] DE-01.15 — Pipeline observability (ingest lag, sink latency, error rates; dashboards) (Outstanding: consumer lacks metrics instrumentation and dashboards omit lag/retry/DLQ panels.)
+- [ ] DE-01.15 — Pipeline observability (ingest lag, sink latency, error rates; dashboards) (Outstanding: ingest metrics exist, but dashboards still lack lag/retry/DLQ panels and no aggregation pipeline publishes them.)
 - [ ] DE-01.16 — Retention & lifecycle (TTL, cold storage tiering, vacuum) (Outstanding: retention ADR/job absent; no lifecycle tooling committed.)
 - [ ] DE-01.17 — Security & governance (encryption, IAM least-privilege, secrets, access logs) (Outstanding: analytics security/governance documentation missing.)
 - [ ] DE-01.18 — Performance/load testing (throughput, backpressure, cost/perf notes) (Outstanding: no load generator or performance study assets.)

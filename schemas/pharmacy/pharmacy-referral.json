@@ -7,6 +7,20 @@
     "patientId": { "type": "string" },
     "condition": { "type": "string" },
     "pharmacyOrg": { "type": "string" },
+    "patientAgeYears": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "patientSex": {
+      "type": ["string", "null"],
+      "enum": ["female", "male", "other", "unknown", null]
+    },
+    "severity": { "type": ["string", "null"], "minLength": 1 },
+    "exclusionFlags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
     "slot": {
       "type": ["object", "null"],
       "properties": {
@@ -20,4 +34,3 @@
   "required": ["patientId", "condition", "pharmacyOrg"],
   "additionalProperties": false
 }
-

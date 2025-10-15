@@ -11,6 +11,7 @@ export interface EligibilityDocument {
 }
 
 export interface EligibilityPatient {
+  id?: string;
   ageYears?: number;
   sex?: PharmacyPatientSex;
   exclusionFlags?: string[];

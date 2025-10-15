@@ -2,6 +2,7 @@
 // Replace with a proper scheduler or job queue as needed.
 
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type { ResolvedConfig } from '@onecare/config';
 import { createCounter, logger } from '@onecare/observability';
 import {
@@ -25,6 +26,7 @@ export interface ScheduleOptions {
 
 export interface ScheduledTask {
   cancel(): void;
+  __trigger?(): Promise<void>;
 }
 
 export function every(intervalMs: number, task: Task): ScheduledTask {
@@ -60,6 +62,9 @@ const portalStateChangedCounter = createCounter('portal.state.changed');
 const portalStateUnchangedCounter = createCounter('portal.state.unchanged');
 const deferralFlushCounter = createCounter('deferral.flush.count');
 const deferralExpiredCounter = createCounter('deferral.expired');
+const schedulerTickCounter = createCounter('scheduler.tick');
+const schedulerSkipCounter = createCounter('scheduler.skip.singleflight');
+const schedulerNoopCounter = createCounter('scheduler.idempotent.noop');
 
 const DEFAULT_SINGLEFLIGHT_TTL_MS = 15_000;
 
@@ -85,6 +90,7 @@ export interface PortalGuardDependencies {
   deferralStore?: DeferralStore;
   deferralPublisher?: DeferralPublisher;
   portalNotifyPublisher?: PortalNotifyPublisher;
+  monotonicNow?: () => number;
 }
 
 export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDependencies): ScheduledTask {
@@ -94,8 +100,9 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
   const intervalMs = 60_000;
   const jitterMs = 5_000;
   let inFlight = false;
-  let lastRunCompletedAt = 0;
+  let lastRunCompletedAtMonotonic = 0;
   let timer: NodeJS.Timeout | undefined;
+  const monotonicNow = deps.monotonicNow ?? (() => performance.now());
 
   const schedule = (baseDelay: number, opts: { applyJitter?: boolean } = {}): void => {
     const applyJitter = opts.applyJitter ?? true;
@@ -113,15 +120,17 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
 
   const tick = async (): Promise<void> => {
     if (inFlight) {
+      schedulerSkipCounter.add(1, { practiceId, reason: 'in_flight' });
       schedule(intervalMs);
       return;
     }
 
     const now = nowFn();
-    const nowMs = now.valueOf();
-    if (lastRunCompletedAt > 0) {
-      const elapsed = nowMs - lastRunCompletedAt;
+    const nowMonotonic = monotonicNow();
+    if (lastRunCompletedAtMonotonic > 0) {
+      const elapsed = nowMonotonic - lastRunCompletedAtMonotonic;
       if (elapsed < ttl) {
+        schedulerSkipCounter.add(1, { practiceId, reason: 'lease_active' });
         schedule(ttl - elapsed, { applyJitter: false });
         return;
       }
@@ -131,6 +140,7 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
     let ran = false;
     const correlationId = correlationFactory();
     try {
+      schedulerTickCounter.add(1, { practiceId });
       portalTickCounter.add(1, { practiceId });
       const config = await deps.loadConfig(practiceId);
       const decision = await runPortalGuardTick(practiceId, now, correlationId, config, deps.adapter, deps);
@@ -152,7 +162,7 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
       });
     } finally {
       if (ran) {
-        lastRunCompletedAt = nowMs;
+        lastRunCompletedAtMonotonic = monotonicNow();
       }
       inFlight = false;
       schedule(intervalMs);
@@ -168,6 +178,7 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
         timer = undefined;
       }
     },
+    __trigger: tick,
   };
 }
 
@@ -195,6 +206,7 @@ export async function runPortalGuardTick(
   logDecision(practiceId, correlationId, decision);
 
   if (!decision.changed || decision.intents.length === 0) {
+    schedulerNoopCounter.add(1, { practiceId, reason: 'unchanged' });
     await processDeferrals(practiceId, now, correlationId, decision, deps);
     return decision;
   }

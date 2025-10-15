@@ -9,6 +9,7 @@ Runbooks
 - Event Bus
   - infra/event-bus/subjects-acls.md — Subjects/streams creation, ACLs, retention, partitioning.
   - infra/event-bus/dlq-runbook.md — DLQ inspection, triage, replay, alert thresholds.
+  - docs/runbooks/nats-bus-resilience.md — Node bus reconnect, retry, and idempotency controls.
 - Idempotency
   - infra/runbooks/idempotency-store.md — Redis reserve semantics, TTLs, non-PHI keys, tests.
 - Observability

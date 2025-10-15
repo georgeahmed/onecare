@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useIntl } from 'react-intl';
 import type { ErrorEnvelope } from '../lib/types';
+import Alert from './ui/Alert';
+import Button from './ui/Button';
+import { classNames } from '../lib/classNames';
 
 type ErrorCode = ErrorEnvelope['error']['code'];
 
@@ -111,18 +114,17 @@ const ErrorAlert = ({
     return null;
   }
 
-  const combinedClassName = ['error-alert', className].filter(Boolean).join(' ');
-
   return (
-    <section
+    <Alert
+      variant="error"
+      title={normalized.title}
+      className={classNames('error-alert', className)}
       id={id}
       ref={containerRef}
       role="alert"
       tabIndex={-1}
       aria-live="assertive"
-      className={combinedClassName}
     >
-      <h2>{normalized.title}</h2>
       <p>{normalized.description}</p>
       {normalized.correlationId ? (
         <p>
@@ -131,13 +133,13 @@ const ErrorAlert = ({
       ) : null}
       <div>
         {onRetry ? (
-          <button type="button" onClick={onRetry}>
+          <Button type="button" variant="subtle" onClick={onRetry}>
             {intl.formatMessage({ id: 'error.retry' })}
-          </button>
+          </Button>
         ) : null}
         <a href={supportUrl ?? DEFAULT_SUPPORT_URL}>{intl.formatMessage({ id: 'error.contactSupport' })}</a>
       </div>
-    </section>
+    </Alert>
   );
 };
 

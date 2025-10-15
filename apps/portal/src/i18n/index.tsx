@@ -1,25 +1,64 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { IntlProvider } from 'react-intl';
-import en from './messages/en';
-import es from './messages/es';
+import enMessages from './messages/en';
+import { generatePseudoMessages } from './pseudo';
 
-export type Locale = 'en' | 'es';
+const DEV_PSEUDO_LOCALE = 'pseudo' as const;
+const REAL_LOCALES = ['en', 'es'] as const;
+
+export type RealLocale = typeof REAL_LOCALES[number];
+export type Locale = RealLocale | typeof DEV_PSEUDO_LOCALE;
+
+type LocaleDirection = 'ltr' | 'rtl';
+
+type LocaleDefinition = {
+  direction: LocaleDirection;
+  labelId: string;
+  devOnly?: boolean;
+};
 
 type LocaleContextValue = {
   locale: Locale;
+  direction: LocaleDirection;
   setLocale: (locale: Locale) => void;
 };
 
-const messages: Record<Locale, Record<string, string>> = {
-  en,
-  es
+const LOCALE_DEFINITIONS: Record<Locale, LocaleDefinition> = {
+  en: { direction: 'ltr', labelId: 'locale.name.en' },
+  es: { direction: 'ltr', labelId: 'locale.name.es' },
+  [DEV_PSEUDO_LOCALE]: { direction: 'ltr', labelId: 'locale.name.pseudo', devOnly: true }
 };
+
+const LOCALE_MESSAGE_LOADERS: Record<RealLocale, () => Promise<Record<string, string>>> = {
+  en: async () => enMessages,
+  es: async () => import('./messages/es').then((module) => module.default)
+};
+
+const messageCache = new Map<Locale, Record<string, string>>([[ 'en', enMessages ]]);
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
 
 export const LOCALE_STORAGE_KEY = 'onecare.portal.locale';
+const LOCALE_CACHE_PREFIX = 'onecare.portal.locale.messages.';
 
-const isSupportedLocale = (value: string | null | undefined): value is Locale => value === 'en' || value === 'es';
+const isDevEnvironment = typeof import.meta !== 'undefined' ? import.meta.env?.DEV ?? false : process.env.NODE_ENV !== 'production';
+
+const availableLocalesList: Locale[] = (Object.keys(LOCALE_DEFINITIONS) as Locale[]).filter((key) => {
+  const definition = LOCALE_DEFINITIONS[key];
+  return !definition.devOnly || isDevEnvironment;
+});
+
+const supportedRealLocales = REAL_LOCALES.slice();
+
+const isSupportedLocale = (value: string | null | undefined): value is Locale => {
+  if (!value) return false;
+  return availableLocalesList.includes(value as Locale);
+};
+
+const isSupportedRealLocale = (value: string | null | undefined): value is RealLocale => {
+  if (!value) return false;
+  return supportedRealLocales.includes(value as RealLocale);
+};
 
 const readStoredLocale = (): Locale | null => {
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -27,7 +66,7 @@ const readStoredLocale = (): Locale | null => {
   }
   try {
     const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-    return isSupportedLocale(stored) ? stored : null;
+    return isSupportedLocale(stored) ? (stored as Locale) : null;
   } catch {
     return null;
   }
@@ -52,29 +91,146 @@ export const resolveInitialLocale = (): Locale => {
   if (typeof navigator !== 'undefined') {
     const language = navigator.language?.split?.('-')?.[0];
     if (isSupportedLocale(language)) {
-      return language;
+      return language as Locale;
+    }
+    if (isSupportedRealLocale(language)) {
+      return language as RealLocale;
     }
   }
   return 'en';
 };
 
+const loadLocaleMessages = async (locale: Locale): Promise<Record<string, string>> => {
+  if (messageCache.has(locale)) {
+    return messageCache.get(locale)!;
+  }
+  if (locale === DEV_PSEUDO_LOCALE) {
+    const base = await loadLocaleMessages('en');
+    if (messageCache.has(DEV_PSEUDO_LOCALE)) {
+      return messageCache.get(DEV_PSEUDO_LOCALE)!;
+    }
+    const pseudo = generatePseudoMessages(base);
+    messageCache.set(DEV_PSEUDO_LOCALE, pseudo);
+    return pseudo;
+  }
+  const loader = LOCALE_MESSAGE_LOADERS[locale];
+  const resolved = await loader();
+  messageCache.set(locale, resolved);
+  return resolved;
+};
+
+export const getAvailableLocales = (): Locale[] => availableLocalesList.slice();
+
+export const getRealLocales = (): RealLocale[] => supportedRealLocales.slice();
+
+export const getLocaleMetadata = (locale: Locale): LocaleDefinition => LOCALE_DEFINITIONS[locale];
+
+export const getLocaleDirection = (locale: Locale): LocaleDirection => LOCALE_DEFINITIONS[locale].direction;
+
+export const cacheLocaleMessages = (locale: Locale, messages: Record<string, string>): void => {
+  messageCache.set(locale, messages);
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(`${LOCALE_CACHE_PREFIX}${locale}`, JSON.stringify(messages));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
+export const readCachedLocaleMessages = (locale: Locale): Record<string, string> | null => {
+  if (messageCache.has(locale)) {
+    return messageCache.get(locale)!;
+  }
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null;
+  }
+  try {
+    const stored = window.localStorage.getItem(`${LOCALE_CACHE_PREFIX}${locale}`);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Record<string, string>;
+    messageCache.set(locale, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+export const applyDocumentLanguage = (value: Locale): void => {
+  if (typeof document === 'undefined' || !document.documentElement) {
+    return;
+  }
+  document.documentElement.lang = value === DEV_PSEUDO_LOCALE ? 'en' : value;
+};
+
+export const applyDocumentDirection = (direction: LocaleDirection): void => {
+  if (typeof document === 'undefined' || !document.documentElement) {
+    return;
+  }
+  document.documentElement.dir = direction;
+};
+
 export const I18nProvider = ({ children }: { children: ReactNode }) => {
   const [locale, setLocaleState] = useState<Locale>(resolveInitialLocale);
+  const [messages, setMessages] = useState<Record<string, string>>(() => messageCache.get(locale) ?? enMessages);
+  const [direction, setDirection] = useState<LocaleDirection>(() => getLocaleDirection(locale));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const cached = readCachedLocaleMessages(locale);
+    if (cached) {
+      setMessages(cached);
+    }
+
+    loadLocaleMessages(locale)
+      .then((loaded) => {
+        if (cancelled) return;
+        cacheLocaleMessages(locale, loaded);
+        setMessages(loaded);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const fallback = messageCache.get('en') ?? enMessages;
+        setMessages(fallback);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [locale]);
+
+  useEffect(() => {
+    const nextDirection = getLocaleDirection(locale);
+    setDirection(nextDirection);
+  }, [locale]);
+
+  useEffect(() => {
+    applyDocumentLanguage(locale);
+  }, [locale]);
+
+  useEffect(() => {
+    applyDocumentDirection(direction);
+  }, [direction]);
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
     persistLocaleValue(next);
   }, []);
 
-  const contextValue = useMemo(() => ({ locale, setLocale }), [locale, setLocale]);
-
-  useEffect(() => {
-    applyDocumentLanguage(locale);
-  }, [locale]);
+  const contextValue = useMemo(
+    () => ({
+      locale,
+      direction,
+      setLocale
+    }),
+    [locale, direction, setLocale]
+  );
 
   return (
     <LocaleContext.Provider value={contextValue}>
-      <IntlProvider locale={locale} messages={messages[locale]} defaultLocale="en">
+      <IntlProvider locale={locale === DEV_PSEUDO_LOCALE ? 'en' : locale} messages={messages} defaultLocale="en">
         {children}
       </IntlProvider>
     </LocaleContext.Provider>
@@ -89,11 +245,4 @@ export const useLocale = (): LocaleContextValue => {
   return context;
 };
 
-export const supportedLocales: Locale[] = ['en', 'es'];
-
-export const applyDocumentLanguage = (value: Locale): void => {
-  if (typeof document === 'undefined' || !document.documentElement) {
-    return;
-  }
-  document.documentElement.lang = value;
-};
+export const supportedLocales: RealLocale[] = supportedRealLocales;

@@ -14,6 +14,10 @@ Steps
 2) Ensure `correlationId` is parsed into a label/field; provide example queries.
 3) Set retention policies; document cost implications and best practices (avoid high-cardinality labels).
 
+Current Findings
+- `docker-compose.yml` has no Loki/Promtail services; only the OTEL collector is defined (`docker-compose.yml`).
+- `docs/observability/LOGS.md` is missing, so retention guidance and query references have not been documented.
+
 Acceptance Criteria
 - Logs visible centrally with correlationId filters; retention documented.
 

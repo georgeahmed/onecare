@@ -3,6 +3,9 @@
 *, *::before, *::after {
   box-sizing: border-box;
 }
+[data-theme-transition] * {
+  transition: none !important;
+}
 
 body {
   margin: 0;
@@ -18,7 +21,6 @@ a {
   text-decoration: underline;
   text-decoration-thickness: 1px;
 }
-
 a:hover,
 a:focus-visible {
   color: var(--color-link-hover);
@@ -33,8 +35,12 @@ textarea {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: 0.55rem 0.8rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  padding-block: 0.55rem;
+  padding-inline: 0.8rem;
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 button {
@@ -53,9 +59,117 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-a:focus-visible {
+a:focus-visible,
+.ui-button:focus-visible,
+.ui-input:focus-visible,
+.ui-select:focus-visible,
+.ui-textarea:focus-visible,
+.ui-alert:focus-visible {
   outline: var(--focus-outline);
   outline-offset: 2px;
+}
+
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding-block: 0.6rem;
+  padding-inline: 1.15rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background-color: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+  box-shadow: var(--shadow-sm);
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.ui-button:hover,
+.ui-button:focus-visible {
+  background-color: color-mix(in srgb, var(--color-accent) 85%, #ffffff);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.ui-button:active {
+  transform: translateY(0);
+}
+
+.ui-button--subtle {
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  box-shadow: none;
+}
+
+.ui-button--subtle:hover,
+.ui-button--subtle:focus-visible {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-button--danger {
+  background-color: var(--color-danger);
+}
+
+.ui-button:disabled {
+  background-color: var(--color-muted);
+  color: var(--color-text-secondary);
+  border-color: var(--color-muted);
+  transform: none;
+  box-shadow: none;
+}
+
+.ui-input,
+.ui-select,
+.ui-textarea {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  transition:
+    border var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.ui-input:focus-visible,
+.ui-select:focus-visible,
+.ui-textarea:focus-visible {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 25%, transparent);
+}
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  margin-block-end: var(--space-sm);
+}
+
+.ui-field__label {
+  font-weight: 600;
+}
+
+.ui-field__hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.ui-alert {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-alert--error {
+  border-color: var(--color-danger);
 }
 
 .app-shell {
@@ -68,17 +182,18 @@ a:focus-visible {
 .app-shell > header {
   background-color: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
-  padding: 1rem 1.5rem;
+  padding-block: var(--space-sm);
+  padding-inline: clamp(1rem, 2vw, 2.5rem);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: var(--space-md);
 }
 
 .app-shell nav {
   display: flex;
-  gap: 1rem;
+  gap: var(--space-md);
 }
 
 .app-shell nav a {
@@ -89,28 +204,54 @@ main {
   flex: 1;
   width: min(960px, 100%);
   margin: 0 auto;
-  padding: 1.5rem 1.25rem 2.5rem;
+  padding-block: clamp(1.25rem, 3vw, 2.5rem);
+  padding-inline: clamp(1rem, 3vw, 2rem);
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: var(--space-lg);
 }
 
 .locale-switcher {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-xs);
   color: var(--color-text-secondary);
 }
 
 .locale-switcher select {
   min-width: 8rem;
+  unicode-bidi: isolate;
+}
+
+.locale-switcher option {
+  unicode-bidi: isolate;
+}
+
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-text-secondary);
+}
+
+.theme-switcher select {
+  min-width: 10rem;
+}
+
+.app-shell__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .booking-search__filters {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: 1rem 1.25rem;
+  padding-block: var(--space-md);
+  padding-inline: clamp(1rem, 3vw, 1.5rem);
   box-shadow: var(--shadow-sm);
 }
 
@@ -120,7 +261,7 @@ main {
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: var(--space-md);
 }
 
 .filter-group {
@@ -128,7 +269,7 @@ main {
   min-width: 180px;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-2xs);
 }
 
 .booking-slots {
@@ -137,16 +278,16 @@ main {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: var(--space-sm);
 }
 
 .slot-button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.15rem;
+  gap: var(--space-2xs);
   width: 100%;
-  text-align: left;
+  text-align: start;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
 }
@@ -179,7 +320,7 @@ main {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: 1rem 1.25rem;
+  padding: var(--space-md);
   box-shadow: var(--shadow-sm);
 }
 
@@ -190,7 +331,7 @@ main {
 .booking-error-actions,
 .booking-confirm-actions {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 

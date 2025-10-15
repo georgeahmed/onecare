@@ -56,3 +56,21 @@ Access to the above paths is gated by Vault policies and audited. Request access
 2. Purge the secret from git history following the security team's guidance (BFG or git filter-repo).
 3. Notify `#security` with scope, blast radius, and mitigation timeline.
 4. Document the incident in the security log and confirm monitoring is updated if necessary.
+
+## Dependency & License Scanning
+
+- CI runs `npm audit --audit-level=high` and `pip-audit` (see `.github/workflows/ci.yml`) to detect vulnerable dependencies. Both steps upload SARIF-style output as artifacts for triage.
+- Use `npx license-checker --json` locally before introducing new packages. The allowlist is: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`. Raise an exception if you need anything else.
+- When a scan flags an issue, record it in the security backlog with remediation ETA. Block releases if a critical/high advisory lacks an approved exception.
+
+## Secret Scanning Pipeline
+
+- Gitleaks runs in CI on every push and fails the job for high-confidence findings. The configuration matches `.pre-commit-config.yaml`.
+- Install pre-commit hooks (`pre-commit install`) so local diffs are scanned before committing. Use the `--redact` flag when sharing reports.
+- If a false positive appears, add the signature to `.gitleaks.toml` with a justification and expiry date.
+
+## Network Egress Controls
+
+- Kubernetes deployments must apply the deny-by-default NetworkPolicy template in `infra/k8s/networkpolicies/egress-deny.yaml` and then explicitly allow necessary hosts/ports.
+- For HTTP clients, enforce SSRF mitigations by validating hostnames and IPs against the allowlist before issuing requests (see `apps/orchestrator/src/index.ts` for existing URL guards).
+- Document every exception request (team, hostname, expiry) in the environment runbooks and review quarterly.

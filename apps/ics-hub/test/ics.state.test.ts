@@ -3,6 +3,7 @@ import {
   InboundState,
   ValidatedState,
   InvalidState,
+  RoutedState,
   type IcsContext,
   type IcsEvent,
   type RoutingOutcome,
@@ -10,6 +11,8 @@ import {
 import type { IcsClient } from '../src/adapters/ics.client';
 import { resetMetrics, getCounterRecords, logger } from '@onecare/observability';
 import { Topics, type TypedEnvelope, type IcsReferralRequest } from '@onecare/events';
+import type { IdempotencyStore } from '@onecare/ports';
+import type { MessageBus } from '@onecare/bus';
 
 const baseEvent: IcsEvent = { type: 'ics.route' };
 
@@ -44,8 +47,58 @@ function createContext(overrides: Partial<IcsContext> = {}, envelope?: TypedEnve
     client: overrides.client ?? createClientStub(),
     rawEnvelope: envelope ?? overrides.rawEnvelope ?? buildEnvelope(),
     auditIntents: overrides.auditIntents ?? [],
+    bus: overrides.bus,
+    idempotencyStore: overrides.idempotencyStore,
+    referralEnvelope: overrides.referralEnvelope ?? envelope,
+    referral: overrides.referral,
+    routePolicy: overrides.routePolicy,
+    routeDecision: overrides.routeDecision,
+    routingOutcome: overrides.routingOutcome,
+    correlationId: overrides.correlationId,
+    automationConfig: overrides.automationConfig,
+    automationTasks: overrides.automationTasks,
+    automationEvent: overrides.automationEvent,
+    automationIntents: overrides.automationIntents,
+    automationPublished: overrides.automationPublished,
+    idempotencyTtlSeconds: overrides.idempotencyTtlSeconds,
+    automationPublishIdempotencyKey: overrides.automationPublishIdempotencyKey,
+    ackPublishIdempotencyKey: overrides.ackPublishIdempotencyKey,
+    ackPublishOptions: overrides.ackPublishOptions,
+    receivedAtMs: overrides.receivedAtMs,
+    responseHeaders: overrides.responseHeaders,
+    retryAfterSeconds: overrides.retryAfterSeconds,
     ...overrides,
   };
+}
+
+function createIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, { ttl: number; storedAt: number }>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string, ttlSeconds: number) => {
+      keys.set(key, { ttl: ttlSeconds, storedAt: Date.now() });
+    },
+    reserve: async (key: string, ttlSeconds: number) => {
+      if (keys.has(key)) return 'exists' as const;
+      keys.set(key, { ttl: ttlSeconds, storedAt: Date.now() });
+      return 'reserved' as const;
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
+}
+
+class RecordingBus implements MessageBus {
+  public publishes: { topic: string; payload: unknown; headers?: Record<string, string> }[] = [];
+
+  async publish<T>(topic: string, payload: T, headers?: Record<string, string>): Promise<void> {
+    this.publishes.push({ topic, payload, headers });
+  }
+
+  async subscribe() {
+    return { unsubscribe: async () => {} };
+  }
 }
 
 describe('InboundState', () => {
@@ -284,6 +337,64 @@ describe('ValidatedState', () => {
 
     const missingPolicy = createContext({ blocked: false, rateLimited: false });
     await expect(state.handle(missingPolicy, baseEvent)).rejects.toThrow('route_policy_missing');
+  });
+});
+
+describe('RoutedState', () => {
+  it('sends referral and publishes ack once', async () => {
+    const envelope = buildEnvelope({ referralId: 'ref-send' }, { id: 'env-send', correlationId: 'corr-ack' });
+    const client = createClientStub();
+    const sendReferral = vi.fn(async () => ({ referralId: 'ref-send', accepted: true }));
+    client.sendReferral = sendReferral;
+    const bus = new RecordingBus();
+    const store = createIdempotencyStore();
+    const routeDecision = { destinationOrgId: 'dest-1', policy: 'fallback', rationale: 'test' as const };
+    const ctx = createContext(
+      {
+        client,
+        bus,
+        idempotencyStore: store,
+        referral: envelope.payload,
+        referralEnvelope: envelope,
+        routeDecision,
+        routePolicy: { endpoint: 'https://ics.example/dest-1', rateLimit: 5, authRef: 'auth', tlsRef: 'tls' },
+        routingOutcome: { status: 'allowed', policy: { endpoint: 'https://ics.example/dest-1', rateLimit: 5 }, routeDecision },
+        correlationId: 'corr-ack',
+        receivedAtMs: 10,
+      },
+      envelope,
+    );
+    const state = new RoutedState();
+
+    const next = await state.handle(ctx, baseEvent);
+
+    expect(next).toBe('Acked');
+    expect(sendReferral).toHaveBeenCalledTimes(1);
+    expect(bus.publishes).toHaveLength(1);
+    const ackPublish = bus.publishes[0];
+    expect(ackPublish.topic).toBe(Topics.ics.referralAck);
+    expect(ctx.ack?.referralId).toBe('ref-send');
+    expect(ctx.ackPublished).toBe(true);
+    expect(ctx.ackLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(ackPublish.headers?.['x-correlation-id']).toBe('corr-ack');
+
+    const duplicateBus = new RecordingBus();
+    const duplicateCtx = createContext(
+      {
+        client,
+        bus: duplicateBus,
+        idempotencyStore: store,
+        referral: envelope.payload,
+        referralEnvelope: envelope,
+        routeDecision,
+        correlationId: 'corr-ack',
+      },
+      envelope,
+    );
+    sendReferral.mockClear();
+    await state.handle(duplicateCtx, baseEvent);
+    expect(sendReferral).not.toHaveBeenCalled();
+    expect(duplicateBus.publishes).toHaveLength(0);
   });
 });
 

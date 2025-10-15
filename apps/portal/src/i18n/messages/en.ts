@@ -4,6 +4,7 @@ const en = {
   'app.localeSwitcher.label': 'Language',
   'locale.name.en': 'English',
   'locale.name.es': 'Spanish',
+  'locale.name.pseudo': 'Pseudo (debug)',
   'intake.practiceId.label': 'Practice ID',
   'intake.patientId.label': 'Patient ID',
   'intake.patient.dob.label': 'Date of birth',

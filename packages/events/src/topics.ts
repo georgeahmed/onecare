@@ -24,6 +24,7 @@ export const Topics = {
     search: 'booking.search',
     created: 'booking.created',
     appointmentCreated: 'booking.appointment.created',
+    appointmentCreatedDlq: 'booking.appointment.created.dlq',
   },
   pharmacy: {
     referral: 'pharmacy.referral',

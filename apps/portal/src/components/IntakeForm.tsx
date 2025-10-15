@@ -154,6 +154,9 @@ const IntakeForm = () => {
       if (isSupportedPortalLocale(currentLocale)) {
         return prev;
       }
+      if (!isSupportedPortalLocale(locale)) {
+        return prev;
+      }
       if (locale === currentLocale) {
         return prev;
       }

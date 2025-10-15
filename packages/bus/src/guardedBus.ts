@@ -2,6 +2,7 @@ import type { Handler, Message, MessageBus, Subscription } from './types';
 
 const GUARDED_SYMBOL = Symbol.for('onecare.bus.guarded');
 const CORRELATION_HEADER = 'x-correlation-id';
+const MESSAGE_ID_HEADER = 'x-message-id';
 
 export interface MessageBusGuardOptions {
   allowedTopics: Iterable<string>;
@@ -62,7 +63,7 @@ class GuardedMessageBus implements MessageBus {
       return { payload, headers };
     }
     const envelope = this.assertEnvelope(payload as EnvelopeCandidate, topic, 'publish');
-    const normalizedHeaders = this.ensureHeaders(envelope.correlationId, headers, false);
+    const normalizedHeaders = this.ensureHeaders(envelope, headers, false);
     return { payload, headers: normalizedHeaders };
   }
 
@@ -72,7 +73,7 @@ class GuardedMessageBus implements MessageBus {
       return message;
     }
     const envelope = this.assertEnvelope(message.payload as EnvelopeCandidate, message.topic, 'subscribe');
-    const normalizedHeaders = this.ensureHeaders(envelope.correlationId, message.headers, true);
+    const normalizedHeaders = this.ensureHeaders(envelope, message.headers, true);
     if (normalizedHeaders === message.headers) {
       return message;
     }
@@ -118,6 +119,18 @@ class GuardedMessageBus implements MessageBus {
   }
 
   private ensureHeaders(
+    envelope: {
+      id: string;
+      correlationId?: string;
+    },
+    headers: Record<string, string> | undefined,
+    incoming: boolean
+  ): Record<string, string> | undefined {
+    const withCorrelation = this.ensureCorrelationHeader(envelope.correlationId, headers, incoming);
+    return this.ensureMessageIdHeader(envelope.id, withCorrelation, incoming);
+  }
+
+  private ensureCorrelationHeader(
     correlationId: string | undefined,
     headers: Record<string, string> | undefined,
     incoming: boolean
@@ -153,13 +166,45 @@ class GuardedMessageBus implements MessageBus {
     if (located.key === CORRELATION_HEADER) {
       return headers;
     }
-    // Existing header uses different casing. Preserve the original record shape to avoid surprises.
     if (incoming) {
       return headers;
     }
     const next = { ...headers };
     delete next[located.key];
     next[CORRELATION_HEADER] = trimmed;
+    return next;
+  }
+
+  private ensureMessageIdHeader(
+    messageId: string,
+    headers: Record<string, string> | undefined,
+    incoming: boolean
+  ): Record<string, string> | undefined {
+    const trimmed = messageId.trim();
+    if (!headers) {
+      return { [MESSAGE_ID_HEADER]: trimmed };
+    }
+    const located = findHeader(headers, MESSAGE_ID_HEADER);
+    if (located && located.value.length > 0 && located.value !== trimmed) {
+      throw new Error(
+        `[MessageBusGuard] message_id_mismatch: envelope=${trimmed} header=${String(located.value)}`
+      );
+    }
+    if (!located) {
+      return {
+        ...headers,
+        [MESSAGE_ID_HEADER]: trimmed,
+      };
+    }
+    if (located.key === MESSAGE_ID_HEADER) {
+      return headers;
+    }
+    if (incoming) {
+      return headers;
+    }
+    const next = { ...headers };
+    delete next[located.key];
+    next[MESSAGE_ID_HEADER] = trimmed;
     return next;
   }
 }
@@ -213,4 +258,3 @@ export function unwrapGuardedBus(bus: MessageBus): MessageBus {
   }
   return current;
 }
-

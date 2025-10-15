@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 import { createHistogram, createCounter, startSpan, getCorrelationId, logger } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
+import { callWithGuard, type GuardOptions } from './callWithGuard';
 
 export interface GpConnectClientOptions {
   baseUrl: string;
@@ -90,6 +91,20 @@ export class GpConnectHttpClient implements GpConnectClient {
     this.authHeaders = buildAuthHeaders(options.apiKey, options.authHeaders);
   }
 
+  private guardOptions(operation: 'search' | 'create'): GuardOptions {
+    const baseDelay = Math.max(50, Math.floor(this.timeoutMs * 0.1));
+    return {
+      timeoutMs: this.timeoutMs,
+      baseDelayMs: baseDelay,
+      maxRetries: operation === 'search' ? 1 : 0,
+      correlationId: getCorrelationId(),
+    };
+  }
+
+  private async guardCall<T>(operation: 'search' | 'create', handler: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return callWithGuard(`gpconnect.${operation}`, handler, this.guardOptions(operation));
+  }
+
   static fromEnv(): GpConnectHttpClient {
     const baseUrl = process.env.GP_CONNECT_URL?.trim();
     const apiKey = process.env.GP_CONNECT_API_KEY?.trim();
@@ -122,16 +137,19 @@ export class GpConnectHttpClient implements GpConnectClient {
     });
     const start = performance.now();
     try {
-      await delay(5);
-      const result: Slot[] = [
-        {
-          slotId: 'demo-slot-1',
-          start: new Date().toISOString(),
-          end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
-          organisationId: params.organisationId,
-          serviceType: params.serviceType,
-        },
-      ];
+      const result = await this.guardCall('search', async (signal) => {
+        await delay(5, undefined, { signal });
+        const slots: Slot[] = [
+          {
+            slotId: 'demo-slot-1',
+            start: new Date().toISOString(),
+            end: new Date(Date.now() + 15 * 60 * 1_000).toISOString(),
+            organisationId: params.organisationId,
+            serviceType: params.serviceType,
+          },
+        ];
+        return slots;
+      });
       recordLatency(searchLatencyHistogram, start, attributes);
       searchSuccessCounter.add(1, attributes);
       span.setStatus({ code: SpanStatusCode.OK });
@@ -175,7 +193,7 @@ export class GpConnectHttpClient implements GpConnectClient {
       });
       const start = performance.now();
       try {
-        const response = await executor(request);
+        const response = await this.guardCall('create', async () => executor(request));
         recordLatency(createLatencyHistogram, start, attributes);
         createSuccessCounter.add(1, attributes);
         span.setStatus({ code: SpanStatusCode.OK });

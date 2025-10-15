@@ -46,6 +46,7 @@ Completed
 - [x] [BE-06.12 — Privacy/PII minimization](Completed%20Tasks/BE-06.12.md) — logger redaction in `packages/observability/src/logger.ts` and safe payloads for portal events and logs.
 
 Incomplete
+- Priority (next up): BE-06.6 → BE-06.7 → BE-06.9 → BE-06.10 → BE-06.11 → BE-06.8 → BE-06.13.
 - [ ] [BE-06.6 — Scheduler resilience & idempotency](tasks/BE-06.6.md) — pending skip metrics/monotonic timing and resilience tests beyond the happy path.
 - [ ] [BE-06.7 — Observability for access/capacity](tasks/BE-06.7.md) — spans/histograms still absent; only basic logs+counters exist.
 - [ ] [BE-06.8 — Front-door rate limiting](tasks/BE-06.8.md) — ingress limiter and 429 envelope not yet implemented.

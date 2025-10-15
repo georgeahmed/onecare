@@ -8,6 +8,7 @@ const readline = require('readline');
 
 const DEFAULT_INPUT = process.env.ANALYTICS_SINK_PATH || 'var/analytics/metrics.jsonl';
 const DEFAULT_OUTPUT = process.env.ANALYTICS_QUALITY_REPORT || 'var/analytics/quality.md';
+const DEFAULT_QUARANTINE = process.env.ANALYTICS_QUALITY_QUARANTINE || 'var/analytics/quarantine.jsonl';
 const DEFAULT_ZSCORE = Number(process.env.ANALYTICS_QUALITY_ZSCORE || '3');
 const MAX_SAMPLES_PER_ISSUE = 5;
 
@@ -28,6 +29,9 @@ function parseArgs(argv) {
       if (!Number.isNaN(parsed) && parsed > 0) {
         args.zscore = parsed;
       }
+      i += 1;
+    } else if ((token === '--quarantine' || token === '-q') && value) {
+      args.quarantine = value;
       i += 1;
     }
   }
@@ -121,10 +125,22 @@ async function writeReport(outputPath, markdown) {
   console.info('[analytics-quality] wrote report', { outputPath });
 }
 
+async function writeQuarantine(outputPath, records) {
+  if (!records.length) {
+    console.info('[analytics-quality] no records to quarantine');
+    return;
+  }
+  await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
+  const lines = records.map((entry) => JSON.stringify(entry));
+  await fsPromises.writeFile(outputPath, `${lines.join('\n')}\n`, 'utf8');
+  console.info('[analytics-quality] wrote quarantine file', { outputPath, count: records.length });
+}
+
 async function run() {
-  const { input, output, zscore } = parseArgs(process.argv.slice(2));
+  const { input, output, quarantine, zscore } = parseArgs(process.argv.slice(2));
   const inputPath = path.resolve(input || DEFAULT_INPUT);
   const outputPath = path.resolve(output || DEFAULT_OUTPUT);
+  const quarantinePath = path.resolve(quarantine || DEFAULT_QUARANTINE);
   const threshold = zscore || DEFAULT_ZSCORE || 3;
 
   const records = await readMetrics(inputPath);
@@ -136,6 +152,7 @@ async function run() {
   };
   const numericBuckets = new Map();
   const numericSamples = new Map();
+  const quarantineRecords = [];
 
   for (const record of records) {
     if (!record || typeof record !== 'object') continue;
@@ -146,6 +163,7 @@ async function run() {
       if (missing.name.samples.length < MAX_SAMPLES_PER_ISSUE) {
         missing.name.samples.push(entry);
       }
+      quarantineRecords.push({ reason: 'missing_name', record: entry });
       continue;
     }
     const numeric = coerceNumber(entry.value);
@@ -154,6 +172,7 @@ async function run() {
       if (missing.value.samples.length < MAX_SAMPLES_PER_ISSUE) {
         missing.value.samples.push(entry);
       }
+      quarantineRecords.push({ reason: 'missing_numeric_value', record: entry });
     } else {
       const bucket = numericBuckets.get(entry.name) || [];
       bucket.push(numeric);
@@ -197,6 +216,14 @@ async function run() {
             mad !== null && mad > 0
               ? mad * 1.4826
               : stdDev,
+          record: sample.record,
+        });
+        quarantineRecords.push({
+          reason: 'numeric_outlier',
+          metric: metricName,
+          value: sample.value,
+          thresholdUpper: upper,
+          thresholdLower: lower,
           record: sample.record,
         });
       }
@@ -256,6 +283,7 @@ async function run() {
   }
 
   await writeReport(outputPath, markdown);
+  await writeQuarantine(quarantinePath, quarantineRecords);
 }
 
 run().catch((err) => {

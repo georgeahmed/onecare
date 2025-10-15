@@ -1,29 +1,32 @@
-import { ChangeEvent, useId } from 'react';
+import { ChangeEvent, useMemo, useId } from 'react';
 import { useIntl } from 'react-intl';
-import { supportedLocales, useLocale } from '../i18n';
+import { getAvailableLocales, getLocaleMetadata, type Locale, supportedLocales, useLocale } from '../i18n';
 
 const LocaleSwitcher = () => {
   const { locale, setLocale } = useLocale();
   const intl = useIntl();
   const selectId = useId();
+  const availableLocales = useMemo(() => getAvailableLocales(), []);
 
   const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    const nextLocale = event.target.value;
+    const nextLocale = event.target.value as Locale;
     if (nextLocale === locale) return;
-    if (supportedLocales.includes(nextLocale as (typeof supportedLocales)[number])) {
-      setLocale(nextLocale as (typeof supportedLocales)[number]);
+    if (availableLocales.includes(nextLocale)) {
+      setLocale(nextLocale);
     }
   };
 
   return (
     <div className="locale-switcher">
       <label htmlFor={selectId}>{intl.formatMessage({ id: 'app.localeSwitcher.label' })}</label>
-      <select id={selectId} value={locale} onChange={handleChange}>
-        {supportedLocales.map((item) => {
-          const labelId = `locale.name.${item}`;
+      <select id={selectId} value={locale} onChange={handleChange} className="ui-select">
+        {availableLocales.map((item) => {
+          const metadata = getLocaleMetadata(item);
+          const labelId = metadata.labelId;
           const optionLabel = intl.formatMessage({ id: labelId, defaultMessage: item.toUpperCase() });
+          const isDebugLocale = !supportedLocales.includes(item as (typeof supportedLocales)[number]);
           return (
-            <option key={item} value={item}>
+            <option key={item} value={item} dir={metadata.direction} aria-label={optionLabel} data-debug={isDebugLocale || undefined}>
               {optionLabel}
             </option>
           );

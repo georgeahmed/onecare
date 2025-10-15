@@ -322,18 +322,18 @@ describe('core event contracts', () => {
       expect(errors).toMatchInlineSnapshot(`
         [
           {
-            "keyword": "required",
-            "params": {
-              "missingProperty": "referralReference",
-            },
-            "path": "/referralReference",
-          },
-          {
             "keyword": "additionalProperties",
             "params": {
               "additionalProperty": "extra",
             },
             "path": "/extra",
+          },
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "referralReference",
+            },
+            "path": "/referralReference",
           },
         ]
       `);

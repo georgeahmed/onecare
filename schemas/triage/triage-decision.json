@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/triage/triage-decision.json",
+  "title": "TriageDecision",
+  "type": "object",
+  "properties": {
+    "patientId": { "type": "string", "minLength": 1 },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_.-]{1,64}$" },
+      "maxItems": 10
+    },
+    "duplicateOf": { "type": "string", "minLength": 1 },
+    "assignment": {
+      "type": "object",
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "team": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": { "type": ["number", "string", "boolean", "null"] }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" }
+  },
+  "required": ["patientId", "score", "priority"],
+  "additionalProperties": false
+}

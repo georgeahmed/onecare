@@ -14,6 +14,10 @@ Steps
 2) Optionally set up an egress proxy with allowlists; document how to request exceptions.
 3) Validate in staging by attempting disallowed connections; ensure blocks occur and are logged.
 
+Current Findings
+- There is no `infra/k8s/` directory or NetworkPolicy manifests in the repository.
+- `docs/SECURITY.md` does not outline any egress restrictions or SSRF mitigation process.
+
 Acceptance Criteria
 - Egress constrained; SSRF risks reduced; exceptions process documented.
 
@@ -22,4 +26,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SEC-01.6' && make team-status-write
-

@@ -332,8 +332,8 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 
 ## data-engineering
 - [DE-01.1](../team/data-engineering/tasks/Completed%20Tasks/DE-01.1.md) — DE-01.1 — Configure analytics sink (file/DB) + env wiring
-- [DE-01.10](../team/data-engineering/tasks/DE-01.10.md) — DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails)
-- [DE-01.11](../team/data-engineering/tasks/DE-01.11.md) — DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report)
+- [DE-01.10](../team/data-engineering/tasks/Completed%20Tasks/DE-01.10.md) — DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails)
+- [DE-01.11](../team/data-engineering/tasks/Completed%20Tasks/DE-01.11.md) — DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report)
 - [DE-01.12](../team/data-engineering/tasks/DE-01.12.md) — DE-01.12 — Incremental rollups (windowed p50/p95, idempotent upserts, backfill)
 - [DE-01.13](../team/data-engineering/tasks/DE-01.13.md) — DE-01.13 — Backfill & reprocessing framework (range runs, job metadata, idempotency)
 - [DE-01.14](../team/data-engineering/tasks/DE-01.14.md) — DE-01.14 — Lineage & metadata (OpenLineage hooks; dataset/version tags)
@@ -349,7 +349,7 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-01.5](../team/data-engineering/tasks/Completed%20Tasks/DE-01.5.md) — DE-01.5 — Data hygiene checks (missing fields, outliers) + report
 - [DE-01.6](../team/data-engineering/tasks/Completed%20Tasks/DE-01.6.md) — DE-01.6 — Analytics payload schema validation
 - [DE-01.7](../team/data-engineering/tasks/Completed%20Tasks/DE-01.7.md) — DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
-- [DE-01.8](../team/data-engineering/tasks/DE-01.8.md) — DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
+- [DE-01.8](../team/data-engineering/tasks/Completed%20Tasks/DE-01.8.md) — DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
 - [DE-01.9](../team/data-engineering/tasks/DE-01.9.md) — DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)
 - [DE-02.1](../team/data-engineering/Completed%20Tasks/DE-02.1.md) — DE-02.1 — Define feature schemas (JSON) + docs
 - [DE-02.10](../team/data-engineering/tasks/DE-02.10.md) — DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ

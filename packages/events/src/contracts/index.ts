@@ -1,9 +1,11 @@
 export * from './envelope';
 export * from './ingest';
 export * from './triage';
+export * from './triage-decision';
 export * from './booking';
 export * from './booking-search-response';
 export * from './pharmacy';
+export * from './pharmacy-outcome';
 export * from './scribe';
 export * from './safety';
 export * from './portal';
@@ -19,3 +21,4 @@ export * from './task-created';
 export * from './metric';
 export * from './triage-core-features';
 export * from './acuity-signal-features';
+export * from './feature-registry';

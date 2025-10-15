@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import Enum
 from pydantic import AnyUrl, BaseModel, confloat, conint, constr, Extra, Field
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 # --- analytics/metric.json ---
 class Metric(BaseModel):
@@ -43,12 +43,43 @@ class BookingSearchRequest(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    serviceType: constr(pattern=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
+    serviceType: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
     windowStart: datetime
     windowEnd: datetime
-    location: Optional[
-        constr(pattern=r'^[-A-Za-z0-9._:\\s]+$', min_length=2, max_length=64)
+    location: constr(regex=r'^[-A-Za-z0-9._:\\s]+$', min_length=2, max_length=64)
+
+# --- booking/booking-search-response.json ---
+class SlotView(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    id: constr(min_length=1, max_length=96)
+    start: datetime
+    end: datetime
+    organisationId: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
+    serviceType: Optional[
+        constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
     ] = None
+
+class RejectedSlot(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    slot: SlotView
+    reasons: list[constr(regex=r'^[a-z0-9_.-]+$', min_length=1, max_length=64)] = Field(
+        ..., min_items=1
+    )
+
+class BookingSearchResponse(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    slots: list[SlotView] = Field(
+        ..., description='Slots that passed the enhanced access filters.'
+    )
+    rejectedSlots: Optional[list[RejectedSlot]] = Field(
+        [], description='Slots rejected by the policy along with reason codes.'
+    )
 
 # --- common/dlq-event.json ---
 class DlqEvent(BaseModel):
@@ -173,6 +204,12 @@ class Logging(BaseModel):
 
     redaction: Optional[Redaction] = None
 
+class Booking(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    availabilityTimeoutMs: Optional[conint(ge=200, le=10000)] = 2000
+
 class OrchestratorConfig(BaseModel):
     class Config:
         extra = Extra.forbid
@@ -184,6 +221,7 @@ class OrchestratorConfig(BaseModel):
     concurrency: Optional[Concurrency] = None
     outbound: Optional[Outbound] = None
     logging: Optional[Logging] = None
+    booking: Optional[Booking] = None
 
 # --- features/acuity-signal.json ---
 class PredictedClass(Enum):
@@ -204,7 +242,7 @@ class AcuitySignalFeatures(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    schemaVersion: constr(pattern=r'^v[0-9]+(\.[0-9]+){0,2}$') = Field(
+    schemaVersion: constr(regex=r'^v[0-9]+(\.[0-9]+){0,2}$') = Field(
         ..., description='Semantic version of this payload.'
     )
     generatedAt: datetime = Field(
@@ -249,12 +287,147 @@ class AcuitySignalFeatures(BaseModel):
         description='Optional expiry timestamp (UTC) after which the signal must be recomputed.',
     )
 
+# --- features/registry.json ---
+class Model(BaseModel):
+    __root__: Any
+
+# --- features/registry.schema.json ---
+class PiiClassification(Enum):
+    none = 'none'
+    limited = 'limited'
+    phi = 'phi'
+
+class Entity(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    name: constr(regex=r'^[a-z][a-zA-Z0-9]*$') = Field(
+        ..., description='CamelCase entity identifier (e.g., patient, triageCase).'
+    )
+    description: str = Field(
+        ..., description='Summary of the entity and how it is derived.'
+    )
+    keys: list[constr(regex=r'^[a-z][a-zA-Z0-9]*$')] = Field(
+        ..., description='Primary join keys (ordered by precedence).', min_items=1
+    )
+    surrogateKeys: Optional[list[constr(regex=r'^[a-z][a-zA-Z0-9]*$')]] = Field(
+        [], description='Optional surrogate identifiers stored alongside natural keys.'
+    )
+    piiClassification: PiiClassification = Field(
+        ..., description='PII/PHI classification for the entity identifiers.'
+    )
+
+class Classification(Enum):
+    phi = 'phi'
+    pii = 'pii'
+    deidentified = 'deidentified'
+
+class Freshness(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    slaMinutes: conint(ge=1) = Field(
+        ...,
+        description='Maximum tolerated age (minutes) for the latest feature snapshot.',
+    )
+    expiryMinutes: Optional[conint(ge=1)] = Field(
+        None,
+        description='Hard expiry after which the feature snapshot must be recomputed.',
+    )
+
+class Format(Enum):
+    parquet = 'parquet'
+    delta = 'delta'
+
+class Offline(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    format: Format = Field(..., description='Primary file/storage format.')
+    partitioning: list[constr(min_length=1)] = Field(
+        ..., description='Partition columns used for offline storage.', min_items=1
+    )
+    pitTable: str = Field(..., description='Name of the point-in-time table/view.')
+
+class Online(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    store: str = Field(
+        ..., description='Target online store implementation (e.g., redis, memory).'
+    )
+    ttlSeconds: Optional[conint(ge=1)] = Field(
+        None, description='Default TTL for online entries in seconds.'
+    )
+
+class Materialization(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    offline: Offline
+    online: Optional[Online] = None
+
+class FeatureSet(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    name: constr(regex=r'^[a-z][a-z0-9-]*$') = Field(
+        ..., description='Kebab-case feature set identifier.'
+    )
+    title: str = Field(..., description='Human-readable title.')
+    entity: str = Field(
+        ...,
+        description='Entity name (from entities[].name) this feature set is keyed on.',
+    )
+    schemaId: AnyUrl = Field(
+        ..., description='Canonical schema identifier for the payload.'
+    )
+    description: str = Field(
+        ..., description='Purpose of the feature set and typical consumers.'
+    )
+    classification: Classification = Field(
+        ..., description='Data classification for payload fields.'
+    )
+    owners: list[constr(min_length=1)] = Field(
+        ..., description='Owning teams or service groups.', min_items=1
+    )
+    sources: list[constr(min_length=1)] = Field(
+        ...,
+        description='Upstream systems or jobs producing this feature set.',
+        min_items=1,
+    )
+    freshness: Freshness = Field(
+        ..., description='Freshness SLO and expiry configuration.'
+    )
+    materialization: Materialization = Field(
+        ..., description='Offline/online materialisation strategy for this feature set.'
+    )
+    tags: Optional[list[constr(min_length=1)]] = Field(
+        None, description='Search or governance tags.'
+    )
+
+class FeatureRegistry(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    version: constr(regex=r'^v[0-9]+(\.[0-9]+){0,2}$') = Field(
+        ..., description='Semantic version of the registry metadata.'
+    )
+    entities: list[Entity] = Field(
+        ...,
+        description='Entity definitions used as join keys for feature sets.',
+        min_items=1,
+    )
+    featureSets: list[FeatureSet] = Field(
+        ..., description='Registered feature sets and their schemas.', min_items=1
+    )
+
 # --- features/triage-core.json ---
 class TriageCoreFeatures(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    schemaVersion: constr(pattern=r'^v[0-9]+(\.[0-9]+){0,2}$') = Field(
+    schemaVersion: constr(regex=r'^v[0-9]+(\.[0-9]+){0,2}$') = Field(
         ...,
         description='Semantic version of the feature payload. Bump on backwards-incompatible changes.',
     )
@@ -296,6 +469,278 @@ class TriageCoreFeatures(BaseModel):
         description='Reserved for additive signals that do not yet justify a schema bump. Keys must be lowerCamelCase.',
     )
 
+# --- fhir/bundle-entry-resource.json ---
+class Patient(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['Patient'] = Field(..., const=True)
+    id: constr(min_length=1)
+
+class Status(Enum):
+    completed = 'completed'
+    in_progress = 'in-progress'
+    entered_in_error = 'entered-in-error'
+
+class Topic(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class Subject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class PayloadItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    contentString: Optional[str] = None
+
+class NoteItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class Communication(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['Communication'] = Field(..., const=True)
+    status: Status
+    topic: Optional[Topic] = None
+    subject: Optional[Subject] = None
+    medium: Optional[list[dict[str, Any]]] = None
+    payload: Optional[list[PayloadItem]] = None
+    note: Optional[list[NoteItem]] = None
+
+class Status1(Enum):
+    current = 'current'
+    superseded = 'superseded'
+    entered_in_error = 'entered-in-error'
+
+class Attachment(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    url: AnyUrl
+    contentType: constr(min_length=1)
+
+class ContentItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    attachment: Attachment
+
+class DocumentReference(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['DocumentReference'] = Field(..., const=True)
+    status: Status1
+    subject: Optional[Subject] = None
+    content: list[ContentItem] = Field(..., min_items=1)
+
+class FhirBundleEntryResource(BaseModel):
+    __root__: Union[Patient, Communication, DocumentReference] = Field(
+        ..., discriminator='resourceType', title='FHIR Bundle Entry Resource'
+    )
+
+# --- fhir/bundle-transaction.json ---
+class Method(Enum):
+    POST = 'POST'
+    PUT = 'PUT'
+
+class Request(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    method: Method
+    url: constr(min_length=1)
+
+class Patient(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['Patient'] = Field(..., const=True)
+    id: constr(min_length=1)
+
+class Status(Enum):
+    completed = 'completed'
+    in_progress = 'in-progress'
+    entered_in_error = 'entered-in-error'
+
+class Topic(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class Subject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class PayloadItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    contentString: Optional[str] = None
+
+class NoteItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class Communication(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['Communication'] = Field(..., const=True)
+    status: Status
+    topic: Optional[Topic] = None
+    subject: Optional[Subject] = None
+    medium: Optional[list[dict[str, Any]]] = None
+    payload: Optional[list[PayloadItem]] = None
+    note: Optional[list[NoteItem]] = None
+
+class Status1(Enum):
+    current = 'current'
+    superseded = 'superseded'
+    entered_in_error = 'entered-in-error'
+
+class Attachment(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    url: AnyUrl
+    contentType: constr(min_length=1)
+
+class ContentItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    attachment: Attachment
+
+class DocumentReference(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: Literal['DocumentReference'] = Field(..., const=True)
+    status: Status1
+    subject: Optional[Subject] = None
+    content: list[ContentItem] = Field(..., min_items=1)
+
+class EntryItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    fullUrl: constr(
+        regex=r'^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    )
+    request: Request
+    resource: Union[Patient, Communication, DocumentReference] = Field(
+        ..., discriminator='resourceType', title='FHIR Bundle Entry Resource'
+    )
+
+class FhirTransactionBundle(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('Bundle', const=True)
+    type: str = Field('transaction', const=True)
+    entry: list[EntryItem] = Field(..., min_items=1)
+
+# --- fhir/communication.json ---
+class Status(Enum):
+    completed = 'completed'
+    in_progress = 'in-progress'
+    entered_in_error = 'entered-in-error'
+
+class Topic(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class Subject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class PayloadItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    contentString: Optional[str] = None
+
+class NoteItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class FhirCommunicationMinimal(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('Communication', const=True)
+    status: Status
+    topic: Optional[Topic] = None
+    subject: Optional[Subject] = None
+    medium: Optional[list[dict[str, Any]]] = None
+    payload: Optional[list[PayloadItem]] = None
+    note: Optional[list[NoteItem]] = None
+
+# --- fhir/document-reference.json ---
+class Status(Enum):
+    current = 'current'
+    superseded = 'superseded'
+    entered_in_error = 'entered-in-error'
+
+class Subject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class Attachment(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    url: AnyUrl
+    contentType: constr(min_length=1)
+
+class ContentItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    attachment: Attachment
+
+class FhirDocumentreferenceMinimal(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('DocumentReference', const=True)
+    status: Status
+    subject: Optional[Subject] = None
+    content: list[ContentItem] = Field(..., min_items=1)
+
+# --- fhir/patient.json ---
+class FhirPatientMinimal(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('Patient', const=True)
+    id: constr(min_length=1)
+
 # --- ics/referral-ack.json ---
 class IcsReferralAck(BaseModel):
     class Config:
@@ -320,16 +765,16 @@ class Patient(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    id: constr(pattern=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
+    id: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
     dob: Optional[date] = None
-    locale: Optional[constr(pattern=r'^[a-z]{2}(?:-[A-Z]{2})?$')] = None
+    locale: Optional[constr(regex=r'^[a-z]{2}(?:-[A-Z]{2})?$')] = None
 
 class Attachment(BaseModel):
     class Config:
         extra = Extra.forbid
 
     contentType: constr(
-        pattern=r'^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$',
+        regex=r'^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$',
         min_length=3,
         max_length=128,
     )
@@ -343,11 +788,41 @@ class PortalSubmission(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    practiceId: constr(pattern=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
+    practiceId: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
     patient: Patient
     narrative: constr(max_length=500000)
     attachments: Optional[list[Attachment]] = None
     channel: Channel
+
+# --- pharmacy/pharmacy-outcome.json ---
+class Status(Enum):
+    accepted = 'accepted'
+    queued = 'queued'
+    rejected = 'rejected'
+
+class Slot(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    start: datetime
+    end: datetime
+
+class PharmacyOutcome(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    serviceRequestId: constr(min_length=1)
+    organisationId: constr(min_length=1)
+    status: Status
+    referralReference: constr(min_length=1)
+    code: Optional[constr(min_length=1)] = None
+    message: Optional[constr(min_length=1)] = None
+    summary: Optional[constr(min_length=1)] = None
+    condition: Optional[constr(min_length=1)] = None
+    severity: Optional[constr(min_length=1)] = None
+    slot: Optional[Slot] = None
+    recordedAt: datetime
+    escalated: Optional[bool] = None
 
 # --- pharmacy/pharmacy-referral.json ---
 class Slot(BaseModel):
@@ -376,11 +851,11 @@ class PortalNotify(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    practiceId: constr(pattern=r'^[a-zA-Z0-9._:-]+$', min_length=1, max_length=64) = (
+    practiceId: constr(regex=r'^[a-zA-Z0-9._:-]+$', min_length=1, max_length=64) = (
         Field(..., description='Stable practice identifier (no PHI).')
     )
     state: State = Field(..., description='Resulting portal availability state.')
-    reasonCode: Optional[constr(pattern=r'^[A-Z0-9_]{1,64}$')] = Field(
+    reasonCode: Optional[constr(regex=r'^[A-Z0-9_]{1,64}$')] = Field(
         None,
         description='Machine-readable reason (e.g., CORE_HOURS, MAINTENANCE, CONFIG_INVALID).',
     )
@@ -405,10 +880,10 @@ class ScribeAudio(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    encounterId: constr(pattern=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
+    encounterId: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
     audioUrl: AnyUrl
     contentType: constr(
-        pattern=r'^audio/[A-Za-z0-9!#$&^_.+-]{1,63}$', min_length=3, max_length=128
+        regex=r'^audio/[A-Za-z0-9!#$&^_.+-]{1,63}$', min_length=3, max_length=128
     )
     diarization: Optional[bool] = None
 
@@ -446,6 +921,35 @@ class IntentClassified(BaseModel):
     callId: str
     intent: str
     confidence: Optional[float] = None
+
+# --- triage/triage-decision.json ---
+class Priority(Enum):
+    STAT = 'STAT'
+    URGENT = 'URGENT'
+    SOON = 'SOON'
+    ROUTINE = 'ROUTINE'
+
+class Assignment(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    owner: Optional[constr(min_length=1)] = None
+    team: Optional[constr(min_length=1)] = None
+
+class TriageDecision(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    patientId: constr(min_length=1)
+    score: confloat(ge=0.0, le=1.0)
+    priority: Priority
+    reasons: Optional[list[constr(regex=r'^[a-z0-9_.-]{1,64}$')]] = Field(
+        None, max_items=10
+    )
+    duplicateOf: Optional[constr(min_length=1)] = None
+    assignment: Optional[Assignment] = None
+    features: Optional[dict[str, Optional[Union[float, str, bool]]]] = None
+    generatedAt: Optional[datetime] = None
 
 # --- triage/triage-input.json ---
 class TriageInput(BaseModel):

@@ -14,6 +14,10 @@ Steps
 2) Define a license allowlist (e.g., MIT, Apache-2.0, BSD) and flag unknown/forbidden licenses.
 3) Document remediation workflow and exception process.
 
+Current Findings
+- `.github/workflows/ci.yml` only runs Trivy and Gitleaks scans; there is no npm/pip audit step or license enforcement job.
+- `docs/SECURITY.md` lacks a dependency scanning or license policy section.
+
 Acceptance Criteria
 - Scans run; license policy documented; exceptions tracked.
 
@@ -22,4 +26,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SEC-01.4' && make team-status-write
-

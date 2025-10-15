@@ -24,3 +24,8 @@ DLQ
 - DLQ envelope schema: `schemas/common/dlq-event.json` (DlqEvent)
 - Keep DLQ payloads minimal and PHI-free; prefer `payloadRef`.
 - Operators can replay DLQ items safely; see `infra/event-bus/dlq-runbook.md`.
+
+Booking
+- Search ingress must validate against `schemas/booking/booking-search-request.json`; responses serialize with `schemas/booking/booking-search-response.json`.
+- The booking HTTP adapter publishes `Topics.booking.appointmentCreated` with payload `schemas/booking/appointment-created.json`; duplicates route to `Topics.booking.appointmentCreatedDlq`.
+- Use `createEnvelope(Topics.booking.appointmentCreated, payload, correlationId)` after validating via `validateAppointmentCreatedEvent`.

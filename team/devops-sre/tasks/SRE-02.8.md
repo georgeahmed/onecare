@@ -14,6 +14,10 @@ Steps
 2) Choose histogram buckets for latencies and sizes; standardize across services.
 3) Add relabeling in Prometheus to drop high-cardinality labels; document guidance for developers.
 
+Current Findings
+- `docs/observability/METRICS.md` is absent, so label guidance and histogram standards are not recorded.
+- There is no Prometheus configuration under `infra/monitoring/`; collectors and scrapers are not defined.
+
 Acceptance Criteria
 - Metrics pipeline stable; docs guide label usage and histograms.
 
@@ -22,4 +26,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-02 TASK='SRE-02.8' && make team-status-write
-

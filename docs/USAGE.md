@@ -115,6 +115,7 @@ Analytics Consumer
 - Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
 - Data hygiene: `npm run metrics:quality` produces a markdown report flagging missing fields and numeric outliers. Adjust the z-score threshold via `--zscore` or `ANALYTICS_QUALITY_ZSCORE`.
 - Feature backfill: `npm run feature:backfill -- --input <events.jsonl> --output <features.jsonl>` hydrates the feature store from historical triage events, validating payloads against `triage-core`.
+- Feature ingest: `npm run feature:ingest -- --input data/feature-stream.jsonl` replays JSONL envelopes through the streaming ingestion worker (`@onecare/feature-store-ingest`) using the in-memory online store adapter.
 - Feature compaction: `node scripts/feature_compact.js --input <features.jsonl> --retention-days 7` enforces retention and deduplicates feature records.
 - Feature purge: `node scripts/feature_store_purge.js --url "$FEATURE_STORE_URL" --retention-days 30` deletes feature rows older than the retention window. The `feature-store-purge` GitHub Action runs this nightly for `dev`, `staging`, and `prod` when the respective `FEATURE_STORE_URL_*` secrets are configured.
 - Drift report: `node scripts/drift_report.js --input data/drift/sample.json --output var/reports/drift-report.md` generates a Markdown summary of distribution drift using PSI/mean/std thresholds.

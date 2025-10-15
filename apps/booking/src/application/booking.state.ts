@@ -36,6 +36,7 @@ export interface BookingContext extends MachineContext {
   lastSearchResponse?: BookingSearchResponse;
   selectedSlot?: SlotView;
   appointmentConfirmation?: { appointmentId: string; slotId: string };
+  lastBookingStatus?: 'executed' | 'duplicate';
   patientId?: string;
   narrative?: string;
   enhancedAccessPolicy?: EnhancedAccessPolicy;
@@ -129,6 +130,7 @@ function applySlotsToContext(ctx: BookingContext, slots: SlotView[]): void {
     slot: { ...entry.slot },
     reasons: [...entry.reasons],
   }));
+  ctx.lastBookingStatus = undefined;
   ctx.lastSearchResponse = response;
 }
 
@@ -139,6 +141,85 @@ function normalizeSearchParams(request: BookingSearchRequest): NormalizedSearchP
     windowStart: request.windowStart,
     windowEnd: request.windowEnd,
   };
+}
+
+interface SearchOutcome {
+  accepted: SlotView[];
+  rejected: EnhancedAccessRejectedSlot[];
+}
+
+function buildValidatedSearchResponse(
+  slots: SlotView[],
+  policy?: EnhancedAccessPolicy,
+): { response: BookingSearchResponse; outcome: SearchOutcome } {
+  const outcome = applyPolicyToSlots(slots, policy);
+  const contractResponse = outcomeToContractResponse(outcome);
+  const validation = validateBookingSearchResponse(contractResponse);
+  if (!validation.ok) {
+    throw new BookingSearchError('booking.search.response_invalid', validation.errors);
+  }
+  return { response: validation.value, outcome };
+}
+
+function applyPolicyToSlots(slots: SlotView[], policy?: EnhancedAccessPolicy): SearchOutcome {
+  if (!policy) {
+    return {
+      accepted: [...slots],
+      rejected: [],
+    };
+  }
+  const filtered = applyEnhancedAccessFilters(slots, policy);
+  return {
+    accepted: filtered.accepted,
+    rejected: filtered.rejected.map((entry) => ({
+      slot: entry.slot,
+      reasons: sanitizeReasons(entry.reasons),
+    })),
+  };
+}
+
+function outcomeToContractResponse(outcome: SearchOutcome): BookingSearchResponse {
+  const slots = outcome.accepted.map((slot) => mapSlotToContract(slot));
+  const rejected = outcome.rejected.map((entry) => mapRejectedToContract(entry));
+  if (rejected.length > 0) {
+    return {
+      slots,
+      rejectedSlots: rejected,
+    };
+  }
+  return { slots };
+}
+
+function mapSlotToContract(slot: SlotView): BookingSearchResponse['slots'][number] {
+  const contractSlot: BookingSearchResponse['slots'][number] = {
+    id: slot.id,
+    start: slot.start,
+    end: slot.end,
+    organisationId: slot.organisationId,
+  };
+  if (typeof slot.serviceType === 'string' && slot.serviceType.trim().length > 0) {
+    contractSlot.serviceType = slot.serviceType.trim();
+  }
+  return contractSlot;
+}
+
+function mapRejectedToContract(entry: EnhancedAccessRejectedSlot): BookingRejectedSlot {
+  const reasonsArray = entry.reasons.length > 0 ? entry.reasons : ['unknown_reason'];
+  const reasons = reasonsArray as [string, ...string[]];
+  return {
+    slot: mapSlotToContract(entry.slot),
+    reasons,
+  };
+}
+
+function sanitizeReasons(reasons: string[]): string[] {
+  const normalized = reasons
+    .map((reason) => reason.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '_'))
+    .filter((reason) => reason.length > 0);
+  if (normalized.length === 0) {
+    return ['unknown_reason'];
+  }
+  return normalized;
 }
 
 function mapSearchError(error: unknown): BookingSearchError {
@@ -197,7 +278,11 @@ async function publishAppointmentCreated(
   if (slot?.organisationId) {
     payload.location = slot.organisationId;
   }
-  const envelope = createEnvelope(Topics.booking.appointmentCreated, payload, correlationId);
+  const eventValidation = validateAppointmentCreatedEvent(payload);
+  if (!eventValidation.ok) {
+    throw new BookingAppointmentError('booking.create.invalid_event', eventValidation.errors);
+  }
+  const envelope = createEnvelope(Topics.booking.appointmentCreated, eventValidation.value, correlationId);
   try {
     const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
     await bus.publish(Topics.booking.appointmentCreated, envelope, headers);
@@ -293,7 +378,6 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
         logger.warn('booking.idempotency.duplicate', {
           key: idempotencyKey,
           slotId: slot.id,
-          patientId: ctx.patientId,
           correlationId: ctx.correlationId,
         });
       },
@@ -305,6 +389,8 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
         });
       },
     });
+
+    ctx.lastBookingStatus = status === 'skipped' ? 'duplicate' : 'executed';
 
     if (status === 'skipped') {
       return 'WrittenBack';
@@ -420,16 +506,16 @@ async function emitAudit(
   });
 }
 
-const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
+export const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
 
-function deriveBookingIdempotencyKey(ctx: BookingContext): string {
+export function deriveBookingIdempotencyKey(ctx: BookingContext): string {
   const slotId = ctx.selectedSlot?.id ?? ctx.appointmentConfirmation?.slotId ?? 'unknown-slot';
   const patientId = ctx.patientId ?? 'unknown-patient';
   const origin = ctx.originatingTaskId ?? ctx.correlationId ?? ctx.id;
   return `booking:${patientId}:${slotId}:${origin}`;
 }
 
-function resolveIdempotencyTtl(ctx: BookingContext): number {
+export function resolveIdempotencyTtl(ctx: BookingContext): number {
   const ttl = ctx.idempotencyTtlSeconds;
   return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
 }
