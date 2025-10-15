@@ -14,12 +14,13 @@
     "typecheck": "tsc -b tsconfig.json --verbose --pretty",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
-    "test": "vitest --run",
+    "test": "node scripts/run-vitest.js",
     "metrics:rollup": "node scripts/metrics_rollup.js",
     "metrics:quality": "node scripts/analytics_quality.js",
     "feature:backfill": "node scripts/feature_backfill.js",
     "drift:report": "node scripts/drift_report.js",
-    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci"
+    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci",
+    "smoke:nats": "node scripts/smoke/nats-guard-smoke.js"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",
@@ -31,7 +32,8 @@
     "prettier": "^3.2.5",
     "rimraf": "^5.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.5.0"
+    "vitest": "^1.5.0",
+    "@vitest/coverage-v8": "^1.6.1"
   },
   "prepare": "husky install",
   "dependencies": {

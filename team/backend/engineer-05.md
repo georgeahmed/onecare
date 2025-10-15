@@ -20,7 +20,7 @@ Contracts & Validation
 - Contract-first for pharmacy.referral/pharmacy.outcome; run codegen.
 - Ajv-based validators in tests for payloads and DLQ entries.
 
-Status: planned
+Status: in-progress
 Progress: 0%
 
 Dependencies
@@ -38,18 +38,12 @@ Platform Checklist (pre-flight)
   - See also: docs/CONVENTIONS.md (Service Platform Checklist), infra/runbooks/tls-credentials.md, infra/event-bus/subjects-acls.md, infra/runbooks/idempotency-store.md, infra/event-bus/dlq-runbook.md
 
 Tasks
+- Completed items archived in `team/backend/Completed Tasks/engineer-05.md`.
 - [ ] BE-05.4 — Contract validators & codegen (schemas; TS/Py; compiled validators; contract tests)
-- [ ] BE-05.1 — Eligibility rules config + evaluator (pure; testable; config-driven)
-- [ ] BE-05.2 — CPCS adapter interface (timeouts/retries/circuit breaker; TLS; auth)
-- [ ] BE-05.3 — Referral path + outcome write-back (idempotent; retry-safe; FHIR write-back)
-- [ ] BE-05.5 — Idempotency & dedupe (referral keys; prevent duplicate referrals/outcomes)
 - [ ] BE-05.6 — DLQ and retry policy (bounded retries; poison quarantine; minimal context)
-- [ ] BE-05.7 — Observability (correlationId; referral/outcome latency; error rates; spans)
 - [ ] BE-05.8 — Security & privacy (PHI minimization; input sanitation; SSRF guardrails to CPCS)
 - [ ] BE-05.9 — Performance baselines (referral path p50/p95; throughput; budgets)
 - [ ] BE-05.10 — Health/readiness & graceful shutdown (adapter health; draining inflight)
 - [ ] BE-05.11 — Documentation & ADRs (router rules, CPCS contracts, failure mapping)
 - [ ] BE-05.12 — Patient notification adapter (idempotent, backoff; consent checks; minimal payloads)
-- [ ] BE-05.13 — GP fallback path (urgent Task on CPCS failure/decline; idempotent; metrics)
-- [ ] BE-05.14 — Fault injection tests (timeouts/CB open; verify idempotency and fallbacks)
 - [ ] BE-05.15 — Rate limits & backpressure (protect referral endpoint; 429/503 envelopes; metrics)

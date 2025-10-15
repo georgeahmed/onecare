@@ -5,9 +5,11 @@ import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
 import type { Metric } from '@onecare/events';
 import { validate, type ValidationError } from '@onecare/domain';
-import { logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
+import { logger, setCorrelationId, withCorrelationContext, ensureTracing } from '@onecare/observability';
 import type { AnalyticsSink } from './sink/fileSink';
 import { createFileSink } from './sink/fileSink';
+
+ensureTracing('analytics-consumer');
 
 const METRIC_SCHEMA_ID = 'https://onecare/schemas/analytics/metric.json';
 const ANALYTICS_ALLOWED_TOPICS = new Set<string>([Topics.analytics.metric]);

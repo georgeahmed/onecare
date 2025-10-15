@@ -13,6 +13,10 @@ function writeYaml(root: string, relativePath: string, contents: string) {
 function setupLayeredConfigFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'config-fixture-'));
 
+  const redFlagDir = join(root, 'red_flags');
+  mkdirSync(redFlagDir, { recursive: true });
+  writeFileSync(join(redFlagDir, 'core.json'), JSON.stringify(['core-flag']), 'utf8');
+
   writeYaml(root, 'nhs_gp_defaults.yaml', `
 core_hours:
   start: "08:00"
@@ -20,8 +24,8 @@ core_hours:
 enhanced_access_windows:
   - "weekdays_evening"
   - "saturday"
-red_flag_set:
-  - "base-flag"
+red_flag_source: core
+red_flag_set: []
 safety_gate:
   red_flag_threshold: 0.65
   emergency_confidence: 0.70
@@ -144,7 +148,7 @@ describe('loadConfig', () => {
         'practice-window',
       ]);
       expect(cfg.red_flag_set).toEqual([
-        'base-flag',
+        'core-flag',
         'global-flag',
         'pcn-flag',
         'practice-flag',
@@ -216,6 +220,36 @@ describe('loadConfig', () => {
       ORG2: {
         endpoint: 'https://ics.example/org2',
       },
+    });
+  });
+
+  it('normalises safety gate shadow configuration', () => {
+    const cfg = loadConfig('shadow-demo', {
+      overrides: {
+        safety_gate: {
+          shadow: {
+            enabled: true,
+            endpoint: ' https://shadow.example/safety ',
+            sample_rate: 0.42,
+            variant: 'next',
+            timeout_ms: 420,
+            max_retries: 1,
+            base_delay_ms: 15,
+            audit_event: 'custom.shadow.audit',
+          },
+        },
+      },
+    });
+
+    expect(cfg.safety_gate?.shadow).toEqual({
+      enabled: true,
+      endpoint: 'https://shadow.example/safety',
+      sampleRate: 0.42,
+      variant: 'next',
+      timeoutMs: 420,
+      maxRetries: 1,
+      baseDelayMs: 15,
+      auditEvent: 'custom.shadow.audit',
     });
   });
 

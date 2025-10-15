@@ -18,6 +18,7 @@ const globalInitKey = Symbol.for('onecare.observability.initTracing');
 let tracingEnabled = false;
 let sdkInstance: NodeSDK | undefined;
 let sdkInitPromise: Promise<void> | undefined;
+const ensuredServices = new Set<string>();
 
 const truthy = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
 const falsy = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
@@ -142,3 +143,12 @@ export function withCorrelationContext<T>(fn: () => T): T {
 }
 
 export type { Span };
+
+export function ensureTracing(serviceName: string): void {
+  if (ensuredServices.has(serviceName)) return;
+  ensuredServices.add(serviceName);
+  void initTracing(serviceName).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`ensureTracing(${serviceName}) failed`, message);
+  });
+}

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from safety_gate_service.main import app
 from safety_gate_service.predict import load_model_bundle
+from security_utils import safety_headers, set_safety_auth_env
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "acuity"
 INPUT_CASES = json.loads((FIXTURE_DIR / "input.json").read_text(encoding="utf-8"))["cases"]
@@ -20,6 +21,7 @@ def reset_model_cache(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_ACUITY_META_PATH", raising=False)
     monkeypatch.delenv("SAFETY_GATE_ACUITY_MODEL_VERSION", raising=False)
     monkeypatch.delenv("SAFETY_GATE_MODELS_DIR", raising=False)
+    set_safety_auth_env(monkeypatch)
     load_model_bundle.cache_clear()
     yield
     load_model_bundle.cache_clear()
@@ -28,7 +30,11 @@ def reset_model_cache(monkeypatch):
 @pytest.mark.parametrize("case", INPUT_CASES, ids=lambda case: case["name"])
 def test_predict_matches_fixture(case):
     client = TestClient(app)
-    response = client.post("/predict", json=case["request"])
+    response = client.post(
+        "/predict",
+        headers=safety_headers(scope="safety:predict"),
+        json=case["request"],
+    )
 
     assert response.status_code == 200
     correlation_id = response.headers.get("x-correlation-id")
@@ -45,7 +51,11 @@ def test_predict_matches_fixture(case):
 @pytest.mark.parametrize("case", INPUT_CASES, ids=lambda case: case["name"])
 def test_predict_proba_matches_fixture(case):
     client = TestClient(app)
-    response = client.post("/predict_proba", json=case["request"])
+    response = client.post(
+        "/predict_proba",
+        headers=safety_headers(scope="safety:predict"),
+        json=case["request"],
+    )
 
     assert response.status_code == 200
     correlation_id = response.headers.get("x-correlation-id")

@@ -4,12 +4,24 @@ import { parse as parseYaml } from 'yaml';
 
 export interface CoreHours { start: string; end: string }
 
+export interface SafetyGateShadowConfig {
+  enabled: boolean;
+  endpoint?: string;
+  sampleRate: number;
+  variant?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  auditEvent: string;
+}
+
 export interface SafetyGateConfig {
   red_flag_threshold?: number;
   emergency_confidence?: number;
   acuity_threshold_emergency?: number;
   timeout_ms?: number;
   fallback?: 'rules' | 'none';
+  shadow?: SafetyGateShadowConfig;
   [key: string]: unknown;
 }
 
@@ -32,6 +44,10 @@ export interface CpcsCircuitBreakerConfig {
 export interface CpcsSlotlessFallbackConfig {
   enabled?: boolean;
   auditReason?: string;
+}
+
+export interface BookingConfig {
+  availabilityTimeoutMs: number;
 }
 
 export interface IcsTlsConfig {
@@ -120,10 +136,13 @@ export interface ResolvedConfig {
   core_hours?: CoreHours;
   safety_gate?: SafetyGateConfig;
   idempotency?: IdempotencyConfig;
+  booking?: BookingConfig;
   cpcs?: CpcsConfig;
   ics?: IcsConfig;
   billing?: BillingConfig;
   pharmacy?: PharmacyConfig;
+  red_flag_set?: string[];
+  red_flag_source?: string;
   [key: string]: unknown;
 }
 
@@ -159,6 +178,7 @@ const GLOBAL_CONFIG_FILENAME = 'global.yaml';
 const PRACTICES_DIR = 'practices';
 const PCN_DIR = 'pcn';
 const ICS_DIR = 'ics';
+const RED_FLAGS_DIR = 'red_flags';
 const METADATA_KEY = '__meta';
 const ARRAY_MERGE_KEY = 'arrayMerge';
 
@@ -175,10 +195,15 @@ const SAFETY_GATE_ACUITY_EMERGENCY_DEFAULT = 0.75;
 const SAFETY_GATE_ACUITY_EMERGENCY_MIN = 0.6;
 const SAFETY_GATE_ACUITY_EMERGENCY_MAX = 0.97;
 const SAFETY_GATE_FALLBACK_DEFAULT: SafetyGateConfig['fallback'] = 'rules';
+const DEFAULT_RED_FLAG_SOURCE = 'core';
 
 const IDEMPOTENCY_TTL_DEFAULT = 600;
 const IDEMPOTENCY_TTL_MIN = 30;
 const IDEMPOTENCY_TTL_MAX = 86_400;
+
+const BOOKING_AVAILABILITY_TIMEOUT_DEFAULT = 2_000;
+const BOOKING_AVAILABILITY_TIMEOUT_MIN = 200;
+const BOOKING_AVAILABILITY_TIMEOUT_MAX = 10_000;
 
 export interface MergeConfigOptions {
   arrayStrategies?: StrategyMap;
@@ -376,6 +401,82 @@ function parseTtl(value: unknown): number | undefined {
   return undefined;
 }
 
+function applySafetyGateShadowConfig(raw: unknown): SafetyGateShadowConfig | undefined {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  const envEnabled = parseBooleanish(
+    process.env.SAFETY_GATE_SHADOW_ENABLED ?? process.env.SAFETY_GATE_SHADOW ?? process.env.SHADOW_MODE,
+  );
+  const configEnabled = parseBooleanish(source?.enabled ?? source?.mode);
+  const enabled = envEnabled ?? configEnabled ?? false;
+
+  const sampleRateCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_SAMPLE_RATE ??
+      process.env.SAFETY_GATE_SHADOW_FRACTION ??
+      process.env.SAFETY_GATE_SHADOW_PERCENT ??
+      source?.sampleRate ??
+      source?.sample_rate ??
+      source?.fraction ??
+      source?.traffic_fraction,
+  );
+  const normalisedSampleRate = sampleRateCandidate !== undefined ? clamp(sampleRateCandidate, 0, 1) : undefined;
+
+  const endpoint = pickString(
+    process.env.PY_SAFETY_GATE_SHADOW_URL,
+    source?.endpoint,
+    source?.url,
+    source?.baseUrl,
+    source?.base_url,
+  );
+
+  const variant = pickString(
+    process.env.SAFETY_GATE_SHADOW_VARIANT,
+    source?.variant,
+    source?.modelVariant,
+    source?.model_variant,
+  );
+
+  const timeoutCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_TIMEOUT_MS ?? source?.timeoutMs ?? source?.timeout_ms ?? source?.timeout,
+  );
+  const timeoutMs =
+    timeoutCandidate !== undefined ? clamp(timeoutCandidate, SAFETY_GATE_TIMEOUT_MIN, SAFETY_GATE_TIMEOUT_MAX) : undefined;
+
+  const maxRetriesCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_MAX_RETRIES ?? source?.maxRetries ?? source?.max_retries,
+  );
+  const maxRetries =
+    maxRetriesCandidate !== undefined ? Math.max(0, Math.min(Math.round(maxRetriesCandidate), 3)) : undefined;
+
+  const baseDelayCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_BASE_DELAY_MS ?? source?.baseDelayMs ?? source?.base_delay_ms,
+  );
+  const baseDelayMs = baseDelayCandidate !== undefined ? Math.max(0, Math.min(baseDelayCandidate, 2_000)) : undefined;
+
+  const auditEvent =
+    pickString(source?.auditEvent, source?.audit_event, process.env.SAFETY_GATE_SHADOW_AUDIT_EVENT) ??
+    'orchestrator.safety.shadow';
+
+  const activeSampleRate = normalisedSampleRate ?? (enabled ? 1 : 0);
+
+  if (!enabled || activeSampleRate <= 0) {
+    return undefined;
+  }
+
+  const shadow: SafetyGateShadowConfig = {
+    enabled: true,
+    endpoint,
+    sampleRate: clamp(activeSampleRate, 0, 1),
+    variant,
+    timeoutMs,
+    maxRetries,
+    baseDelayMs,
+    auditEvent,
+  };
+
+  return shadow;
+}
+
 function applySafetyGatePolicies(raw?: SafetyGateConfig): SafetyGateConfig {
   const working: SafetyGateConfig & Record<string, unknown> = { ...(raw ?? {}) };
   const timeout = typeof working.timeout_ms === 'number'
@@ -410,6 +511,13 @@ function applySafetyGatePolicies(raw?: SafetyGateConfig): SafetyGateConfig {
   }
   working.acuity_threshold_emergency = acuity;
 
+  const shadow = applySafetyGateShadowConfig(working.shadow);
+  if (shadow) {
+    working.shadow = shadow;
+  } else {
+    delete working.shadow;
+  }
+
   return working;
 }
 
@@ -420,6 +528,17 @@ function applyIdempotencyConfig(raw: unknown): IdempotencyConfig {
   let ttl = envOverride ?? configValue ?? IDEMPOTENCY_TTL_DEFAULT;
   ttl = clamp(ttl, IDEMPOTENCY_TTL_MIN, IDEMPOTENCY_TTL_MAX);
   return { ttlSeconds: ttl };
+}
+
+function applyBookingConfig(raw: unknown): BookingConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+  const envOverride = parseNumberish(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS);
+  const configValue = parseNumberish(
+    source?.availabilityTimeoutMs ?? source?.availability_timeout_ms
+  );
+  let timeout = envOverride ?? configValue ?? BOOKING_AVAILABILITY_TIMEOUT_DEFAULT;
+  timeout = clamp(timeout, BOOKING_AVAILABILITY_TIMEOUT_MIN, BOOKING_AVAILABILITY_TIMEOUT_MAX);
+  return { availabilityTimeoutMs: timeout };
 }
 
 function parseHeadersRecord(raw: unknown): Record<string, string> {
@@ -1126,6 +1245,8 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   resolved.ics = applyIcsConfig(icsRaw);
   const billingRaw = (mergedConfig as Record<string, unknown>).billing ?? resolved.billing;
   resolved.billing = applyBillingConfig(billingRaw);
+  const bookingRaw = (mergedConfig as Record<string, unknown>).booking ?? resolved.booking;
+  resolved.booking = applyBookingConfig(bookingRaw);
   const pharmacyRaw = (mergedConfig as Record<string, unknown>).pharmacy ?? resolved.pharmacy;
   resolved.pharmacy = applyPharmacyConfig(pharmacyRaw);
 
@@ -1145,5 +1266,68 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
     resolved._lineage = lineage;
   }
 
+  resolveRedFlagSet(resolved, mergedConfig as Record<string, unknown>, configRoot);
+
   return resolved;
+}
+
+function resolveRedFlagSet(resolved: ResolvedConfig, mergedConfig: Record<string, unknown>, configRoot: string): void {
+  const rawSource = (mergedConfig.red_flag_source ?? resolved.red_flag_source) as unknown;
+  const sourceId = typeof rawSource === 'string' && rawSource.trim().length > 0 ? rawSource.trim() : DEFAULT_RED_FLAG_SOURCE;
+  const base = loadRedFlagSource(configRoot, sourceId);
+
+  const rawExtras = mergedConfig.red_flag_set;
+  const extras = Array.isArray(rawExtras) ? toStringList(rawExtras) : [];
+  const combined = dedupeStrings([...base, ...extras]);
+
+  resolved.red_flag_source = sourceId;
+  resolved.red_flag_set = combined;
+}
+
+function loadRedFlagSource(configRoot: string, sourceId: string): string[] {
+  const filenameJson = join(configRoot, RED_FLAGS_DIR, `${sourceId}.json`);
+  const filenameYaml = join(configRoot, RED_FLAGS_DIR, `${sourceId}.yaml`);
+  if (existsSync(filenameJson)) {
+    const raw = readFileSync(filenameJson, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`red_flag_source_invalid:${sourceId}`);
+    }
+    return dedupeStrings(toStringList(parsed));
+  }
+  if (existsSync(filenameYaml)) {
+    const parsed = parseYaml(readFileSync(filenameYaml, 'utf8'));
+    if (!Array.isArray(parsed)) {
+      throw new Error(`red_flag_source_invalid:${sourceId}`);
+    }
+    return dedupeStrings(toStringList(parsed));
+  }
+  throw new Error(`red_flag_source_missing:${sourceId}`);
+}
+
+function toStringList(values: Iterable<unknown>): string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        result.push(trimmed.toLowerCase());
+      }
+    }
+  }
+  return result;
+}
+
+function dedupeStrings(values: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const key = value.trim().toLowerCase();
+    if (!key) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(key);
+    }
+  }
+  return result;
 }

@@ -3,12 +3,14 @@ from fastapi.testclient import TestClient
 
 from safety_gate_service.analyzer import fallback_metrics
 from safety_gate_service.main import app, reset_models_for_testing
+from security_utils import safety_headers, set_safety_auth_env
 
 
 @pytest.fixture(autouse=True)
 def reset_models(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("FEATURE_LOGGING", raising=False)
+    set_safety_auth_env(monkeypatch)
     fallback_metrics.reset()
     reset_models_for_testing()
     yield
@@ -22,7 +24,7 @@ def test_analyze_success_echoes_correlation_header():
 
     response = client.post(
         "/analyze",
-        headers={"x-correlation-id": correlation_id},
+        headers=safety_headers(correlation_id=correlation_id),
         json={
             "practiceId": "p1",
             "patient": {"id": "x"},
@@ -42,7 +44,7 @@ def test_analyze_invalid_payload_returns_error_envelope():
 
     response = client.post(
         "/analyze",
-        headers={"x-correlation-id": correlation_id},
+        headers=safety_headers(correlation_id=correlation_id),
         json={
             "practiceId": "p1",
             "narrative": "missing patient",  # patient field omitted to trigger validation error

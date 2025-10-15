@@ -1,6 +1,13 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from scribe_service.main import app
+from security_utils import scribe_headers, set_scribe_auth_env
+
+
+@pytest.fixture(autouse=True)
+def configure_auth(monkeypatch):
+    set_scribe_auth_env(monkeypatch)
 
 
 def test_ready_endpoint_reports_ready():
@@ -20,7 +27,11 @@ def test_transcribe_endpoint_returns_transcript():
     }
 
     with TestClient(app) as client:
-        response = client.post("/transcribe", json=payload)
+        response = client.post(
+            "/transcribe",
+            headers=scribe_headers("scribe:transcribe"),
+            json=payload,
+        )
 
         assert response.status_code == 200
         body = response.json()
@@ -41,14 +52,17 @@ def test_transcribe_rejects_insecure_scheme():
     }
 
     with TestClient(app) as client:
-        response = client.post("/transcribe", json=payload)
+        response = client.post(
+            "/transcribe",
+            headers=scribe_headers("scribe:transcribe"),
+            json=payload,
+        )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         body = response.json()
-        assert isinstance(body.get("detail"), list)
-        first_error = body["detail"][0]
-        assert first_error["type"] == "string_pattern_mismatch"
-        assert first_error["loc"] == ["body", "audioUrl"]
+        error = body["detail"]["error"]
+        assert error["code"] == "invalid_input"
+        assert error["details"]["reason"] == "unsupported_scheme"
 
 
 def test_transcribe_rejects_private_host():
@@ -59,7 +73,11 @@ def test_transcribe_rejects_private_host():
     }
 
     with TestClient(app) as client:
-        response = client.post("/transcribe", json=payload)
+        response = client.post(
+            "/transcribe",
+            headers=scribe_headers("scribe:transcribe"),
+            json=payload,
+        )
 
         assert response.status_code == 400
         body = response.json()

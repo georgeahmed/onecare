@@ -16,3 +16,5 @@ export * from './call-transcribed';
 export * from './intent-classified';
 export * from './task-created';
 export * from './metric';
+export * from './triage-core-features';
+export * from './acuity-signal-features';

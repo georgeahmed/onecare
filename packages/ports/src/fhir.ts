@@ -1,6 +1,21 @@
-export interface FhirBundle {
+export type FhirBundleEntry = Record<string, unknown> & {
+  fullUrl?: string;
+  resource?: Record<string, unknown>;
+  request?: {
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+    url: string;
+    ifMatch?: string;
+    ifNoneExist?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type FhirBundle = Record<string, unknown> & {
   id?: string;
-}
+  resourceType: 'Bundle';
+  type: string;
+  entry: FhirBundleEntry[];
+};
 
 export interface FhirResourceRef { id: string; resourceType: string }
 

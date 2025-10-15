@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
+/** @typedef {import('@onecare/events').TriageCoreFeatures} TriageCoreFeatures */
+/** @typedef {import('@onecare/events').AcuitySignalFeatures} AcuitySignalFeatures */
+
 /**
  * Backfill script that hydrates the feature store from historical triage events.
  * - Reads JSONL files containing triage input envelopes or payloads.
@@ -120,6 +123,10 @@ function safeNumber(value) {
   return null;
 }
 
+/**
+ * @param {unknown} envelopeOrPayload
+ * @returns {{ patientId: string; features: TriageCoreFeatures } | null}
+ */
 function deriveTriageCoreFeatures(envelopeOrPayload) {
   const envelope = envelopeOrPayload || {};
   const payload = envelope.payload && typeof envelope.payload === 'object' ? envelope.payload : envelope;
@@ -154,6 +161,7 @@ function deriveTriageCoreFeatures(envelopeOrPayload) {
     extensions[key] = value;
   }
 
+  /** @type {TriageCoreFeatures} */
   const featureVector = {
     schemaVersion: typeof base.schemaVersion === 'string' ? base.schemaVersion : 'v1.0.0',
     generatedAt,

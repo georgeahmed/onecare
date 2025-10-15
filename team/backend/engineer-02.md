@@ -23,7 +23,7 @@ Contracts & Validation
 - ADR: docs/adr/2025-10-11-bus-injection.md
 
 Status: in-progress
-Progress: 17%
+Progress: 26%
 
 Dependencies
 - devops-sre/engineer-01 (Broker infra)
@@ -39,26 +39,23 @@ Platform Checklist (pre-flight)
   - See also: docs/CONVENTIONS.md (Service Platform Checklist), infra/runbooks/tls-credentials.md, infra/event-bus/subjects-acls.md, infra/runbooks/idempotency-store.md, infra/event-bus/dlq-runbook.md
 
 Tasks
-- [x] BE-02.1 — Define NATS adapter skeleton
-- [x] BE-02.2 — Adapter factory + injection in orchestrator
-- [x] BE-02.3 — Basic healthcheck/metrics hooks
-- [x] BE-02.4a — NATS connection + durable subs + ack deadlines
-- [ ] BE-02.4b — Basic DLQ subject + schema (DlqEvent)
-- [ ] BE-02.5a — Connection resilience (reconnect jitter, backoff, status events)
-- [ ] BE-02.5b — Metrics for reconnects, drops, and lag
-- [ ] BE-02.6a — At-least-once semantics + dedupe keys
-- [ ] BE-02.6b — Idempotency on consume (key propagation)
-- [ ] BE-02.12 — Contract enforcement (envelope schema validation; topic allowlist)
-- [ ] BE-02.7 — Ordering/partitioning (keyed subjects; per-tenant ordering guarantees)
-- [ ] BE-02.8 — Flow control/backpressure (prefetch/credits, size limits; pressure signals)
-- [ ] BE-02.9 — Security hardening (TLS, creds, subject ACLs; secret rotation readiness)
-- [ ] BE-02.10 — Observability (latency histograms, error/retry counters, spans; correlationId propagation)
-- [ ] BE-02.11 — Health/readiness (ping bus, durable sub status; probe cache)
-- [ ] BE-02.13 — Advanced DLQ/retry (bounded retries, poison detection, requeue tooling)
-- [ ] BE-02.14 — Parity tests vs MemoryBus (deterministic; no network in unit)
-- [ ] BE-02.15 — Docs & ADRs (bus selection, semantics, operational playbook)
-- [ ] BE-02.16 — Multi-tenant isolation/quotas (partitioning, throughput caps)
-- [ ] BE-02.17 — Size/compression policies (max bytes, compression support)
-- [ ] BE-02.18 — Partitioning strategy doc + tests (ordering, hot-keys)
-- [ ] BE-02.19 — Performance baselines/soak (p50/p95, sustained throughput, backpressure)
-- [ ] BE-02.20 — Runbooks & alerting (storms, DLQ spikes, lag thresholds)
+Completed tasks have moved to `team/backend/Completed Tasks/engineer-02.md`.
+
+Incomplete
+- [ ] BE-02.5a — Connection resilience (pending jittered backoff and status emitters in bus/orchestrator).
+- [ ] BE-02.5b — Metrics for reconnects, drops, and lag (no reconnect/lag metrics or instrumentation yet).
+- [ ] BE-02.6a — At-least-once semantics + dedupe keys (failures ack after DLQ; dedupe keys untouched).
+- [ ] BE-02.6b — Idempotency on consume (key propagation) (no idempotency store integration or key propagation).
+- [ ] BE-02.7 — Ordering/partitioning (keyed subjects; per-tenant ordering guarantees) (subjects remain unpartitioned).
+- [ ] BE-02.8 — Flow control/backpressure (prefetch/credits, size limits; pressure signals) (no adaptive flow control or pressure signals).
+- [ ] BE-02.9 — Security hardening (TLS, creds, subject ACLs; secret rotation readiness) (TLS creds/rotation not implemented).
+- [ ] BE-02.10 — Observability (latency histograms, error/retry counters, spans; correlationId propagation) (no bus-level metrics or tracing spans).
+- [ ] BE-02.11 — Health/readiness (ping bus, durable sub status; probe cache) (lack readiness probes beyond basic `busReady` flag).
+- [ ] BE-02.13 — Advanced DLQ/retry (bounded retries, poison detection, requeue tooling) (no advanced retry/DLQ tooling).
+- [ ] BE-02.14 — Parity tests vs MemoryBus (deterministic; no network in unit) (parity test suite not started).
+- [ ] BE-02.15 — Docs & ADRs (bus selection, semantics, operational playbook) (operational docs/playbooks still missing).
+- [ ] BE-02.16 — Multi-tenant isolation/quotas (partitioning, throughput caps) (no quotas or tenant isolation controls).
+- [ ] BE-02.17 — Size/compression policies (max bytes, compression support) (no payload size/compression policy enforcement).
+- [ ] BE-02.18 — Partitioning strategy doc + tests (ordering, hot-keys) (partitioning doc/tests absent).
+- [ ] BE-02.19 — Performance baselines/soak (p50/p95, sustained throughput, backpressure) (no performance baselines recorded).
+- [ ] BE-02.20 — Runbooks & alerting (storms, DLQ spikes, lag thresholds) (alerting/runbook coverage outstanding).

@@ -61,7 +61,7 @@ describe('AnalyticsConsumer DLQ integration', () => {
     const metric: Metric = { name: 'requests_total', value: 7 };
     const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-dlq');
 
-    await expect(bus.publish(Topics.analytics.metric, envelope)).rejects.toThrow(AnalyticsMetricSinkError);
+    await expect(bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' })).rejects.toThrow(AnalyticsMetricSinkError);
 
     expect(dlqEvents).toHaveLength(1);
     expect(dlqEvents[0].topic).toBe(Topics.broker.deadLetter);

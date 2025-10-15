@@ -1,3 +1,4 @@
+import { withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope, type AuditEvent } from '@onecare/events';
 import type { AutomationTaskCreation } from '../application/automation.rules';
@@ -16,6 +17,13 @@ export interface DLQMessage<T = unknown> {
   ts: string; // ISO
 }
 
+const ICS_ALLOWED_TOPICS = new Set<string>([
+  Topics.ics.referralAck,
+  Topics.tasks.created,
+  Topics.audit.event,
+  Topics.broker.deadLetter,
+]);
+
 export async function publishWithGuard<T>(
   bus: MessageBus,
   topic: string,
@@ -23,8 +31,10 @@ export async function publishWithGuard<T>(
   correlationId?: string,
   opts: PublishOptions = { timeoutMs: 500, maxRetries: 2, baseDelayMs: 10 }
 ): Promise<void> {
+  const guardedBus = ensureIcsBus(bus);
+  const normalizedCorrelationId = normalizeCorrelationId(correlationId);
   const headers: Record<string, string> = {};
-  if (correlationId) headers['x-correlation-id'] = correlationId;
+  if (normalizedCorrelationId) headers['x-correlation-id'] = normalizedCorrelationId;
   ensureEnvelopeTopic(topic, payload);
   let lastErr: unknown;
   const base = opts.baseDelayMs ?? 10;
@@ -32,7 +42,7 @@ export async function publishWithGuard<T>(
   const maxRetries = opts.maxRetries ?? 0;
   for (let i = 0; i <= maxRetries; i++) {
     try {
-      await publishWithTimeout(bus, topic, payload, headers, timeoutMs);
+      await publishWithTimeout(guardedBus, topic, payload, headers, timeoutMs);
       return;
     } catch (err) {
       lastErr = err;
@@ -46,16 +56,16 @@ export async function publishWithGuard<T>(
   const dlqPayload: DLQMessage<T> = {
     originalTopic: topic,
     payload,
-    correlationId,
+    correlationId: normalizedCorrelationId,
     error: lastErr instanceof Error ? lastErr.message : String(lastErr),
     ts: new Date().toISOString(),
   };
-  const dlqEnvelope = createEnvelope(Topics.broker.deadLetter, dlqPayload, correlationId);
+  const dlqEnvelope = createEnvelope(Topics.broker.deadLetter, dlqPayload, normalizedCorrelationId);
   const dlqHeaders: Record<string, string> = {
     ...(headers ?? {}),
     'x-original-topic': topic,
   };
-  await bus.publish(dlqEnvelope.topic, dlqEnvelope, dlqHeaders);
+  await guardedBus.publish(dlqEnvelope.topic, dlqEnvelope, dlqHeaders);
 }
 
 async function publishWithTimeout<T>(
@@ -84,10 +94,13 @@ async function publishWithTimeout<T>(
 
 function ensureEnvelopeTopic(topic: string, payload: unknown): void {
   if (!payload || typeof payload !== 'object') {
-    return;
+    throw new Error(`publish_topic_missing: expected envelope for ${topic}`);
   }
   const candidate = payload as { topic?: unknown };
-  if (typeof candidate.topic === 'string' && candidate.topic !== topic) {
+  if (typeof candidate.topic !== 'string' || candidate.topic.length === 0) {
+    throw new Error(`publish_topic_missing: expected envelope topic for ${topic}`);
+  }
+  if (candidate.topic !== topic) {
     throw new Error(`publish_topic_mismatch: expected=${topic} actual=${candidate.topic}`);
   }
 }
@@ -111,7 +124,7 @@ export async function publishAutomationTasks(
   const auditType = options.auditEventType ?? 'automation.task.created';
 
   for (const creation of creations) {
-    const correlationId = creation.correlationId;
+    const correlationId = normalizeCorrelationId(creation.correlationId);
     const taskEnvelope = createEnvelope(Topics.tasks.created, creation.task, correlationId);
     await publishWithGuard(bus, taskEnvelope.topic, taskEnvelope, correlationId, options.taskPublish);
 
@@ -132,4 +145,14 @@ export async function publishAutomationTasks(
     const auditEnvelope = createEnvelope(Topics.audit.event, audit, correlationId);
     await publishWithGuard(bus, auditEnvelope.topic, auditEnvelope, correlationId, options.auditPublish);
   }
+}
+
+function ensureIcsBus(bus: MessageBus): MessageBus {
+  return withMessageGuards(bus, { allowedTopics: ICS_ALLOWED_TOPICS });
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

@@ -17,6 +17,7 @@ import portalSubmissionSchema from '../../../../schemas/ingest/portal-submission
 
 const intakeSchema = portalSubmissionSchema as JsonSchema;
 const MAX_ATTACHMENTS = 10;
+const ALLOWED_ATTACHMENT_TYPES = /^(application\/pdf|image\/[A-Za-z0-9.+-]+|audio\/[A-Za-z0-9.+-]+)$/i;
 const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'unauthorized',
   'forbidden',
@@ -66,18 +67,32 @@ const sanitizeAttachments = (
   attachments: PortalSubmissionAttachment[] | undefined
 ): PortalSubmissionAttachment[] =>
   (attachments ?? []).reduce<PortalSubmissionAttachment[]>((acc, attachment) => {
+    if (acc.length >= MAX_ATTACHMENTS) {
+      return acc;
+    }
     const contentType = (attachment.contentType ?? '').trim();
     const rawUrl = (attachment.url ?? '').trim();
     if (!contentType || !rawUrl) {
+      return acc;
+    }
+    if (!ALLOWED_ATTACHMENT_TYPES.test(contentType)) {
       return acc;
     }
     const safeUrl = isSafeAttachmentUrl(rawUrl);
     if (!safeUrl) {
       return acc;
     }
+    if (acc.some((existing) => existing.url === safeUrl)) {
+      return acc;
+    }
     acc.push({ contentType, url: safeUrl });
     return acc;
   }, []);
+
+const toContractAttachments = (
+  attachments: PortalSubmissionAttachment[]
+): PortalSubmission['attachments'] =>
+  attachments as unknown as PortalSubmission['attachments'];
 
 export const sanitizeSubmission = (submission: PortalSubmission): PortalSubmission => {
   const practiceId = submission.practiceId.trim();
@@ -108,7 +123,7 @@ export const sanitizeSubmission = (submission: PortalSubmission): PortalSubmissi
   };
 
   if (attachments.length > 0) {
-    normalized.attachments = attachments;
+    normalized.attachments = toContractAttachments(attachments);
   }
 
   return normalized;
@@ -188,14 +203,17 @@ const IntakeForm = () => {
       },
     };
 
-    const coerceEnvelope = (envelope: ErrorEnvelope): ErrorEnvelope => ({
-      error: {
-        code: envelope.error.code,
-        message: envelope.error.message ?? fallbackMessage,
-        details: envelope.error.details,
-        ...(envelope.error.correlationId ? { correlationId: envelope.error.correlationId } : {}),
-      },
-    });
+    const coerceEnvelope = (envelope: ErrorEnvelope): ErrorEnvelope => {
+      const code = isKnownErrorCode(envelope.error.code) ? envelope.error.code : 'internal_error';
+      return {
+        error: {
+          code,
+          message: envelope.error.message ?? fallbackMessage,
+          details: envelope.error.details,
+          ...(envelope.error.correlationId ? { correlationId: envelope.error.correlationId } : {}),
+        },
+      };
+    };
 
     if (!error) {
       return fallback;
@@ -218,7 +236,7 @@ const IntakeForm = () => {
         const payload = await error.json();
         if (payload && typeof payload === 'object' && 'error' in payload) {
           const envelope = payload as ErrorEnvelope;
-          if (envelope.error && typeof envelope.error.code === 'string') {
+          if (envelope.error && isKnownErrorCode(envelope.error.code)) {
             return coerceEnvelope(envelope);
           }
         }
@@ -232,15 +250,20 @@ const IntakeForm = () => {
       const candidate = error as {
         error?: { code?: string; message?: string; details?: Record<string, unknown>; correlationId?: string };
       };
-      if (candidate.error && typeof candidate.error.code === 'string') {
-        return {
-          error: {
-            code: candidate.error.code,
-            message: candidate.error.message ?? fallbackMessage,
-            details: candidate.error.details,
-            ...(candidate.error.correlationId ? { correlationId: candidate.error.correlationId } : {}),
-          },
-        } satisfies ErrorEnvelope;
+      const candidateError = candidate.error;
+      if (candidateError) {
+        const candidateCode = candidateError.code;
+        if (typeof candidateCode === 'string' && isKnownErrorCode(candidateCode)) {
+          const { message, details, correlationId } = candidateError;
+          return {
+            error: {
+              code: candidateCode,
+              message: message ?? fallbackMessage,
+              details,
+              ...(correlationId ? { correlationId } : {}),
+            },
+          } satisfies ErrorEnvelope;
+        }
       }
     }
 

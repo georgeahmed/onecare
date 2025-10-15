@@ -48,7 +48,7 @@ describe('AnalyticsConsumer', () => {
     };
     const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-123');
 
-    await bus.publish(Topics.analytics.metric, envelope);
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(write).toHaveBeenCalledWith(metric);
@@ -63,7 +63,7 @@ describe('AnalyticsConsumer', () => {
     const invalidMetric = { value: 1 } as unknown as Metric;
     const envelope = createEnvelope(Topics.analytics.metric, invalidMetric, 'cid-456');
 
-    await expect(bus.publish(Topics.analytics.metric, envelope)).rejects.toThrow(AnalyticsMetricValidationError);
+    await expect(bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' })).rejects.toThrow(AnalyticsMetricValidationError);
     expect(write).not.toHaveBeenCalled();
 
     await consumer.stop();
@@ -81,7 +81,7 @@ describe('AnalyticsConsumer', () => {
     };
     const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-789');
 
-    await expect(bus.publish(Topics.analytics.metric, envelope)).rejects.toThrow(AnalyticsMetricSinkError);
+    await expect(bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' })).rejects.toThrow(AnalyticsMetricSinkError);
     expect(write).toHaveBeenCalledTimes(1);
 
     await consumer.stop();
@@ -99,8 +99,8 @@ describe('AnalyticsConsumer', () => {
     };
     const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-idem');
 
-    await bus.publish(Topics.analytics.metric, envelope);
-    await bus.publish(Topics.analytics.metric, envelope);
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
 
     expect(write).toHaveBeenCalledTimes(1);
     await consumer.stop();

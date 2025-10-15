@@ -1,9 +1,11 @@
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { BaseState } from '@onecare/statekit';
-import { logger } from '@onecare/observability';
+import { logger, ensureTracing } from '@onecare/observability';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { TriageInput } from '@onecare/events';
 import { executeWithIdempotency } from '@onecare/ports';
+import { withMessageGuards } from '@onecare/bus';
+import type { MessageBus } from '@onecare/bus';
 import { buildCallTranscribed } from '../adapters/asr.client';
 import { buildIntentClassifiedEvent } from '../adapters/intent.classifier';
 import { queuePromptForCall } from '../adapters/ivr.prompts';
@@ -19,6 +21,8 @@ import type {
   LanguagePromptSelection,
   EmergencyHandoffDetails,
 } from './types';
+
+ensureTracing('telephony');
 
 const DEFAULT_LANGUAGE_CODE = 'en';
 
@@ -49,6 +53,12 @@ const DEFAULT_ACCESSIBILITY_SETTINGS: AccessibilityLanguageSettings = {
 
 const accessibilitySettingsCache = new Map<string, AccessibilityLanguageSettings>();
 const DEFAULT_TELEPHONY_IDEMPOTENCY_TTL_SECONDS = 15 * 60;
+
+const TELEPHONY_ALLOWED_TOPICS = new Set<string>([
+  Topics.telephony.callTranscribed,
+  Topics.telephony.intentClassified,
+  Topics.triage.input,
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -137,6 +147,27 @@ function deriveIntentClassifiedIdempotencyKey(ctx: TelephonyContext, callId: str
 function deriveTriagePublishIdempotencyKey(ctx: TelephonyContext, callId: string, patientId?: string | null): string {
   const patient = patientId ?? ctx.patientId ?? 'unknown-patient';
   return ctx.triagePublishIdempotencyKey ?? `telephony:triage-input:${patient}:${callId}`;
+}
+
+function ensureTelephonyBus(ctx: TelephonyContext): MessageBus {
+  if (!ctx.bus) {
+    throw new Error('message_bus_missing');
+  }
+  const guarded = withMessageGuards(ctx.bus, { allowedTopics: TELEPHONY_ALLOWED_TOPICS });
+  ctx.bus = guarded;
+  return guarded;
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function ensureCorrelationId(ctx: TelephonyContext): string | undefined {
+  const normalized = normalizeCorrelationId(ctx.correlationId);
+  ctx.correlationId = normalized;
+  return normalized;
 }
 
 function mergePromptConfig(base: LanguagePromptConfig, override?: LanguagePromptConfig): LanguagePromptConfig {
@@ -785,18 +816,15 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
 
     ctx.callTranscribed = payload;
 
-    const envelope = createEnvelope(Topics.telephony.callTranscribed, payload, ctx.correlationId);
+    const correlationId = ensureCorrelationId(ctx);
+    const envelope = createEnvelope(Topics.telephony.callTranscribed, payload, correlationId);
     ctx.callTranscribedEnvelope = envelope;
-    ctx.intentClassificationInput = buildIntentClassificationInput(payload, ctx.correlationId, selectedLanguage);
+    ctx.intentClassificationInput = buildIntentClassificationInput(payload, correlationId, selectedLanguage);
     ensureIntentConfidenceThreshold(ctx);
     ensureEmergencyTransferEnabled(ctx);
 
-    const bus = ctx.bus;
-    if (!bus) {
-      throw new Error('message_bus_missing');
-    }
-
-    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
+    const bus = ensureTelephonyBus(ctx);
+    const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
     const callIdempotencyKey = deriveCallTranscribedIdempotencyKey(ctx, callId);
     const ttlSeconds = resolveTelephonyIdempotencyTtl(ctx);
 
@@ -810,7 +838,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
         } catch (error) {
           logger.error('telephony.call.transcribed.publish_failed', {
             callId,
-            correlationId: ctx.correlationId,
+            correlationId,
             reason: (error as Error).message,
           });
           throw new Error('call_transcribed_publish_failed');
@@ -818,7 +846,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
 
         logger.info('telephony.call.transcribed', {
           callId,
-          correlationId: ctx.correlationId,
+          correlationId,
           lang: payload.lang ?? undefined,
           patientIdPresent: payload.patientId != null,
         });
@@ -829,7 +857,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
           stage: 'callTranscribed',
           key: callIdempotencyKey,
           callId,
-          correlationId: ctx.correlationId,
+          correlationId,
         });
       },
       onError: (error) => {
@@ -837,7 +865,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
           stage: 'callTranscribed',
           key: callIdempotencyKey,
           callId,
-          correlationId: ctx.correlationId,
+          correlationId,
           reason: error instanceof Error ? error.message : 'unknown_error',
         });
       },
@@ -870,10 +898,8 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
       throw new Error('intent_classifier_missing');
     }
 
-    const bus = ctx.bus;
-    if (!bus) {
-      throw new Error('message_bus_missing');
-    }
+    const bus = ensureTelephonyBus(ctx);
+    const correlationId = ensureCorrelationId(ctx);
 
     const result = await intentClassifier.classify(input);
     ctx.intentClassificationResult = result;
@@ -932,10 +958,10 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
       correlationId: ctx.correlationId,
     });
 
-    const envelope = createEnvelope(Topics.telephony.intentClassified, payload, ctx.correlationId);
+    const envelope = createEnvelope(Topics.telephony.intentClassified, payload, correlationId);
     ctx.intentClassifiedEnvelope = envelope;
 
-    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
+    const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
     const intentKey = deriveIntentClassifiedIdempotencyKey(ctx, input.callId);
     const ttlSeconds = resolveTelephonyIdempotencyTtl(ctx);
     const nowFn = ctx.now ?? Date.now;
@@ -951,7 +977,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           logger.error('telephony.intent.classified.publish_failed', {
             callId: input.callId,
             intent: payload.intent,
-            correlationId: ctx.correlationId,
+            correlationId,
             reason: (error as Error).message,
           });
           throw new Error('intent_classified_publish_failed');
@@ -961,7 +987,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           callId: input.callId,
           intent: payload.intent,
           confidence: payload.confidence,
-          correlationId: ctx.correlationId,
+          correlationId,
         });
         return true;
       },
@@ -970,7 +996,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           stage: 'intentClassified',
           key: intentKey,
           callId: input.callId,
-          correlationId: ctx.correlationId,
+          correlationId,
         });
       },
       onError: (error) => {
@@ -978,7 +1004,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           stage: 'intentClassified',
           key: intentKey,
           callId: input.callId,
-          correlationId: ctx.correlationId,
+          correlationId,
           reason: error instanceof Error ? error.message : 'unknown_error',
         });
       },
@@ -992,7 +1018,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
 
     if (ctx.intentRouteTarget === 'triage' && ctx.triageInput) {
       const triageInput = ctx.triageInput;
-      const triageEnvelope = createEnvelope(Topics.triage.input, triageInput, ctx.correlationId);
+      const triageEnvelope = createEnvelope(Topics.triage.input, triageInput, correlationId);
       const triageKey = deriveTriagePublishIdempotencyKey(ctx, input.callId, triageInput.patientId);
 
       const { status: triageStatus } = await executeWithIdempotency({
@@ -1006,7 +1032,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
             logger.error('telephony.triage_input.publish_failed', {
               callId: input.callId,
               patientId: triageInput.patientId,
-              correlationId: ctx.correlationId,
+              correlationId,
               reason: (error as Error).message,
             });
             throw new Error('triage_input_publish_failed');
@@ -1016,7 +1042,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
           logger.info('telephony.triage_input.published', {
             callId: input.callId,
             patientId: triageInput.patientId,
-            correlationId: ctx.correlationId,
+            correlationId,
           });
           return true;
         },
@@ -1026,7 +1052,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
             key: triageKey,
             callId: input.callId,
             patientId: triageInput.patientId,
-            correlationId: ctx.correlationId,
+            correlationId,
           });
         },
         onError: (error) => {
@@ -1035,7 +1061,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
             key: triageKey,
             callId: input.callId,
             patientId: ctx.triageInput?.patientId,
-            correlationId: ctx.correlationId,
+            correlationId,
             reason: error instanceof Error ? error.message : 'unknown_error',
           });
         },

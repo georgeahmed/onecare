@@ -1,0 +1,18 @@
+{
+  "datasetVersion": "v20250315",
+  "recordCount": 5428,
+  "extractionStartedAt": "2025-03-16T00:02:10Z",
+  "extractionFinishedAt": "2025-03-16T00:04:31Z",
+  "emergencyPositiveRate": 0.214,
+  "consentScopeBreakdown": {
+    "training_allowed": 5428,
+    "ops_only": 931,
+    "opt_out": 122
+  },
+  "sourceRanges": {
+    "submissions": "2025-01-01/2025-03-15",
+    "safety_gate": "2025-01-01/2025-03-15",
+    "clinician": "2025-01-01/2025-04-01"
+  },
+  "deidentVersion": "deid-v1"
+}

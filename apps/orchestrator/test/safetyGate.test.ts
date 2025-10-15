@@ -24,17 +24,17 @@ describe('safetyGate SSRF guard', () => {
 
   it('blocks localhost/loopback endpoints', async () => {
     await expect(
-      analyzePortalSubmission(sample, 'http://localhost:8081', 'corr')
+      analyzePortalSubmission(sample, 'http://localhost:8081', { correlationId: 'corr' })
     ).rejects.toBeTruthy();
     await expect(
-      analyzePortalSubmission(sample, 'http://127.0.0.1:8081', 'corr')
+      analyzePortalSubmission(sample, 'http://127.0.0.1:8081', { correlationId: 'corr' })
     ).rejects.toBeTruthy();
   });
 
   it('blocks domains that resolve to private addresses', async () => {
     vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '10.0.0.4', family: 4 }] as unknown as dns.LookupAddress[]);
     await expect(
-      analyzePortalSubmission(sample, 'https://intranet.example', 'corr')
+      analyzePortalSubmission(sample, 'https://intranet.example', { correlationId: 'corr' })
     ).rejects.toThrow(/blocked_private_ip/);
   });
 
@@ -42,7 +42,7 @@ describe('safetyGate SSRF guard', () => {
     const error = Object.assign(new Error('not found'), { code: 'ENOTFOUND' });
     vi.spyOn(dns, 'lookup').mockRejectedValue(error);
     await expect(
-      analyzePortalSubmission(sample, 'https://unresolvable.example', 'corr')
+      analyzePortalSubmission(sample, 'https://unresolvable.example', { correlationId: 'corr' })
     ).rejects.toThrow(/blocked_host_resolution/);
   });
 });

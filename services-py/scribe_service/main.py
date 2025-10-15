@@ -46,11 +46,11 @@ def _is_private_host(host: str) -> bool:
 
 
 def _sanitize_audio_request(audio: ScribeAudio) -> dict[str, Any]:
-    encounter_id = audio.encounterId.strip()
+    encounter_id = (audio.encounterId or "").strip()
     if not encounter_id:
         raise _audio_validation_error("missing_encounter_id")
 
-    raw_url = audio.audioUrl.strip()
+    raw_url = str(audio.audioUrl).strip()
     if not raw_url:
         raise _audio_validation_error("missing_audio_url")
     try:
@@ -76,7 +76,7 @@ def _sanitize_audio_request(audio: ScribeAudio) -> dict[str, Any]:
     if len(normalized_url) > 2048:
         raise _audio_validation_error("url_too_long")
 
-    content_type = (audio.contentType or "").strip()
+    content_type = str(audio.contentType or "").strip()
     if not content_type.lower().startswith("audio/"):
         raise _audio_validation_error("invalid_content_type")
 

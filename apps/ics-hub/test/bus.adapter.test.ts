@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageBus } from '@onecare/bus';
 import { publishWithGuard, publishAutomationTasks, type DLQMessage } from '../src/adapters/bus.adapter';
-import { Topics } from '@onecare/events';
+import { Topics, createEnvelope } from '@onecare/events';
 import type { AutomationTaskCreation } from '../src/application/automation.rules';
 
 class FlakyBus implements MessageBus {
@@ -39,14 +39,16 @@ class HangingBus implements MessageBus {
 describe('publishWithGuard', () => {
   it('retries and succeeds before DLQ', async () => {
     const bus = new FlakyBus(2);
-    await publishWithGuard(bus, 'ics.referral.ack', { ok: true }, 'cid-1', { maxRetries: 3, baseDelayMs: 1 });
+    const envelope = createEnvelope(Topics.ics.referralAck, { ok: true }, 'cid-1');
+    await publishWithGuard(bus, envelope.topic, envelope, 'cid-1', { maxRetries: 3, baseDelayMs: 1 });
     const ok = bus.publishes.find(p => p.topic === 'ics.referral.ack');
     expect(ok).toBeTruthy();
   });
 
   it('publishes to DLQ after persistent failure', async () => {
     const bus = new FlakyBus(10);
-    await publishWithGuard(bus, 'ics.referral.ack', { ok: false }, 'cid-2', { maxRetries: 1, baseDelayMs: 1 });
+    const envelope = createEnvelope(Topics.ics.referralAck, { ok: false }, 'cid-2');
+    await publishWithGuard(bus, envelope.topic, envelope, 'cid-2', { maxRetries: 1, baseDelayMs: 1 });
     const dlq = bus.publishes.find(p => p.topic === Topics.broker.deadLetter);
     expect(dlq).toBeTruthy();
     const dlqEnvelope = dlq!.payload as { topic: string; correlationId?: string; payload: DLQMessage };
@@ -59,7 +61,8 @@ describe('publishWithGuard', () => {
 
   it('respects publish timeouts and falls back to DLQ', async () => {
     const bus = new HangingBus();
-    await publishWithGuard(bus, 'ics.referral.ack', { ok: true }, 'cid-timeout', { timeoutMs: 5, maxRetries: 1, baseDelayMs: 1 });
+    const envelope = createEnvelope(Topics.ics.referralAck, { ok: true }, 'cid-timeout');
+    await publishWithGuard(bus, envelope.topic, envelope, 'cid-timeout', { timeoutMs: 5, maxRetries: 1, baseDelayMs: 1 });
     const dlq = bus.publishes.find((p) => p.topic === Topics.broker.deadLetter);
     expect(dlq).toBeTruthy();
     const dlqEnvelope = dlq!.payload as { topic: string; payload: DLQMessage };

@@ -11,8 +11,11 @@ Prerequisites
 
 Environment Variables
 - NODE_ENV — environment name (default: development)
+- PRACTICE_ID — required practice identifier (set to `demo` for local dev/testing)
 - PORT_ORCHESTRATOR / PORT — port for orchestrator (default: 3001)
-- PY_SAFETY_GATE_URL — Safety Gate base URL (default: http://localhost:8081)
+- PY_SAFETY_GATE_URL — Safety Gate base URL (must be reachable by orchestrator; e.g. http://localhost:8081 for local dev)
+- PY_SAFETY_GATE_HOST_ALLOWLIST — optional comma-separated host allowlist (set to `localhost` for local stubs)
+- BOOKING_AVAILABILITY_TIMEOUT_MS — optional process override for booking availability timeout (clamped 200-10000 ms; prefer updating practice config `booking.availabilityTimeoutMs`)
 - PY_SCRIBE_URL — Scribe base URL (default: http://localhost:8082)
 - LOG_LEVEL — logging level (default: info)
 - BUS_IMPL — message bus implementation (`memory` for local dev, `nats` in docker)
@@ -79,7 +82,7 @@ Ensure booking proxy vars are configured before running the portal:
 2) Build Orchestrator (TS)
    - npm -w @onecare/app-orchestrator run build
 3) Start Orchestrator
-   - PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 node apps/orchestrator/dist/index.js
+   - PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 BUS_IMPL=memory node apps/orchestrator/dist/index.js
 4) Optional: quick perf
    - make perf-orchestrator
 
@@ -178,6 +181,12 @@ Manual runs
 - Triage alert SLO check (breach simulation + report): `node scripts/perf/triage_alert_check.js`
 - Contracts sync check: bash scripts/ci/check_contracts_sync.sh HEAD^ HEAD
 - OpenAPI validation: python scripts/ci/validate_openapi.py
+- Extract triage inputs from operational JSONL dumps: `python3 scripts/triage_dataset/extract_inputs.py --submissions raw/submissions --safety-gate raw/safety --audit raw/audit --output-dir exports --since 2025-01-01T00:00:00Z --until 2025-03-31T23:59:59Z`
+- Or, load sources from config (supports local dirs + S3 prefixes):
+  `python3 scripts/triage_dataset/extract_inputs.py --config config/triage_dataset_sources.example.json --output-dir exports`
+- Build triage dataset snapshot (see `docs/triage/data-schema.md` for file contracts): `TRIAGE_DATASET_SALT=<secret> python3 scripts/triage_dataset/build_dataset.py --submissions exports/triage_submissions.jsonl --safety-gate exports/safety_gate.jsonl --clinician exports/clinician_outcomes.jsonl --output-dir data/triage --dataset-version v20250315 --deident-version deid-v1 --source-range submissions=2025-01-01/2025-03-31`
+- Full pipeline (extract + build in one step): `TRIAGE_DATASET_SALT=<secret> python3 scripts/triage_dataset/run_pipeline.py --config config/triage_dataset_sources.example.json --dataset-version v20250315 --output-dir data/triage --since 2025-01-01T00:00:00Z --until 2025-03-31T23:59:59Z`
+- Event bus guard smoke (requires live NATS; set `NATS_URL`, `NATS_USER`, `NATS_PASS`): `npm run smoke:nats`
 
 Adding a New Service
 1) Create apps/<service> with src/application and src/adapters

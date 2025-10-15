@@ -2,16 +2,18 @@ TEAM STATUS
 
 | Engineer | Status | Progress | Done/Total | Bugs | Deps |
 |---|---|---|---:|---:|---:|
+| team/backend/Completed Tasks/engineer-02.md | planned | 0% | 0/0 | 0 | 0 |
+| team/backend/Completed Tasks/engineer-05.md | planned | 0% | 0/0 | 0 | 0 |
 | team/backend/engineer-01.md | in-progress | 24% | 8/34 | 0 | 4 |
-| team/backend/engineer-02.md | in-progress | 17% | 4/23 | 0 | 3 |
-| team/backend/engineer-03.md | in-progress | 24% | 5/21 | 0 | 4 |
-| team/backend/engineer-04.md | planned | 0% | 0/14 | 0 | 3 |
-| team/backend/engineer-05.md | planned | 0% | 0/15 | 0 | 3 |
-| team/backend/engineer-06.md | planned | 0% | 0/13 | 0 | 3 |
-| team/backend/engineer-07.md | planned | 0% | 0/17 | 0 | 3 |
-| team/data-engineering/engineer-01.md | stable | 100% | 6/6 | 0 | 2 |
-| team/data-engineering/engineer-02.md | stable | 100% | 5/5 | 0 | 2 |
-| team/devops-sre/engineer-01.md | in-progress | 71% | 5/7 | 0 | 2 |
+| team/backend/engineer-02.md | in-progress | 26% | 0/0 | 0 | 3 |
+| team/backend/engineer-03.md | in-progress | 5% | 1/21 | 0 | 4 |
+| team/backend/engineer-04.md | in progress | 25% | 0/0 | 0 | 3 |
+| team/backend/engineer-05.md | in-progress | 0% | 0/8 | 0 | 3 |
+| team/backend/engineer-06.md | in progress | 46% | 0/0 | 0 | 3 |
+| team/backend/engineer-07.md | in-progress | 20% | 0/0 | 0 | 3 |
+| team/data-engineering/engineer-01.md | in-progress | 35% | 0/0 | 0 | 2 |
+| team/data-engineering/engineer-02.md | in-progress | 28% | 0/0 | 0 | 2 |
+| team/devops-sre/engineer-01.md | in-progress | 35% | 0/0 | 0 | 2 |
 | team/devops-sre/engineer-02.md | in-progress | 57% | 4/7 | 0 | 2 |
 | team/frontend/engineer-01.md | planned | 0% | 0/7 | 0 | 2 |
 | team/frontend/engineer-02.md | planned | 0% | 0/5 | 0 | 2 |

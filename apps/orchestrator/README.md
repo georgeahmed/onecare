@@ -4,11 +4,14 @@ Purpose
 - Authenticate, authorize, normalize to FHIR, transact, enrich, route, and audit every ingress event.
 
 State Flow (high level)
-- Received → Authorized → ConsentChecked → Normalized → Validated → Persisted → Enriched → Routed → Audited
+- Received → Authorized → ConsentChecked → IdempotencyReserved → SafetyEvaluated → Normalized → Validated → Persisted → Routed → Audited
 
 Folders
 - `src/application/` state classes and machine
 - `src/adapters/` http/events/persistence integrations
+
+FHIR Validation
+- The orchestrator now validates every normalized transaction bundle against `schemas/fhir/bundle-transaction.json` (and the referenced entry schemas) before writing to the repository. Payloads that drift from the contract return HTTP 400 with code `invalid_fhir`; update the schema and rerun codegen before changing bundle shapes.
 
 Dev Endpoint (example)
 - POST `/safety-check` → forwards a `PortalSubmission` to Python Safety Gate and returns `SafetyDecision`.

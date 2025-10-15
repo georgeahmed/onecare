@@ -6,23 +6,34 @@ import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
 import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
-import { createEnvelope, PortalSubmission, Topics, TriageInput, AuditEvent } from '@onecare/events';
+import { createEnvelope, PortalSubmission, Topics, AuditEvent } from '@onecare/events';
 import { validate } from '@onecare/domain';
 import { initTracing, logger, setCorrelationId, withCorrelationContext } from '@onecare/observability';
-import { deriveIdempotencyKey, reserveIdempotency, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
+import { deriveIdempotencyKey, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
 import { getSecurityServices, getConsentEvidence } from './adapters/security';
-import { loadConfig, type ResolvedConfig } from '@onecare/config';
+import { loadConfig, type ResolvedConfig, type SafetyGateShadowConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import { InMemoryFeatureStore } from '@onecare/feature-store-memory';
-import type { FeatureStore, IdempotencyStore } from '@onecare/ports';
-import { normalizeToFhir, validateProfiles } from './application/normalize';
+import {
+  withFhirValidation,
+  type FeatureStore,
+  type FhirRepository,
+  type IdempotencyStore,
+  type InvalidFhirError,
+} from '@onecare/ports';
 import { resolveServerPort } from './support/port';
+import { createHttpFhirRepository, isFhirRequestError } from './adapters/persistence/fhir.repository';
+import HttpError from './application/httpError';
+import { buildOrchestratorMachine, runOrchestratorMachine } from './application/orchestrator.machine';
+import type { OrchestratorContext, ShadowSafetyGateContext } from './types';
+import type { GateDenialReason } from './application/orchestrator.state';
 
 const port = resolveServerPort();
-const wantsNats = Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
+const busImpl = (process.env.BUS_IMPL ?? '').trim().toLowerCase();
+const wantsNats = busImpl !== 'memory' && Boolean(process.env.NATS_URL && process.env.NATS_URL.trim().length > 0);
 function resolvePracticeId(): string {
   const envValue = process.env.PRACTICE_ID?.trim();
   if (envValue) return envValue;
@@ -30,20 +41,80 @@ function resolvePracticeId(): string {
   throw new Error('PRACTICE_ID environment variable is required');
 }
 
+function resolveFhirBaseUrl(): string {
+  const envValue = process.env.FHIR_BASE_URL?.trim();
+  if (envValue) return envValue;
+  if (process.env.NODE_ENV === 'test') return 'http://localhost:9500/fhir';
+  throw new Error('FHIR_BASE_URL environment variable is required');
+}
+
+function resolveFhirTimeoutMs(): number {
+  const raw = process.env.FHIR_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 5_000;
+  return Math.max(500, Math.min(parsed, 30_000));
+}
+
+function resolveFhirMaxRetries(): number {
+  const raw = process.env.FHIR_MAX_RETRIES?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 2;
+  return Math.max(0, Math.min(Math.floor(parsed), 5));
+}
+
+function resolveFhirAuthToken(): string | undefined {
+  const raw = process.env.FHIR_TOKEN ?? process.env.FHIR_AUTH_TOKEN;
+  const trimmed = raw?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveFhirProfiles(config: ResolvedConfig): Record<string, string> | undefined {
+  const rawFhirConfig = config.fhir;
+  if (!rawFhirConfig || typeof rawFhirConfig !== 'object') return undefined;
+  const profiles = (rawFhirConfig as { profiles?: unknown }).profiles;
+  if (!profiles || typeof profiles !== 'object') return undefined;
+  const entries = Object.entries(profiles as Record<string, unknown>)
+    .filter(([key, value]) => typeof key === 'string' && typeof value === 'string' && value.trim().length > 0)
+    .map(([key, value]) => [key, (value as string).trim()]);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+function safeUrlForLog(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return url.origin + url.pathname;
+  } catch {
+    return 'invalid-url';
+  }
+}
+
+function normaliseShadowSafetyGate(config?: SafetyGateShadowConfig): ShadowSafetyGateContext | undefined {
+  if (!config?.enabled) return undefined;
+  if (config.sampleRate <= 0) return undefined;
+  return {
+    enabled: true,
+    sampleRate: Math.max(0, Math.min(config.sampleRate, 1)),
+    endpoint: config.endpoint,
+    variant: config.variant,
+    timeoutMs: config.timeoutMs,
+    maxRetries: config.maxRetries,
+    baseDelayMs: config.baseDelayMs,
+    auditEvent: config.auditEvent ?? 'orchestrator.safety.shadow',
+    random: Math.random,
+  };
+}
+
 const practiceId = resolvePracticeId();
 const practiceConfig: ResolvedConfig = loadConfig(practiceId);
 const safetyGateSettings = practiceConfig.safety_gate ?? {};
 const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
 const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
+const shadowSafetyGate = normaliseShadowSafetyGate(safetyGateSettings.shadow);
 const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
 const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
-const bookingAvailabilityTimeoutMs = (() => {
-  const parsed = Number(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS ?? '');
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return Math.min(parsed, 2_000);
-  }
-  return 2_000;
-})();
+const bookingAvailabilityTimeoutMs =
+  practiceConfig.booking?.availabilityTimeoutMs ?? 2_000;
 const bookingAvailabilityBase = (() => {
   const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
   if (!raw) return null;
@@ -71,6 +142,22 @@ function parseBooleanFlag(value: string | undefined): boolean {
 
 const featureLoggingOn = parseBooleanFlag(process.env.FEATURE_LOGGING);
 let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore() : null;
+const fhirBaseUrl = resolveFhirBaseUrl();
+const fhirTimeoutMs = resolveFhirTimeoutMs();
+const fhirMaxRetries = resolveFhirMaxRetries();
+const fhirProfiles = resolveFhirProfiles(practiceConfig);
+function constructFhirRepository(): FhirRepository {
+  const repository = createHttpFhirRepository({
+    baseUrl: fhirBaseUrl,
+    authToken: resolveFhirAuthToken(),
+    timeoutMs: fhirTimeoutMs,
+    maxRetries: fhirMaxRetries,
+    practiceId,
+  });
+  return withFhirValidation(repository, { profiles: fhirProfiles });
+}
+
+let fhirRepository: FhirRepository = constructFhirRepository();
 
 logger.info('practice config applied', {
   practiceId: practiceConfig.practiceId,
@@ -80,10 +167,28 @@ logger.info('practice config applied', {
     redFlagThreshold: safetyGateSettings.red_flag_threshold,
     emergencyConfidence: safetyGateSettings.emergency_confidence,
   },
+  shadowSafetyGate: shadowSafetyGate
+    ? {
+        sampleRate: shadowSafetyGate.sampleRate,
+        endpoint: shadowSafetyGate.endpoint ? safeUrlForLog(shadowSafetyGate.endpoint) : undefined,
+        variant: shadowSafetyGate.variant,
+        timeoutMs: shadowSafetyGate.timeoutMs ?? safetyGateTimeoutMs,
+        maxRetries: shadowSafetyGate.maxRetries ?? 0,
+      }
+    : { enabled: false },
   fairnessFloors: practiceConfig.fairness_floors,
   holdBackFraction: practiceConfig.hold_back_fraction,
   idempotency: {
     ttlSeconds: idempotencyTtlSeconds,
+  },
+  booking: {
+    availabilityTimeoutMs: bookingAvailabilityTimeoutMs,
+  },
+  fhir: {
+    baseUrl: safeUrlForLog(fhirBaseUrl),
+    timeoutMs: fhirTimeoutMs,
+    maxRetries: fhirMaxRetries,
+    profiles: fhirProfiles ? Object.keys(fhirProfiles) : [],
   },
 });
 
@@ -116,25 +221,17 @@ const BOOKING_RESOURCES = ['Slot'] as const;
 const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
 const BOOKING_SCOPE = 'booking:read';
 const BOOKING_PARAM_KEYS = ['serviceType', 'windowStart', 'windowEnd', 'location'] as const;
-const BOOKING_ALLOWED_PARAMS = new Set<string>(BOOKING_PARAM_KEYS);
+type BookingParamKey = typeof BOOKING_PARAM_KEYS[number];
+const BOOKING_ALLOWED_PARAMS = new Set<BookingParamKey>(BOOKING_PARAM_KEYS);
+
+function isBookingParamKey(value: string): value is BookingParamKey {
+  return BOOKING_ALLOWED_PARAMS.has(value as BookingParamKey);
+}
 const BOOKING_QUERY_SCHEMA_ID = 'https://onecare/schemas/booking/booking-search-request.json';
 const MAX_ATTACHMENTS = 10;
 const FEATURE_LOG_SCOPE = 'analytics:feature:write';
-const SAFETY_GATE_SCOPE = 'safety:analyze';
 const FEATURE_LOG_PURPOSE = 'analytics-lite';
-type GateDenialReason = 'signature_invalid' | 'actor_missing' | 'not_authorized' | 'consent_denied';
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
-const AUDIT_SUCCESS_TYPE = 'orchestrator.access.success';
-
-class HttpError extends Error {
-  constructor(
-    public readonly code: ErrorCode,
-    message: string,
-    public readonly details?: Record<string, unknown>
-  ) {
-    super(message);
-  }
-}
 
 function isPrivateIpv4(host: string): boolean {
   const octets = host.split('.').map((segment) => Number(segment));
@@ -218,10 +315,10 @@ function sanitizeBookingQuery(searchParams: URLSearchParams | null): URLSearchPa
     throw new HttpError('invalid_input', 'Missing booking search parameters');
   }
 
-  const seen = new Set<string>();
-  const candidate: Partial<Record<typeof BOOKING_PARAM_KEYS[number], string>> = {};
+  const seen = new Set<BookingParamKey>();
+  const candidate: Partial<Record<BookingParamKey, string>> = {};
   for (const [rawKey, rawValue] of searchParams.entries()) {
-    if (!BOOKING_ALLOWED_PARAMS.has(rawKey)) {
+    if (!isBookingParamKey(rawKey)) {
       throw new HttpError('invalid_input', `Unexpected query parameter: ${rawKey}`);
     }
     if (seen.has(rawKey)) {
@@ -232,7 +329,7 @@ function sanitizeBookingQuery(searchParams: URLSearchParams | null): URLSearchPa
     if (!value) {
       throw new HttpError('invalid_input', `Parameter ${rawKey} must not be empty`);
     }
-    candidate[rawKey as typeof BOOKING_PARAM_KEYS[number]] = value;
+    candidate[rawKey] = value;
   }
 
   const validation = validate(BOOKING_QUERY_SCHEMA_ID, candidate);
@@ -433,6 +530,59 @@ function classifyError(err: unknown): { code: ErrorCode; message: string; detail
     return { code: 'upstream_unavailable', message: 'Safety gate unavailable' };
   }
   return { code: 'internal_error', message: 'Unexpected error' };
+}
+
+function isInvalidFhirError(err: unknown): err is InvalidFhirError {
+  return Boolean(err && typeof err === 'object' && 'reason' in (err as Record<string, unknown>));
+}
+
+function isTimeoutLikeError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes('timeout');
+}
+
+function mapFhirPersistenceError(err: unknown): { code: ErrorCode; message: string; details?: Record<string, unknown> } {
+  if (isFhirRequestError(err)) {
+    const status = err.status ?? 0;
+    const details: Record<string, unknown> = {
+      status,
+      operation: err.operation,
+      retryable: err.retryable,
+    };
+    if (status === 400 || status === 422) {
+      return { code: 'invalid_fhir', message: 'FHIR server rejected the bundle', details };
+    }
+    if (status === 401 || status === 403) {
+      return { code: 'forbidden', message: 'FHIR authorization failed', details };
+    }
+    if (status === 409) {
+      return { code: 'conflict', message: 'FHIR conflict detected', details };
+    }
+    if (status === 429) {
+      return { code: 'too_many_requests', message: 'FHIR rate limit exceeded', details };
+    }
+    if (status === 0 && err.retryable) {
+      return { code: 'upstream_timeout', message: 'FHIR request timed out', details };
+    }
+    return { code: 'upstream_unavailable', message: 'FHIR request failed', details };
+  }
+
+  if (isInvalidFhirError(err)) {
+    const detail: Record<string, unknown> = {
+      reason: err.reason,
+      resourceType: err.resourceType,
+      profile: err.profile,
+    };
+    return { code: 'invalid_fhir', message: 'FHIR validation failed', details: detail };
+  }
+
+  if (isTimeoutLikeError(err)) {
+    return { code: 'upstream_timeout', message: 'FHIR request timed out' };
+  }
+
+  return { code: 'internal_error', message: 'Unexpected FHIR persistence error' };
 }
 
 type HttpHandler = (setOutcome: (value: RequestOutcome) => void) => Promise<void>;
@@ -1114,10 +1264,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
 
       const validation = validatePortalSubmission(submission);
       if (validation.ok !== true) {
+        const primaryError = validation.errors[0]?.message;
         respondError(
           res,
           'invalid_input',
-          'Invalid request body',
+          primaryError ? `Invalid request body: ${primaryError}` : 'Invalid request body',
           corr,
           setOutcome,
           { errors: validation.errors.slice(0, 5) }
@@ -1135,154 +1286,92 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
       const idemKey = deriveIdempotencyKey(submission, authContext?.actor?.id, explicitKey);
       const replayFingerprint = `${requestId}:${idemKey}`;
-      let reservationActive = false;
-      const releaseReservation = async () => {
-        if (!reservationActive) return;
-        try {
-          await releaseIdempotency(idempotencyStore, idemKey);
-          logger.info('idempotency.released', { key: idemKey, correlationId: corr });
-        } catch (releaseError) {
-          logger.warn('idempotency.release_failed', {
-            key: idemKey,
-            correlationId: corr,
-            reason: releaseError instanceof Error ? releaseError.message : releaseError,
-          });
-        } finally {
-          reservationActive = false;
-        }
-      };
-      const deny = async (reason: GateDenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
-        logger.warn('zero-trust gate denied request', {
-          reason,
-          correlationId: corr,
-          requestId,
-          actorType: authContext?.actor?.type,
-          actorId: authContext?.actor?.id,
-        });
-        const auditDetails = {
-          reason,
-          requestId,
-          patientId: submission.patient?.id,
-          scope: authContext?.scope,
-          ...extraDetails,
-        } satisfies Record<string, unknown>;
-        recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
-        await emitAuditEvent(AUDIT_DENIED_TYPE, corr, authContext?.actor ?? null, auditDetails);
-        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
-      };
-
-      if (!(await security.verifySignatureAndReplayGuard(authHeader, replayFingerprint))) {
-        await deny('signature_invalid', { hasAuthHeader: Boolean(authHeader) });
-        return;
-      }
-
-      if (!authContext) {
-        await deny('actor_missing');
-        return;
-      }
-
-      const { actor, scope } = authContext;
-      const patientId = submission.patient.id;
-
-      if (!(await security.authorize(actor, 'submit', patientId, scope))) {
-        await deny('not_authorized');
-        return;
-      }
-
-      if (!(await security.checkConsent(patientId, 'care', Array.from(CONSENT_RESOURCES)))) {
-        await deny('consent_denied');
-        return;
-      }
-      const consentEvidence = getConsentEvidence(patientId, 'care');
-      if (!consentEvidence) {
-        await deny('consent_denied', { reason: 'consent_evidence_missing' });
-        return;
-      }
 
       res.setHeader('x-idempotency-key', idemKey);
       logger.info('idempotency.key.derived', { key: idemKey, correlationId: corr });
 
-      const idemResult = await reserveIdempotency(idempotencyStore, idemKey, {
-        ttlSeconds: idempotencyTtlSeconds,
-      });
-      if (idemResult === 'exists') {
-        recordIdempotencyHit(idemKey, corr);
-        logger.info('idempotency.hit', { key: idemKey, correlationId: corr });
-        respondError(res, 'conflict', 'Duplicate request', corr, setOutcome, { idempotencyKey: idemKey });
-        return;
-      }
-      reservationActive = true;
-      recordIdempotencyMiss(idemKey, corr);
-      recordIdempotencyTtl(idempotencyTtlSeconds, corr);
-      logger.info('idempotency.reserved', { key: idemKey, correlationId: corr, ttlSeconds: idempotencyTtlSeconds });
+      const orchestratorContext: OrchestratorContext = {
+        id: requestId,
+        correlationId: corr,
+        requestId,
+        submission,
+        practiceId: practiceConfig.practiceId,
+        authHeader,
+        authContext,
+        actor: authContext?.actor ?? undefined,
+        scope: authContext?.scope ?? undefined,
+        replayFingerprint,
+        security: {
+          verifySignatureAndReplayGuard: security.verifySignatureAndReplayGuard,
+          authorize: security.authorize,
+          checkConsent: security.checkConsent,
+        },
+        consentPurpose: 'care',
+        consentResources: CONSENT_RESOURCES,
+        resolveConsentEvidence: getConsentEvidence,
+        consentEvidence: undefined,
+        setOutcome,
+        safetyGateOptions: {
+          requestId,
+          actor: authContext?.actor ?? undefined,
+          scope: authContext?.scope,
+        },
+        callGuard: callWithGuard,
+        analyzeSubmission: analyzePortalSubmission,
+        safetyGuardOptions: {
+          timeoutMs: safetyGateTimeoutMs,
+          maxRetries: 1,
+          baseDelayMs: 10,
+          correlationId: corr,
+        },
+        safetyFallbackMode: safetyGateFallbackMode,
+        shadowSafetyGate,
+        decision: undefined,
+        idempotencyStore,
+        idempotencyKey: idemKey,
+        idempotencyTtlSeconds,
+        idempotencyReserved: false,
+        recordIdempotencyHit,
+        recordIdempotencyMiss,
+        recordIdempotencyTtl,
+        fhirRepository,
+        fhirBundle: undefined,
+        mapFhirError: mapFhirPersistenceError,
+        bus,
+        triageTopic: Topics.triage.input,
+        busHeaders: undefined,
+        emitAudit: (type, details) => emitAuditEvent(type, corr, authContext?.actor ?? null, details),
+        recordAudit: (type, details) => recordAudit(type, corr, details),
+        result: undefined,
+        classifyErrorCode,
+      };
 
       try {
-        let decision: Awaited<ReturnType<typeof analyzePortalSubmission>>;
-        try {
-          decision = await callWithGuard(
-            'safety_gate',
-            (signal) =>
-              analyzePortalSubmission(submission, undefined, {
-                correlationId: corr,
-                signal,
-                requestId,
-                consentReference: consentEvidence.reference,
-                actor,
-                scope,
-              }),
-            {
-              timeoutMs: safetyGateTimeoutMs,
-              maxRetries: 1,
-              baseDelayMs: 10,
+        const machine = buildOrchestratorMachine(orchestratorContext);
+        await runOrchestratorMachine(machine);
+        if (!orchestratorContext.result) {
+          throw new HttpError('internal_error', 'Safety decision missing');
+        }
+        respondJson(res, 200, orchestratorContext.result, corr, setOutcome, 'ok');
+        return;
+      } catch (err) {
+        if (orchestratorContext.idempotencyReserved) {
+          try {
+            await releaseIdempotency(idempotencyStore, idemKey);
+            logger.info('idempotency.released', { key: idemKey, correlationId: corr });
+          } catch (releaseError) {
+            logger.warn('idempotency.release_failed', {
+              key: idemKey,
               correlationId: corr,
-            }
-          );
-        } catch (err) {
-          const code = classifyErrorCode(err);
-          if (code === 'circuit_open' && safetyGateFallbackMode === 'rules') {
-            logger.warn('safety.fallback.rules', { correlationId: corr });
-            recordAudit('orchestrator.safety.fallback', corr, { mode: 'rules' });
-            decision = { outcome: 'SAFE_TO_CONTINUE', reason: 'FALLBACK_RULES' };
-          } else {
-            throw err;
+              reason: releaseError instanceof Error ? releaseError.message : releaseError,
+            });
+          } finally {
+            orchestratorContext.idempotencyReserved = false;
           }
         }
-
-        if (decision.outcome === 'SAFE_TO_CONTINUE') {
-          const bundle = normalizeToFhir(submission);
-          try {
-            await validateProfiles(bundle);
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err);
-            recordAudit('orchestrator.validation.failure', corr, { reason });
-            await releaseReservation();
-            respondError(res, 'invalid_fhir', 'FHIR validation failed', corr, setOutcome);
-            return;
-        }
-        logger.info('bundle.normalized', { entries: bundle.entry.length, correlationId: corr });
-        const tri: TriageInput = { patientId: submission.patient.id, narrative: submission.narrative };
-        const envelope = createEnvelope(Topics.triage.input, tri, corr);
-        const headers = corr ? { 'x-correlation-id': corr } : undefined;
-        await bus.publish(envelope.topic, envelope, headers);
-          logger.info('published triage.input', { topic: envelope.topic, correlationId: corr });
-          const successAuditDetails = {
-            outcome: decision.outcome,
-            patientId: tri.patientId,
-            practiceId: practiceConfig.practiceId,
-            topic: envelope.topic,
-            consentReference: consentEvidence.reference,
-          } satisfies Record<string, unknown>;
-          recordAudit(AUDIT_SUCCESS_TYPE, corr, successAuditDetails);
-          await emitAuditEvent(AUDIT_SUCCESS_TYPE, corr, authContext?.actor ?? null, successAuditDetails);
-        } else {
-          logger.info('safety diverted submission', { correlationId: corr });
-        }
-
-        reservationActive = false;
-        respondJson(res, 200, decision, corr, setOutcome, 'ok');
-      } catch (err) {
-        await releaseReservation();
-        throw err;
+        const { code, message, details } = classifyError(err);
+        respondError(res, code, message, corr, setOutcome, details);
+        return;
       }
     });
     return;
@@ -1324,6 +1413,14 @@ export function setIdempotencyStoreForTest(store: IdempotencyStore): void {
 
 export function resetIdempotencyStoreForTest(): void {
   idempotencyStore = new InMemoryIdempotencyStore();
+}
+
+export function setFhirRepositoryForTest(repository: FhirRepository): void {
+  fhirRepository = repository;
+}
+
+export function resetFhirRepositoryForTest(): void {
+  fhirRepository = constructFhirRepository();
 }
 
 export { server };

@@ -128,9 +128,9 @@ describe('triage input publishing', () => {
     expect(envelope.payload.patientId).toBe(submission.patient.id);
     expect(envelope.payload.narrative).toBe(submission.narrative);
     expect(envelope.correlationId).toBeDefined();
-    expect(auditEvents).toHaveLength(1);
-    expect(auditEvents[0]?.type).toBe('orchestrator.access.success');
-    const payload = auditEvents[0]?.payload as Record<string, unknown> | undefined;
+    const successEvent = auditEvents.find((event) => event.type === 'orchestrator.access.success');
+    expect(successEvent).toBeDefined();
+    const payload = successEvent?.payload as Record<string, unknown> | undefined;
     expect(payload?.patientId).toBe(submission.patient.id);
     expect(payload?.outcome).toBe('SAFE_TO_CONTINUE');
   });

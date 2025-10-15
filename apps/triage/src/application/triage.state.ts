@@ -1,7 +1,7 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
-import { logger } from '@onecare/observability';
+import { logger, ensureTracing } from '@onecare/observability';
 import type {
   FeatureStore,
   FhirRepository,
@@ -11,6 +11,7 @@ import type {
 } from '@onecare/ports';
 import { createTaskResource, executeWithIdempotency } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
+import { withMessageGuards } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import { computeTriageScore, type TriageFeatureVector } from './scoring';
 import { logFeatureVector } from '../featuresHook';
@@ -77,7 +78,10 @@ export interface DuplicateDetails {
 
 export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | void;
 
+ensureTracing('triage');
+
 const dedupCache = new Map<string, DedupEntry[]>();
+const TRIAGE_ALLOWED_TOPICS = new Set<string>([Topics.tasks.created]);
 const DEDUP_CACHE_LIMIT = 50;
 const DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
 
@@ -246,13 +250,12 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     if (!ctx.fhirRepository) {
       throw new Error('fhir_repository_missing');
     }
-    if (!ctx.bus) {
-      throw new Error('bus_missing');
-    }
     if (!ctx.patientId) {
       throw new Error('patient_id_missing');
     }
 
+    const bus = ensureTriageBus(ctx);
+    const correlationId = ensureCorrelationId(ctx);
     const score = typeof ctx.score === 'number' ? ctx.score : 0;
     const priority = ctx.priority ?? determinePriority(ctx.config, score);
     ctx.priority = priority;
@@ -279,9 +282,9 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
           priority,
           owner: ctx.taskOwner,
         };
-        const envelope = createEnvelope(Topics.tasks.created, payload, ctx.correlationId);
-        const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
-        await ctx.bus!.publish(Topics.tasks.created, envelope, headers);
+        const envelope = createEnvelope(Topics.tasks.created, payload, correlationId);
+        const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
+        await bus.publish(Topics.tasks.created, envelope, headers);
         ctx.taskEventPublished = true;
 
         await notifyQueue(ctx, {
@@ -295,7 +298,7 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
           key: idempotencyKey,
           patientId: ctx.patientId,
           taskId: reference.id,
-          correlationId: ctx.correlationId,
+          correlationId,
         });
         return true;
       },
@@ -303,14 +306,14 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
         logger.warn('triage.idempotency.duplicate', {
           key: idempotencyKey,
           patientId: ctx.patientId,
-          correlationId: ctx.correlationId,
+          correlationId,
         });
       },
       onError: (error) => {
         logger.error('triage.idempotency.failed', {
           key: idempotencyKey,
           patientId: ctx.patientId,
-          correlationId: ctx.correlationId,
+          correlationId,
           reason: error instanceof Error ? error.message : 'unknown_error',
         });
       },
@@ -492,4 +495,25 @@ function deriveTriageIdempotencyKey(ctx: TriageContext): string {
 function resolveTriageIdempotencyTtl(ctx: TriageContext): number {
   const ttl = ctx.idempotencyTtlSeconds;
   return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS;
+}
+
+function ensureTriageBus(ctx: TriageContext): MessageBus {
+  if (!ctx.bus) {
+    throw new Error('bus_missing');
+  }
+  const guarded = withMessageGuards(ctx.bus, { allowedTopics: TRIAGE_ALLOWED_TOPICS });
+  ctx.bus = guarded;
+  return guarded;
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function ensureCorrelationId(ctx: TriageContext): string | undefined {
+  const normalized = normalizeCorrelationId(ctx.correlationId);
+  ctx.correlationId = normalized;
+  return normalized;
 }

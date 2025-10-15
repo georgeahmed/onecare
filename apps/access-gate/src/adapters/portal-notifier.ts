@@ -1,3 +1,4 @@
+import { withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, Topics, type DlqEvent, type PortalNotify, type TypedEnvelope } from '@onecare/events';
 import { logger } from '@onecare/observability';
@@ -54,8 +55,13 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
   private readonly now: NowFn;
 
   constructor(opts: ReliablePortalNotifyPublisherOptions) {
-    this.bus = opts.bus;
+    if (!opts.bus) {
+      throw new Error('portal_notify_bus_missing');
+    }
     this.dlqTopic = opts.dlqTopic ?? Topics.broker.deadLetter;
+    this.bus = withMessageGuards(opts.bus, {
+      allowedTopics: new Set([Topics.portal.notify, this.dlqTopic]),
+    });
     this.maxAttempts = Math.max(1, opts.maxAttempts ?? 3);
     this.baseDelayMs = Math.max(0, opts.baseDelayMs ?? 200);
     this.maxDelayMs = Math.max(this.baseDelayMs, opts.maxDelayMs ?? 2_000);
@@ -77,9 +83,10 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       throw new PortalNotifyValidationError(result.errors);
     }
 
-    const envelope = createEnvelope(Topics.portal.notify, payload, request.correlationId);
+    const correlationId = normalizeCorrelationId(request.correlationId);
+    const envelope = createEnvelope(Topics.portal.notify, payload, correlationId);
     const idempotencyKey = computePortalNotifyKey(payload.practiceId, payload.state, payload.at);
-    const headers = this.buildHeaders(request.correlationId, idempotencyKey);
+    const headers = this.buildHeaders(correlationId, idempotencyKey);
 
     let attempt = 0;
     let lastError: unknown;
@@ -93,7 +100,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
           state: payload.state,
           attempt,
           idempotencyKey,
-          correlationId: request.correlationId,
+          correlationId,
         });
         return;
       } catch (error) {
@@ -104,7 +111,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
           state: payload.state,
           attempt,
           retryable,
-          correlationId: request.correlationId,
+          correlationId,
           code: this.extractErrorCode(error),
         });
 
@@ -185,6 +192,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
     error: unknown,
   ): Promise<void> {
     const errorMessage = this.errorMessage(error);
+    const corr = envelope.correlationId ?? request.correlationId;
     const payloadRef: Record<string, unknown> = {
       practiceId: request.practiceId,
       state: request.state,
@@ -198,7 +206,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
 
     const dlqPayload: DlqEvent = {
       originalTopic: Topics.portal.notify,
-      correlationId: request.correlationId,
+      correlationId: corr,
       errorCode: this.extractErrorCode(error),
       errorMessage: errorMessage ? truncate(errorMessage, 256) : undefined,
       payloadRef,
@@ -210,14 +218,14 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       throw new PortalNotifyValidationError(validation.errors);
     }
 
-    const headers = this.buildDlqHeaders(request.correlationId, Topics.portal.notify);
-    const dlqEnvelope = createEnvelope(this.dlqTopic, dlqPayload, request.correlationId);
+    const headers = this.buildDlqHeaders(corr, Topics.portal.notify);
+    const dlqEnvelope = createEnvelope(this.dlqTopic, dlqPayload, corr);
     await this.bus.publish(dlqEnvelope.topic, dlqEnvelope, headers);
 
     logger.error('portal.notify.routed_to_dlq', {
       practiceId: request.practiceId,
       state: request.state,
-      correlationId: request.correlationId,
+      correlationId: corr,
       idempotencyKey,
       dlqTopic: this.dlqTopic,
       code: this.extractErrorCode(error),
@@ -243,4 +251,10 @@ function truncate(input: string, max: number): string {
     return '.'.repeat(max);
   }
   return `${input.slice(0, max - 3)}...`;
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

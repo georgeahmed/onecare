@@ -72,6 +72,7 @@ services:
     restart: unless-stopped
     environment:
       - PORT=3001
+      - PRACTICE_ID=demo
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
       - PY_SCRIBE_URL=http://scribe:8082
       - BUS_IMPL=nats

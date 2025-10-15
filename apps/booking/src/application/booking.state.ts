@@ -12,8 +12,9 @@ import type { FhirRepository } from '@onecare/ports';
 import type { QueueNotifier } from '@onecare/ports';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import { logger } from '@onecare/observability';
+import { logger, ensureTracing } from '@onecare/observability';
 import type { MessageBus } from '@onecare/bus';
+import { withMessageGuards } from '@onecare/bus';
 import { Topics, createEnvelope, type AppointmentCreated } from '@onecare/events';
 
 export interface BookingAuditPublisher {
@@ -41,6 +42,10 @@ export interface BookingContext extends MachineContext {
   idempotencyKey?: string;
   idempotencyTtlSeconds?: number;
 }
+
+ensureTracing('booking');
+
+const BOOKING_ALLOWED_TOPICS = new Set<string>([Topics.booking.appointmentCreated]);
 
 export interface BookingEvent extends MachineEvent {
   type: 'booking.search' | 'booking.select' | 'booking.book' | string;
@@ -187,9 +192,11 @@ async function publishAppointmentCreated(
   ctx: BookingContext,
   confirmation: { appointmentId: string; slotId: string; start: string; end: string },
 ): Promise<void> {
-  if (!ctx.bus) return;
+  const bus = ensureBookingBus(ctx);
+  if (!bus) return;
   if (!ctx.patientId) return;
   const slot = ctx.selectedSlot;
+  const correlationId = ensureCorrelationId(ctx);
   const payload: AppointmentCreated = {
     appointmentId: confirmation.appointmentId,
     patientId: ctx.patientId,
@@ -199,13 +206,13 @@ async function publishAppointmentCreated(
   if (slot?.organisationId) {
     payload.location = slot.organisationId;
   }
-  const envelope = createEnvelope(Topics.booking.appointmentCreated, payload, ctx.correlationId);
+  const envelope = createEnvelope(Topics.booking.appointmentCreated, payload, correlationId);
   try {
-    const headers = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
-    await ctx.bus.publish(Topics.booking.appointmentCreated, envelope, headers);
+    const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
+    await bus.publish(Topics.booking.appointmentCreated, envelope, headers);
     logger.info('booking.create.event_published', {
       appointmentId: confirmation.appointmentId,
-      correlationId: ctx.correlationId,
+      correlationId,
     });
   } catch (error) {
     throw new BookingAppointmentError('booking.create.event_failed', error);
@@ -434,4 +441,23 @@ function deriveBookingIdempotencyKey(ctx: BookingContext): string {
 function resolveIdempotencyTtl(ctx: BookingContext): number {
   const ttl = ctx.idempotencyTtlSeconds;
   return typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+}
+
+function ensureBookingBus(ctx: BookingContext): MessageBus | undefined {
+  if (!ctx.bus) return undefined;
+  const guarded = withMessageGuards(ctx.bus, { allowedTopics: BOOKING_ALLOWED_TOPICS });
+  ctx.bus = guarded;
+  return guarded;
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function ensureCorrelationId(ctx: BookingContext): string | undefined {
+  const normalized = normalizeCorrelationId(ctx.correlationId);
+  ctx.correlationId = normalized;
+  return normalized;
 }

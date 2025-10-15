@@ -32,12 +32,8 @@ enhanced_access:
   - ENHANCED_ACCESS
   fairness:
     max_per_organisation: 3
-red_flag_set:
-- chest pain
-- shortness of breath
-- severe bleeding
-- unresponsive
-- suicidal ideation
+red_flag_set: []
+red_flag_source: core
 priority_thresholds:
   stat: 0.9
   urgent: 0.7

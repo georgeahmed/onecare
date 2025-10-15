@@ -89,7 +89,7 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [BE-03.4](../team/backend/tasks/BE-03.4.md) — BE-03.4 — Provider assignment engine
 - [BE-03.4a](../team/backend/tasks/BE-03.4a.md) — BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [BE-03.4b](../team/backend/tasks/BE-03.4b.md) — BE-03.4b — Tie-breakers and backpressure-aware assignment
-- [BE-03.5](../team/backend/tasks/BE-03.5.md) — BE-03.5 — Queue notifier adapter
+- [BE-03.5](../team/backend/Completed%20Tasks/BE-03.5.md) — BE-03.5 — Queue notifier adapter
 - [BE-03.6](../team/backend/tasks/BE-03.6.md) — BE-03.6 — Contract-first triage models and validators
 - [BE-03.7](../team/backend/tasks/BE-03.7.md) — BE-03.7 — Event-driven ingress (triage.input consumer)
 - [BE-03.8](../team/backend/tasks/BE-03.8.md) — BE-03.8 — SLA aging and escalation
@@ -124,15 +124,15 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [BE-05.7](../team/backend/tasks/BE-05.7.md) — BE-05.7 — Patient notification adapter
 - [BE-05.8](../team/backend/tasks/BE-05.8.md) — BE-05.8 — DLQ and retry policy
 - [BE-05.9](../team/backend/tasks/BE-05.9.md) — BE-05.9 — Observability for pharmacy router
-- [BE-06.1](../team/backend/tasks/BE-06.1.md) — BE-06.1 — Portal Uptime Guard schedule
+- [BE-06.1](../team/backend/Completed%20Tasks/BE-06.1.md) — BE-06.1 — Portal Uptime Guard schedule
 - [BE-06.10](../team/backend/tasks/BE-06.10.md) — BE-06.10 — Health/readiness/liveness + graceful shutdown (schedulers)
 - [BE-06.11](../team/backend/tasks/BE-06.11.md) — BE-06.11 — Fault injection tests (ticks, failures, clock drift)
-- [BE-06.12](../team/backend/tasks/BE-06.12.md) — BE-06.12 — Privacy/PII/PHI minimization (access-gate)
+- [BE-06.12](../team/backend/Completed%20Tasks/BE-06.12.md) — BE-06.12 — Privacy/PII/PHI minimization (access-gate)
 - [BE-06.13](../team/backend/tasks/BE-06.13.md) — BE-06.13 — Performance baselines (tick latency, flush throughput)
-- [BE-06.2](../team/backend/tasks/BE-06.2.md) — BE-06.2 — OOH deferral queue (persisted with TTL; flush-on-core-hours)
-- [BE-06.3](../team/backend/tasks/BE-06.3.md) — BE-06.3 — ShapeCapacity micro-release (bounded, audited)
-- [BE-06.4](../team/backend/tasks/BE-06.4.md) — BE-06.4 — Portal notify event (contract-first, idempotent, DLQ)
-- [BE-06.5](../team/backend/tasks/BE-06.5.md) — BE-06.5 — Capacity telemetry adapter (pluggable, health-aware)
+- [BE-06.2](../team/backend/Completed%20Tasks/BE-06.2.md) — BE-06.2 — OOH deferral queue (persisted with TTL; flush-on-core-hours)
+- [BE-06.3](../team/backend/Completed%20Tasks/BE-06.3.md) — BE-06.3 — ShapeCapacity micro-release (bounded, audited)
+- [BE-06.4](../team/backend/Completed%20Tasks/BE-06.4.md) — BE-06.4 — Portal notify event (contract-first, idempotent, DLQ)
+- [BE-06.5](../team/backend/Completed%20Tasks/BE-06.5.md) — BE-06.5 — Capacity telemetry adapter (pluggable, health-aware)
 - [BE-06.6](../team/backend/tasks/BE-06.6.md) — BE-06.6 — Scheduler resilience & idempotency (singleton, jitter, skew tolerance)
 - [BE-06.7](../team/backend/tasks/BE-06.7.md) — BE-06.7 — Observability for access/capacity (logs, metrics, spans)
 - [BE-06.8](../team/backend/tasks/BE-06.8.md) — BE-06.8 — Front-door rate limiting (tenant/account) for access portal
@@ -331,7 +331,7 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [MO-02.9](../team/mlops/tasks/MO-02.9.md) — MO-02.9 — Dashboards for feature health and runbooks
 
 ## data-engineering
-- [DE-01.1](../team/data-engineering/tasks/DE-01.1.md) — DE-01.1 — Configure analytics sink (file/DB) + env wiring
+- [DE-01.1](../team/data-engineering/tasks/Completed%20Tasks/DE-01.1.md) — DE-01.1 — Configure analytics sink (file/DB) + env wiring
 - [DE-01.10](../team/data-engineering/tasks/DE-01.10.md) — DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails)
 - [DE-01.11](../team/data-engineering/tasks/DE-01.11.md) — DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report)
 - [DE-01.12](../team/data-engineering/tasks/DE-01.12.md) — DE-01.12 — Incremental rollups (windowed p50/p95, idempotent upserts, backfill)
@@ -342,16 +342,16 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-01.17](../team/data-engineering/tasks/DE-01.17.md) — DE-01.17 — Security & governance (encryption, IAM least-privilege, secrets, access logs)
 - [DE-01.18](../team/data-engineering/tasks/DE-01.18.md) — DE-01.18 — Performance/load testing (throughput, backpressure, cost/perf)
 - [DE-01.19](../team/data-engineering/tasks/DE-01.19.md) — DE-01.19 — Documentation & ADRs (storage, partitioning, DQ policy, reprocessing)
-- [DE-01.2](../team/data-engineering/tasks/DE-01.2.md) — DE-01.2 — Implement consumer for analytics.metric envelopes -> sink
+- [DE-01.2](../team/data-engineering/tasks/Completed%20Tasks/DE-01.2.md) — DE-01.2 — Implement consumer for analytics.metric envelopes -> sink
 - [DE-01.20](../team/data-engineering/tasks/DE-01.20.md) — DE-01.20 — Sandbox playback harness (deterministic event generator for CI)
-- [DE-01.3](../team/data-engineering/tasks/DE-01.3.md) — DE-01.3 — Daily rollup ETL (counts, p95 latencies) job script
-- [DE-01.4](../team/data-engineering/tasks/DE-01.4.md) — DE-01.4 — Basic dashboards (arrival rate, error rate, latency)
-- [DE-01.5](../team/data-engineering/tasks/DE-01.5.md) — DE-01.5 — Data hygiene checks (missing fields, outliers) + report
-- [DE-01.6](../team/data-engineering/tasks/DE-01.6.md) — DE-01.6 — Analytics payload schema validation
-- [DE-01.7](../team/data-engineering/tasks/DE-01.7.md) — DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
+- [DE-01.3](../team/data-engineering/tasks/Completed%20Tasks/DE-01.3.md) — DE-01.3 — Daily rollup ETL (counts, p95 latencies) job script
+- [DE-01.4](../team/data-engineering/tasks/Completed%20Tasks/DE-01.4.md) — DE-01.4 — Basic dashboards (arrival rate, error rate, latency)
+- [DE-01.5](../team/data-engineering/tasks/Completed%20Tasks/DE-01.5.md) — DE-01.5 — Data hygiene checks (missing fields, outliers) + report
+- [DE-01.6](../team/data-engineering/tasks/Completed%20Tasks/DE-01.6.md) — DE-01.6 — Analytics payload schema validation
+- [DE-01.7](../team/data-engineering/tasks/Completed%20Tasks/DE-01.7.md) — DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
 - [DE-01.8](../team/data-engineering/tasks/DE-01.8.md) — DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
 - [DE-01.9](../team/data-engineering/tasks/DE-01.9.md) — DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)
-- [DE-02.1](../team/data-engineering/tasks/DE-02.1.md) — DE-02.1 — Define feature schemas (JSON) + docs
+- [DE-02.1](../team/data-engineering/Completed%20Tasks/DE-02.1.md) — DE-02.1 — Define feature schemas (JSON) + docs
 - [DE-02.10](../team/data-engineering/tasks/DE-02.10.md) — DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ
 - [DE-02.11](../team/data-engineering/tasks/DE-02.11.md) — DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization
 - [DE-02.12](../team/data-engineering/tasks/DE-02.12.md) — DE-02.12 — Data quality & freshness (constraints, SLI, alerts) and quarantine
@@ -361,10 +361,10 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-02.16](../team/data-engineering/tasks/DE-02.16.md) — DE-02.16 — Drift monitoring integration (handoff to MLOps) + docs
 - [DE-02.17](../team/data-engineering/tasks/DE-02.17.md) — DE-02.17 — Performance/load testing (throughput/latency; cache strategy; cost/perf)
 - [DE-02.18](../team/data-engineering/tasks/DE-02.18.md) — DE-02.18 — Documentation & ADRs (registry, offline/online stores, PIT, DQ, governance)
-- [DE-02.2](../team/data-engineering/tasks/DE-02.2.md) — DE-02.2 — Implement FeatureStore.put/get TS impl + tests
-- [DE-02.3](../team/data-engineering/tasks/DE-02.3.md) — DE-02.3 — Backfill job script from historical events
-- [DE-02.4](../team/data-engineering/tasks/DE-02.4.md) — DE-02.4 — Retention + compaction job (config-driven)
-- [DE-02.5](../team/data-engineering/tasks/DE-02.5.md) — DE-02.5 — Sample queries/reports for ML teams
+- [DE-02.2](../team/data-engineering/Completed%20Tasks/DE-02.2.md) — DE-02.2 — Implement FeatureStore.put/get TS impl + tests
+- [DE-02.3](../team/data-engineering/Completed%20Tasks/DE-02.3.md) — DE-02.3 — Backfill job script from historical events
+- [DE-02.4](../team/data-engineering/Completed%20Tasks/DE-02.4.md) — DE-02.4 — Retention + compaction job (config-driven)
+- [DE-02.5](../team/data-engineering/Completed%20Tasks/DE-02.5.md) — DE-02.5 — Sample queries/reports for ML teams
 - [DE-02.6](../team/data-engineering/tasks/DE-02.6.md) — DE-02.6 — Feature registry: entities, join keys, schema versioning (codegen + validators)
 - [DE-02.7](../team/data-engineering/tasks/DE-02.7.md) — DE-02.7 — Offline store layout (Parquet/Delta): partitioning, PIT tables, schema evolution
 - [DE-02.8](../team/data-engineering/tasks/DE-02.8.md) — DE-02.8 — Online store adapter (memory/Redis) with TTL, upsert semantics, health/readiness

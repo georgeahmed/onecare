@@ -1,0 +1,17 @@
+{
+  "$id": "https://onecare/schemas/fhir/patient.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FHIR Patient (minimal)",
+  "type": "object",
+  "required": ["resourceType", "id"],
+  "properties": {
+    "resourceType": {
+      "const": "Patient"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": true
+}

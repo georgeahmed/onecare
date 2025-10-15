@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safety_gate_service.main import app, reset_models_for_testing
+from security_utils import safety_headers, set_safety_auth_env
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +13,7 @@ def reset_classifier_fixture(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_CLASSIFIER_MODE", raising=False)
     monkeypatch.delenv("SAFETY_GATE_ACUITY_MODE", raising=False)
     monkeypatch.delenv("SAFETY_GATE_ACUITY_MODEL_PATH", raising=False)
+    set_safety_auth_env(monkeypatch)
     reset_models_for_testing()
     yield
     reset_models_for_testing()
@@ -21,6 +23,7 @@ def test_analyze_proceed():
     client = TestClient(app)
     resp = client.post(
         "/analyze",
+        headers=safety_headers(),
         json={
             "practiceId": "p1",
             "patient": {"id": "x"},
@@ -36,6 +39,7 @@ def test_analyze_divert():
     client = TestClient(app)
     resp = client.post(
         "/analyze",
+        headers=safety_headers(),
         json={
             "practiceId": "p1",
             "patient": {"id": "x"},
@@ -52,6 +56,7 @@ def test_analyze_classifier_emergency_without_red_flag():
     client = TestClient(app)
     resp = client.post(
         "/analyze",
+        headers=safety_headers(),
         json={
             "practiceId": "p1",
             "patient": {"id": "x"},

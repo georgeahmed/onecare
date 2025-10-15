@@ -8,6 +8,11 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      PRACTICE_ID: demo
+      PY_SAFETY_GATE_URL: https://example.com/safety-gate
+      NATS_URL: nats://127.0.0.1:4222
+      BUS_IMPL: memory
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,6 +71,11 @@ jobs:
     name: Perf Checks
     needs: build-and-test
     runs-on: ubuntu-latest
+    env:
+      PRACTICE_ID: demo
+      PY_SAFETY_GATE_URL: https://example.com/safety-gate
+      NATS_URL: nats://127.0.0.1:4222
+      BUS_IMPL: memory
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -24,6 +24,8 @@ const mappings = [
   { in: 'safety/safety-decision.json', out: 'packages/events/src/contracts/safety.ts' },
   { in: 'telephony/call-transcribed.json', out: 'packages/events/src/contracts/call-transcribed.ts' },
   { in: 'telephony/intent-classified.json', out: 'packages/events/src/contracts/intent-classified.ts' },
+  { in: 'features/triage-core.json', out: 'packages/events/src/contracts/triage-core-features.ts' },
+  { in: 'features/acuity-signal.json', out: 'packages/events/src/contracts/acuity-signal-features.ts' },
   { in: 'tasks/task-created.json', out: 'packages/events/src/contracts/task-created.ts' },
   { in: 'booking/appointment-created.json', out: 'packages/events/src/contracts/appointment-created.ts' },
   { in: 'audit/audit-event.json', out: 'packages/events/src/contracts/audit-event.ts' },
@@ -89,17 +91,49 @@ function generatePy() {
     console.log('RUN_PY not set; skipping Python model generation.');
     return;
   }
-  const stagingDir = stageSchemas(schemaDir);
   const out = path.join(root, 'services-py/common/contracts/models.py');
+  const schemaFiles = collectSchemaFiles(schemaDir);
+  if (schemaFiles.length === 0) {
+    console.warn('No JSON Schemas found for Python generation.');
+    return;
+  }
+  const combined = buildPythonModels(schemaFiles);
   ensureDir(out);
-  try {
+  fs.writeFileSync(out, combined, 'utf8');
+}
+
+function collectSchemaFiles(dir) {
+  const files = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectSchemaFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.json')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function buildPythonModels(schemaFiles) {
+  const fromImports = new Map();
+  const plainImports = new Set();
+  const sections = [];
+
+  const sortedFiles = schemaFiles.slice().sort();
+  for (const filePath of sortedFiles) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onecare-model-'));
+    const tmpFile = path.join(tmpDir, 'model.py');
+    ensureDir(tmpFile);
     const res = spawnSync(
       'python3',
       [
         '-m', 'datamodel_code_generator',
-        '--input', stagingDir,
+        '--input', filePath,
         '--input-file-type', 'jsonschema',
-        '--output', out,
+        '--output', tmpFile,
         '--target-python-version', '3.11',
         '--use-standard-collections',
         '--collapse-root-models',
@@ -107,40 +141,79 @@ function generatePy() {
       { stdio: 'inherit' }
     );
     if (res.status !== 0) {
-      console.error('Failed generating Python models from schemas');
+      console.error('Failed generating Python model for schema:', filePath);
+      cleanupDir(tmpDir);
       process.exit(res.status || 1);
     }
-  } finally {
-    cleanupDir(stagingDir);
-  }
-}
-
-function stageSchemas(sourceDir) {
-  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'onecare-schemas-'));
-  copyJsonFiles(sourceDir, staging);
-  return staging;
-}
-
-function copyJsonFiles(src, dest) {
-  const entries = fs.readdirSync(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(src, entry.name);
-    const targetPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      fs.mkdirSync(targetPath, { recursive: true });
-      copyJsonFiles(sourcePath, targetPath);
-    } else if (entry.isFile() && entry.name.endsWith('.json')) {
-      ensureDir(targetPath);
-      fs.copyFileSync(sourcePath, targetPath);
+    const raw = fs.readFileSync(tmpFile, 'utf8');
+    cleanupDir(tmpDir);
+    const relativeLabel = path.relative(schemaDir, filePath);
+    const sectionLines = extractPythonSection(raw, fromImports, plainImports);
+    if (sectionLines.length > 0) {
+      sections.push(`# --- ${relativeLabel} ---`, ...sectionLines, '');
     }
   }
+  const importLines = [];
+  if (plainImports.size > 0) {
+    importLines.push(...Array.from(plainImports).sort());
+  }
+  const sortedFrom = Array.from(fromImports.entries()).sort(([a], [b]) => a.localeCompare(b));
+  for (const [module, symbols] of sortedFrom) {
+    const symbolList = Array.from(symbols).sort((a, b) => a.localeCompare(b));
+    importLines.push(`from ${module} import ${symbolList.join(', ')}`);
+  }
+
+  const header = [
+    '"""AUTO-GENERATED from schemas/. DO NOT EDIT MANUALLY."""',
+    'from __future__ import annotations',
+    '',
+  ];
+
+  const combinedImports = importLines.length > 0 ? [...importLines, ''] : [];
+  const body = sections.length > 0 ? sections : [];
+  return [...header, ...combinedImports, ...body].join('\n').replace(/\n+$/u, '\n');
+}
+
+function extractPythonSection(content, fromImports, plainImports) {
+  const lines = content.split(/\r?\n/u);
+  const section = [];
+  for (const line of lines) {
+    if (!line) {
+      if (section.length === 0 || section[section.length - 1] === '') continue;
+      section.push('');
+      continue;
+    }
+    if (line.startsWith('# generated by datamodel-codegen')) continue;
+    if (line.startsWith('#   filename:')) continue;
+    if (line.startsWith('#   timestamp:')) continue;
+    if (line.startsWith('from __future__ import')) continue;
+    if (line.startsWith('from ') || line.startsWith('import ')) {
+      const fromMatch = /^from\s+([\w.]+)\s+import\s+(.+)$/.exec(line);
+      if (fromMatch) {
+        const [, module, names] = fromMatch;
+        const existing = fromImports.get(module) ?? new Set();
+        for (const name of names.split(',').map((item) => item.trim()).filter(Boolean)) {
+          existing.add(name);
+        }
+        fromImports.set(module, existing);
+      } else {
+        plainImports.add(line);
+      }
+      continue;
+    }
+    section.push(line);
+  }
+  while (section.length > 0 && section[section.length - 1] === '') {
+    section.pop();
+  }
+  return section;
 }
 
 function cleanupDir(dir) {
   try {
     fs.rmSync(dir, { recursive: true, force: true });
   } catch (err) {
-    console.warn('Failed to clean up staging dir', { dir, error: err instanceof Error ? err.message : String(err) });
+    console.warn('Failed to clean up temp dir', { dir, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -163,6 +236,8 @@ function main() {
       'packages/events/src/contracts/safety.ts': 'interface SafetyDecision',
       'packages/events/src/contracts/call-transcribed.ts': 'interface CallTranscribed',
       'packages/events/src/contracts/intent-classified.ts': 'interface IntentClassified',
+      'packages/events/src/contracts/triage-core-features.ts': 'interface TriageCoreFeatures',
+      'packages/events/src/contracts/acuity-signal-features.ts': 'interface AcuitySignalFeatures',
       'packages/events/src/contracts/task-created.ts': 'interface TaskCreated',
       'packages/events/src/contracts/appointment-created.ts': 'interface AppointmentCreated',
       'packages/events/src/contracts/audit-event.ts': 'interface AuditEvent',

@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { BookingModality, BookingQueryFilters, BookingSlot } from './booking';
 import type { ErrorEnvelope, PortalSubmission, SafetyDecision } from './types';
+import type { ErrorObject } from '@onecare/events/src/contracts/error-envelope';
 
 export interface SubmitIntakeOptions {
   signal?: AbortSignal;
@@ -21,6 +22,24 @@ const DEFAULT_RETRY = {
   baseDelayMs: 250,
   jitter: true
 };
+
+const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
+  'unauthorized',
+  'forbidden',
+  'invalid_input',
+  'unsupported_media_type',
+  'payload_too_large',
+  'conflict',
+  'upstream_timeout',
+  'upstream_unavailable',
+  'internal_error',
+  'too_many_requests',
+  'busy',
+  'invalid_fhir',
+] as const;
+
+const isKnownErrorCode = (code: string): code is ErrorObject['code'] =>
+  (KNOWN_ERROR_CODES as readonly string[]).includes(code);
 
 export interface SubmitIntakeResult {
   decision: SafetyDecision;
@@ -377,7 +396,7 @@ const parseRetryAfterSeconds = (headerValue: string | null): number | undefined 
 const parseBookingErrorPayload = async (
   response: Response
 ): Promise<{ code?: string; message: string; envelope?: ErrorEnvelope }> => {
-  let parsedCode: string | undefined;
+  let parsedCode: ErrorObject['code'] | undefined;
   let parsedMessage: string | undefined;
   let parsedEnvelope: ErrorEnvelope | undefined;
 
@@ -392,7 +411,7 @@ const parseBookingErrorPayload = async (
         const candidateMessage = errorRecord.message;
         const candidateDetails = errorRecord.details;
         const candidateCorrelation = errorRecord.correlationId;
-        if (typeof candidateCode === 'string' && candidateCode.trim().length > 0) {
+        if (typeof candidateCode === 'string' && isKnownErrorCode(candidateCode) && candidateCode.trim().length > 0) {
           parsedCode = candidateCode;
         }
         if (typeof candidateMessage === 'string' && candidateMessage.trim().length > 0) {
@@ -478,20 +497,20 @@ export const confirmBooking = async (
       const { code, message, envelope } = await parseBookingErrorPayload(response);
       const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get('retry-after'));
       const normalizedEnvelope: ErrorEnvelope | undefined = envelope
-        ? {
+        ? ({
             error: {
               ...envelope.error,
               ...(envelope.error.correlationId ? {} : responseCorrelationId ? { correlationId: responseCorrelationId } : {}),
             },
-          }
+          } as ErrorEnvelope)
         : responseCorrelationId
-          ? {
+          ? ({
               error: {
                 code: code ?? 'internal_error',
                 message,
                 correlationId: responseCorrelationId,
               },
-            }
+            } as ErrorEnvelope)
           : undefined;
       const error: BookingApiError = Object.assign(new Error(message), {
         status: response.status,
