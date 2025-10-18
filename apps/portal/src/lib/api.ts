@@ -200,6 +200,7 @@ export interface FetchBookingSlotsOptions {
   signal?: AbortSignal;
   baseUrl?: string;
   timeoutMs?: number;
+  correlationId?: string;
 }
 
 export const fetchBookingSlots = async (
@@ -241,10 +242,16 @@ export const fetchBookingSlots = async (
   }
 
   try {
+    const headers: Record<string, string> = {};
+    if (options.correlationId) {
+      headers['x-correlation-id'] = options.correlationId;
+    }
+
     const response = await fetch(url.toString(), {
       method: 'GET',
       signal: controller.signal,
       credentials: 'include',
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
     });
 
     if (!response.ok) {

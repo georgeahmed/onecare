@@ -3,158 +3,47 @@ Task Index
 Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 
 ## backend
-- [BE-01.1](../team/backend/tasks/BE-01.1.md) — BE-01.1 — Add zero-trust gate (verify/auth/consent) plumbing
-- [BE-01.10](../team/backend/tasks/BE-01.10.md) — BE-01.10 — HTTP ingress validation + body size limits
-- [BE-01.11](../team/backend/tasks/BE-01.11.md) — BE-01.11 — Observability: correlationId propagation, metrics, and spans
-- [BE-01.12](../team/backend/tasks/BE-01.12.md) — BE-01.12 — Security hardening (SSRF, sanitation, consent)
-- [BE-01.13](../team/backend/tasks/BE-01.13.md) — BE-01.13 — Audit ledger resiliency (async WORM, redaction)
-- [BE-01.14](../team/backend/tasks/BE-01.14.md) — BE-01.14 — Backpressure + time budgets
-- [BE-01.15](../team/backend/tasks/BE-01.15.md) — BE-01.15 — Contract compliance & codegen (schemas → types → validators → CI gate)
-- [BE-01.16](../team/backend/tasks/BE-01.16.md) — BE-01.16 — DLQ and retry policy (bounded retries, poison queue, idempotent handlers)
-- [BE-01.17](../team/backend/tasks/BE-01.17.md) — BE-01.17 — Rate limiting & abuse protection
-- [BE-01.18](../team/backend/tasks/BE-01.18.md) — BE-01.18 — Health, readiness, liveness, and graceful shutdown
-- [BE-01.19](../team/backend/tasks/BE-01.19.md) — BE-01.19 — Fault injection tests (timeouts, partial failures, slow responses)
 - [BE-01.1H](../team/backend/tasks/BE-01.1H.md) — BE-01.1H — Zero‑trust gate hardening (redaction, rate limit, correlation)
-- [BE-01.2](../team/backend/tasks/BE-01.2.md) — BE-01.2 — Load typed config + enforce floors/ceilings
-- [BE-01.20](../team/backend/tasks/BE-01.20.md) — BE-01.20 — Privacy/PII/PHI minimization and redaction
-- [BE-01.21](../team/backend/tasks/BE-01.21.md) — BE-01.21 — Performance baselines and budgets (p50/p95 latency, throughput)
-- [BE-01.22](../team/backend/tasks/BE-01.22.md) — BE-01.22 — Documentation & ADRs (orchestrator, resilience, error taxonomy)
 - [BE-01.2H](../team/backend/tasks/BE-01.2H.md) — BE-01.2H — Orchestrator config schema + startup validation
-- [BE-01.3](../team/backend/tasks/BE-01.3.md) — BE-01.3 — Publish triage.input envelope on SAFE
 - [BE-01.3H](../team/backend/tasks/BE-01.3H.md) — BE-01.3H — Reliable publish (ack/retry) and DLQ prep
-- [BE-01.4](../team/backend/tasks/BE-01.4.md) — BE-01.4 — Emit audit event on success/deny
 - [BE-01.4H](../team/backend/tasks/BE-01.4H.md) — BE-01.4H — Audit WORM semantics + redaction policy
-- [BE-01.5](../team/backend/tasks/BE-01.5.md) — BE-01.5 — Centralized error handling and envelope mapping
-- [BE-01.5a](../team/backend/tasks/BE-01.5a.md) — BE-01.5a — Error codes/types from schema + envelope helper
-- [BE-01.5b](../team/backend/tasks/BE-01.5b.md) — BE-01.5b — Status mapping + HTTP handler wrapper
-- [BE-01.5c](../team/backend/tasks/BE-01.5c.md) — BE-01.5c — Logging redaction + error metrics
-- [BE-01.5d](../team/backend/tasks/BE-01.5d.md) — BE-01.5d — Tests + docs for error taxonomy
-- [BE-01.6](../team/backend/tasks/BE-01.6.md) — BE-01.6 — Idempotency guard at ingress (atomic + metrics)
-- [BE-01.6a](../team/backend/tasks/BE-01.6a.md) — BE-01.6a — IdempotencyStore interface (reserve/commit/release)
-- [BE-01.6b](../team/backend/tasks/BE-01.6b.md) — BE-01.6b — Key/header derivation + TTL config
-- [BE-01.6c](../team/backend/tasks/BE-01.6c.md) — BE-01.6c — 409 path + metrics/logs (race-safe)
-- [BE-01.6d](../team/backend/tasks/BE-01.6d.md) — BE-01.6d — Concurrency tests (sequential + parallel)
-- [BE-01.7](../team/backend/tasks/BE-01.7.md) — BE-01.7 — Normalize→FHIR pipeline + profile validation hook
-- [BE-01.7a](../team/backend/tasks/BE-01.7a.md) — BE-01.7a — normalizeToFhir + fixtures (pure)
-- [BE-01.7b](../team/backend/tasks/BE-01.7b.md) — BE-01.7b — HTTP edge schema validation
-- [BE-01.7c](../team/backend/tasks/BE-01.7c.md) — BE-01.7c — Profile validation hook + error mapping
-- [BE-01.7d](../team/backend/tasks/BE-01.7d.md) — BE-01.7d — Wire upsert + audit + unit tests
-- [BE-01.8](../team/backend/tasks/BE-01.8.md) — BE-01.8 — Outbound guardrails (timeout/retry/jitter/circuit breaker)
-- [BE-01.8a](../team/backend/tasks/BE-01.8a.md) — BE-01.8a — callWithGuard (timeout/retry/backoff)
-- [BE-01.8b](../team/backend/tasks/BE-01.8b.md) — BE-01.8b — Circuit breaker (half-open) semantics
-- [BE-01.8c](../team/backend/tasks/BE-01.8c.md) — BE-01.8c — Correlation propagation + metrics/OTel
-- [BE-01.8d](../team/backend/tasks/BE-01.8d.md) — BE-01.8d — Safety fallback ('rules') + budgets
-- [BE-01.9](../team/backend/tasks/BE-01.9.md) — BE-01.9 — Orchestrator state machine skeleton
-- [BE-02.1](../team/backend/tasks/BE-02.1.md) — BE-02.1 — Define NATS adapter skeleton
-- [BE-02.10](../team/backend/tasks/BE-02.10.md) — BE-02.10 — Bus observability (latency, errors, spans; correlation)
-- [BE-02.11](../team/backend/tasks/BE-02.11.md) — BE-02.11 — Health/readiness integration for bus
-- [BE-02.12](../team/backend/tasks/BE-02.12.md) — BE-02.12 — Contract enforcement for envelopes/topics
-- [BE-02.13](../team/backend/tasks/BE-02.13.md) — BE-02.13 — Advanced DLQ/retry policy
 - [BE-02.14](../team/backend/tasks/BE-02.14.md) — BE-02.14 — Adapter parity tests vs MemoryBus
 - [BE-02.15](../team/backend/tasks/BE-02.15.md) — BE-02.15 — Documentation & ADRs for bus
 - [BE-02.16](../team/backend/tasks/BE-02.16.md) — BE-02.16 — Multi-tenant isolation & quotas (Bus)
 - [BE-02.17](../team/backend/tasks/BE-02.17.md) — BE-02.17 — Message size & compression policies (Bus)
 - [BE-02.18](../team/backend/tasks/BE-02.18.md) — BE-02.18 — Partitioning strategy doc + tests (Bus)
 - [BE-02.19](../team/backend/tasks/BE-02.19.md) — BE-02.19 — Performance baselines & soak (Bus)
-- [BE-02.2](../team/backend/tasks/BE-02.2.md) — BE-02.2 — Adapter factory + injection in orchestrator
 - [BE-02.20](../team/backend/tasks/BE-02.20.md) — BE-02.20 — Runbooks & alerting (Bus)
-- [BE-02.3](../team/backend/tasks/BE-02.3.md) — BE-02.3 — Basic healthcheck/metrics hooks
-- [BE-02.4](../team/backend/tasks/BE-02.4.md) — BE-02.4 — NATS real connection, durable subs, basic DLQ
-- [BE-02.4a](../team/backend/tasks/BE-02.4a.md) — BE-02.4a — NATS connection + durable subs + ack deadlines
-- [BE-02.4b](../team/backend/tasks/BE-02.4b.md) — BE-02.4b — Basic DLQ subject + schema (DlqEvent)
-- [BE-02.5](../team/backend/tasks/BE-02.5.md) — BE-02.5 — Connection resilience and backoff
-- [BE-02.5a](../team/backend/tasks/BE-02.5a.md) — BE-02.5a — Connection resilience (reconnect jitter, backoff, status events)
-- [BE-02.6](../team/backend/tasks/BE-02.6.md) — BE-02.6 — Delivery semantics & idempotency
-- [BE-02.6a](../team/backend/tasks/BE-02.6a.md) — BE-02.6a — At-least-once semantics + dedupe keys
-- [BE-02.7](../team/backend/tasks/BE-02.7.md) — BE-02.7 — Ordering & partitioning
-- [BE-02.8](../team/backend/tasks/BE-02.8.md) — BE-02.8 — Flow control & backpressure
-- [BE-02.9](../team/backend/tasks/BE-02.9.md) — BE-02.9 — Security hardening for bus
-- [BE-03.1](../team/backend/tasks/BE-03.1.md) — BE-03.1 — Scoring function skeleton with config weights
 - [BE-03.10](../team/backend/tasks/BE-03.10.md) — BE-03.10 — Observability (correlation, metrics, spans)
 - [BE-03.11](../team/backend/tasks/BE-03.11.md) — BE-03.11 — Security & privacy (PHI minimization)
 - [BE-03.12](../team/backend/tasks/BE-03.12.md) — BE-03.12 — Performance baselines (latency, throughput)
 - [BE-03.13](../team/backend/tasks/BE-03.13.md) — BE-03.13 — DLQ and poison-message quarantine
 - [BE-03.14](../team/backend/tasks/BE-03.14.md) — BE-03.14 — Health/readiness for triage service
 - [BE-03.15](../team/backend/tasks/BE-03.15.md) — BE-03.15 — Documentation & ADRs (scoring, dedup, assignment)
-- [BE-03.1a](../team/backend/tasks/BE-03.1a.md) — BE-03.1a — Feature extraction + normalization (pure; unit-tested)
 - [BE-03.1b](../team/backend/tasks/BE-03.1b.md) — BE-03.1b — Deterministic scoring with config weights; calibration + priority thresholds
 - [BE-03.1c](../team/backend/tasks/BE-03.1c.md) — BE-03.1c — Score bounding, tie-breakers, and stability across inputs
-- [BE-03.2](../team/backend/tasks/BE-03.2.md) — BE-03.2 — De‑dup window + similarity check
-- [BE-03.2a](../team/backend/tasks/BE-03.2a.md) — BE-03.2a — Text normalizer (lowercase, stopwords, stemming) + fixtures
-- [BE-03.2b](../team/backend/tasks/BE-03.2b.md) — BE-03.2b — Similarity (shingles/MinHash or cosine) with configurable window/threshold + eviction policy
-- [BE-03.2c](../team/backend/tasks/BE-03.2c.md) — BE-03.2c — Dedup decision function (recent window) + metrics/logs
-- [BE-03.3](../team/backend/tasks/BE-03.3.md) — BE-03.3 — Create FHIR Task + emit tasks.created
 - [BE-03.3a](../team/backend/tasks/BE-03.3a.md) — BE-03.3a — FHIR Task create idempotently (stable IDs; retries/backoff; guardrails)
 - [BE-03.3b](../team/backend/tasks/BE-03.3b.md) — BE-03.3b — Emit tasks.created; contract tests and validators
-- [BE-03.4](../team/backend/tasks/BE-03.4.md) — BE-03.4 — Provider assignment engine
 - [BE-03.4a](../team/backend/tasks/BE-03.4a.md) — BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [BE-03.4b](../team/backend/tasks/BE-03.4b.md) — BE-03.4b — Tie-breakers and backpressure-aware assignment
-- [BE-03.5](../team/backend/Completed%20Tasks/BE-03.5.md) — BE-03.5 — Queue notifier adapter
-- [BE-03.6](../team/backend/tasks/BE-03.6.md) — BE-03.6 — Contract-first triage models and validators
 - [BE-03.7](../team/backend/tasks/BE-03.7.md) — BE-03.7 — Event-driven ingress (triage.input consumer)
 - [BE-03.8](../team/backend/tasks/BE-03.8.md) — BE-03.8 — SLA aging and escalation
 - [BE-03.9](../team/backend/tasks/BE-03.9.md) — BE-03.9 — Fallbacks for missing ML (rules-based scoring)
-- [BE-04.1](../team/backend/tasks/BE-04.1.md) — BE-04.1 — GP Connect client interface + env wiring
-- [BE-04.10](../team/backend/tasks/BE-04.10.md) — BE-04.10 — Health/readiness & graceful shutdown (booking)
-- [BE-04.11](../team/backend/tasks/BE-04.11.md) — BE-04.11 — Privacy/PII minimization (booking)
-- [BE-04.12](../team/backend/tasks/BE-04.12.md) — BE-04.12 — Performance baselines (booking)
-- [BE-04.13](../team/backend/tasks/BE-04.13.md) — BE-04.13 — Fault injection tests (booking)
-- [BE-04.14](../team/backend/tasks/BE-04.14.md) — BE-04.14 — Documentation & ADRs (booking)
 - [BE-04.15](../team/backend/tasks/BE-04.15.md) — BE-04.15 — Documentation & ADRs (booking)
-- [BE-04.2](../team/backend/tasks/BE-04.2.md) — BE-04.2 — booking.search handler skeleton
-- [BE-04.3](../team/backend/tasks/BE-04.3.md) — BE-04.3 — Appointment create + conflict handling
-- [BE-04.4](../team/backend/tasks/BE-04.4.md) — BE-04.4 — Contract-first: booking search/request/response and appointment-created schemas; codegen + validators + contract tests
-- [BE-04.5](../team/backend/tasks/BE-04.5.md) — BE-04.5 — Idempotent booking & dedupe (natural key; exactly-once publish)
-- [BE-04.6](../team/backend/tasks/BE-04.6.md) — BE-04.6 — DLQ and retry policy for booking
-- [BE-04.7](../team/backend/tasks/BE-04.7.md) — BE-04.7 — Outbound guardrails (GP Connect/FHIR)
-- [BE-04.8](../team/backend/tasks/BE-04.8.md) — BE-04.8 — Observability (search/booking latency; spans; correlation)
-- [BE-04.9](../team/backend/tasks/BE-04.9.md) — BE-04.9 — Backpressure & rate limits (booking)
-- [BE-05.1](../team/backend/tasks/BE-05.1.md) — BE-05.1 — Eligibility rules config + evaluator
-- [BE-05.10](../team/backend/tasks/BE-05.10.md) — BE-05.10 — Health/readiness + graceful shutdown (pharmacy)
-- [BE-05.11](../team/backend/tasks/BE-05.11.md) — BE-05.11 — Documentation & ADRs (pharmacy router)
-- [BE-05.12](../team/backend/tasks/BE-05.12.md) — BE-05.12 — GP fallback path
-- [BE-05.13](../team/backend/tasks/BE-05.13.md) — BE-05.13 — Performance baselines (pharmacy)
-- [BE-05.14](../team/backend/tasks/BE-05.14.md) — BE-05.14 — Fault injection tests (pharmacy)
-- [BE-05.15](../team/backend/tasks/BE-05.15.md) — BE-05.15 — Rate limits & backpressure (pharmacy)
-- [BE-05.2](../team/backend/tasks/BE-05.2.md) — BE-05.2 — CPCS adapter interface
-- [BE-05.3](../team/backend/tasks/BE-05.3.md) — BE-05.3 — Referral path + outcome write‑back
-- [BE-05.4](../team/backend/tasks/BE-05.4.md) — BE-05.4 — Contract-first: referral/outcome schemas, validators, codegen
-- [BE-05.5](../team/backend/tasks/BE-05.5.md) — BE-05.5 — Idempotent referral and outcome processing
-- [BE-05.6](../team/backend/tasks/BE-05.6.md) — BE-05.6 — Outbound guardrails to CPCS
-- [BE-05.7](../team/backend/tasks/BE-05.7.md) — BE-05.7 — Patient notification adapter
-- [BE-05.8](../team/backend/tasks/BE-05.8.md) — BE-05.8 — DLQ and retry policy
-- [BE-05.9](../team/backend/tasks/BE-05.9.md) — BE-05.9 — Observability for pharmacy router
-- [BE-06.1](../team/backend/Completed%20Tasks/BE-06.1.md) — BE-06.1 — Portal Uptime Guard schedule
 - [BE-06.10](../team/backend/tasks/BE-06.10.md) — BE-06.10 — Health/readiness/liveness + graceful shutdown (schedulers)
 - [BE-06.11](../team/backend/tasks/BE-06.11.md) — BE-06.11 — Fault injection tests (ticks, failures, clock drift)
-- [BE-06.12](../team/backend/Completed%20Tasks/BE-06.12.md) — BE-06.12 — Privacy/PII/PHI minimization (access-gate)
 - [BE-06.13](../team/backend/tasks/BE-06.13.md) — BE-06.13 — Performance baselines (tick latency, flush throughput)
-- [BE-06.2](../team/backend/Completed%20Tasks/BE-06.2.md) — BE-06.2 — OOH deferral queue (persisted with TTL; flush-on-core-hours)
-- [BE-06.3](../team/backend/Completed%20Tasks/BE-06.3.md) — BE-06.3 — ShapeCapacity micro-release (bounded, audited)
-- [BE-06.4](../team/backend/Completed%20Tasks/BE-06.4.md) — BE-06.4 — Portal notify event (contract-first, idempotent, DLQ)
-- [BE-06.5](../team/backend/Completed%20Tasks/BE-06.5.md) — BE-06.5 — Capacity telemetry adapter (pluggable, health-aware)
 - [BE-06.6](../team/backend/tasks/BE-06.6.md) — BE-06.6 — Scheduler resilience & idempotency (singleton, jitter, skew tolerance)
 - [BE-06.7](../team/backend/tasks/BE-06.7.md) — BE-06.7 — Observability for access/capacity (logs, metrics, spans)
 - [BE-06.8](../team/backend/tasks/BE-06.8.md) — BE-06.8 — Front-door rate limiting (tenant/account) for access portal
 - [BE-06.9](../team/backend/tasks/BE-06.9.md) — BE-06.9 — Portal event DLQ & retries (bounded, idempotent)
-- [BE-07.1](../team/backend/tasks/BE-07.1.md) — BE-07.1 — ICS ingress validation + routing policy skeleton
-- [BE-07.10](../team/backend/tasks/BE-07.10.md) — BE-07.10 — Contract tests for ICS and tasks events
-- [BE-07.11](../team/backend/tasks/BE-07.11.md) — BE-07.11 — Backpressure and concurrency control (ICS Hub)
-- [BE-07.12](../team/backend/tasks/BE-07.12.md) — BE-07.12 — Audit ledger resiliency (ICS + Automation)
-- [BE-07.13](../team/backend/tasks/BE-07.13.md) — BE-07.13 — Contract validators & codegen (ICS & Automation)
-- [BE-07.14](../team/backend/tasks/BE-07.14.md) — BE-07.14 — Rate limiting & abuse protection (ICS Hub)
-- [BE-07.15](../team/backend/tasks/BE-07.15.md) — BE-07.15 — Performance baselines (ICS & Automation)
+- [BE-07.1](../team/backend/tasks/BE-07.1.md) — BE-07.1 — Clinician API: List tasks endpoint
 - [BE-07.16](../team/backend/tasks/BE-07.16.md) — BE-07.16 — Documentation & ADRs (ICS Hub & Automation)
-- [BE-07.17](../team/backend/tasks/BE-07.17.md) — BE-07.17 — Health/readiness + graceful shutdown (ICS)
-- [BE-07.18](../team/backend/tasks/BE-07.18.md) — BE-07.18 — Fault injection tests (ICS hub)
-- [BE-07.2](../team/backend/tasks/BE-07.2.md) — BE-07.2 — Workflow Automation triggers (policy-driven)
-- [BE-07.3](../team/backend/tasks/BE-07.3.md) — BE-07.3 — ICS ack semantics and idempotency
-- [BE-07.4](../team/backend/tasks/BE-07.4.md) — BE-07.4 — Outbound reliability (publish guardrails + DLQ)
-- [BE-07.5](../team/backend/tasks/BE-07.5.md) — BE-07.5 — Observability: routing metrics, ack latency, error rates
-- [BE-07.6](../team/backend/tasks/BE-07.6.md) — BE-07.6 — Security & privacy: PHI minimization and redaction
-- [BE-07.7](../team/backend/tasks/BE-07.7.md) — BE-07.7 — DLQ handling and reprocessing flow
-- [BE-07.8](../team/backend/tasks/BE-07.8.md) — BE-07.8 — Workflow Automation rule engine (config + debouncing)
-- [BE-07.9](../team/backend/tasks/BE-07.9.md) — BE-07.9 — Automation idempotency and dedupe
+- [BE-07.2](../team/backend/tasks/BE-07.2.md) — BE-07.2 — Clinician API: Get task detail
+- [BE-07.3](../team/backend/tasks/BE-07.3.md) — BE-07.3 — Clinician API: Assign/Unassign
+- [BE-07.4](../team/backend/tasks/BE-07.4.md) — BE-07.4 — Clinician API: Resolve
+- [BE-07.5](../team/backend/tasks/BE-07.5.md) — BE-07.5 — Clinician API: Schedule callback
+- [BE-07.6](../team/backend/tasks/BE-07.6.md) — BE-07.6 — Clinician API: Book slot
 
 ## integrations
 - [IN-01.1](../team/integrations/tasks/IN-01.1.md) — IN-01.1 — FHIR client skeleton + env wiring (baseUrl, auth)
@@ -334,10 +223,10 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-01.1](../team/data-engineering/tasks/Completed%20Tasks/DE-01.1.md) — DE-01.1 — Configure analytics sink (file/DB) + env wiring
 - [DE-01.10](../team/data-engineering/tasks/Completed%20Tasks/DE-01.10.md) — DE-01.10 — Privacy & PHI minimization (labels allowlist, redaction, PII guardrails)
 - [DE-01.11](../team/data-engineering/tasks/Completed%20Tasks/DE-01.11.md) — DE-01.11 — Data quality checks (constraints, domains, quarantine invalids; report)
-- [DE-01.12](../team/data-engineering/tasks/DE-01.12.md) — DE-01.12 — Incremental rollups (windowed p50/p95, idempotent upserts, backfill)
+- [DE-01.12](../team/data-engineering/review/Completed%20Tasks/DE-01.12.md) — DE-01.12 — Incremental rollups (windowed p50/p95, idempotent upserts, backfill)
 - [DE-01.13](../team/data-engineering/tasks/DE-01.13.md) — DE-01.13 — Backfill & reprocessing framework (range runs, job metadata, idempotency)
 - [DE-01.14](../team/data-engineering/tasks/DE-01.14.md) — DE-01.14 — Lineage & metadata (OpenLineage hooks; dataset/version tags)
-- [DE-01.15](../team/data-engineering/tasks/DE-01.15.md) — DE-01.15 — Pipeline observability (ingest lag, sink latency, error rates; dashboards)
+- [DE-01.15](../team/data-engineering/review/Completed%20Tasks/DE-01.15.md) — DE-01.15 — Pipeline observability (ingest lag, sink latency, error rates; dashboards)
 - [DE-01.16](../team/data-engineering/tasks/DE-01.16.md) — DE-01.16 — Retention & lifecycle (TTL, cold storage tiering, vacuum)
 - [DE-01.17](../team/data-engineering/tasks/DE-01.17.md) — DE-01.17 — Security & governance (encryption, IAM least-privilege, secrets, access logs)
 - [DE-01.18](../team/data-engineering/tasks/DE-01.18.md) — DE-01.18 — Performance/load testing (throughput, backpressure, cost/perf)
@@ -350,10 +239,10 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [DE-01.6](../team/data-engineering/tasks/Completed%20Tasks/DE-01.6.md) — DE-01.6 — Analytics payload schema validation
 - [DE-01.7](../team/data-engineering/tasks/Completed%20Tasks/DE-01.7.md) — DE-01.7 — Contract-first analytics models (schema versioning, codegen, compiled validators)
 - [DE-01.8](../team/data-engineering/tasks/Completed%20Tasks/DE-01.8.md) — DE-01.8 — Reliable consumer (at-least-once, idempotency keys, retries+jitter, DLQ)
-- [DE-01.9](../team/data-engineering/tasks/DE-01.9.md) — DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)
+- [DE-01.9](../team/data-engineering/review/Completed%20Tasks/DE-01.9.md) — DE-01.9 — Storage design (Parquet layout, partitioning, schema evolution, compaction)
 - [DE-02.1](../team/data-engineering/Completed%20Tasks/DE-02.1.md) — DE-02.1 — Define feature schemas (JSON) + docs
 - [DE-02.10](../team/data-engineering/Completed%20Tasks/DE-02.10.md) — DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ
-- [DE-02.11](../team/data-engineering/tasks/DE-02.11.md) — DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization
+- [DE-02.11](../team/data-engineering/review/Completed%20Tasks/DE-02.11.md) — DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization
 - [DE-02.12](../team/data-engineering/tasks/DE-02.12.md) — DE-02.12 — Data quality & freshness (constraints, SLI, alerts) and quarantine
 - [DE-02.13](../team/data-engineering/tasks/DE-02.13.md) — DE-02.13 — Privacy & governance (PII minimization, IAM, encryption, audit logs)
 - [DE-02.14](../team/data-engineering/tasks/DE-02.14.md) — DE-02.14 — Backfill/recompute framework (range runs, job metadata, idempotent writes)
@@ -468,8 +357,8 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [SEC-01.5](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.5.md) — SEC-01.5 — Secrets scanning in CI and pre-commit
 - [SEC-01.6](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.6.md) — SEC-01.6 — Egress allowlist enforcement and SSRF guard
 - [SEC-01.7](../team/devops-sre/tasks/Completed%20Tasks/SEC-01.7.md) — SEC-01.7 — Pen-test checklist and hardening backlog
-- [SRE-01.1](../team/devops-sre/tasks/SRE-01.1.md) — SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
-- [SRE-01.10](../team/devops-sre/tasks/SRE-01.10.md) — SRE-01.10 — Observability stack: OTEL, Prometheus/Grafana, logs (correlationId)
+- [SRE-01.1](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.1.md) — SRE-01.1 — Configure NATS (URL, creds) in compose; health probes; readiness gating
+- [SRE-01.10](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.10.md) — SRE-01.10 — Observability stack: OTEL, Prometheus/Grafana, logs (correlationId)
 - [SRE-01.11](../team/devops-sre/tasks/SRE-01.11.md) — SRE-01.11 — SLOs & alerting (latency p95, error rates, DLQ growth, readiness flaps)
 - [SRE-01.12](../team/devops-sre/tasks/SRE-01.12.md) — SRE-01.12 — Secrets manager integration (Vault/KMS), sealed‑secrets, rotation runbook
 - [SRE-01.13](../team/devops-sre/tasks/SRE-01.13.md) — SRE-01.13 — Network security (cert‑manager, mTLS, Ingress, egress allowlist, NetworkPolicies)
@@ -477,13 +366,13 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [SRE-01.15](../team/devops-sre/tasks/SRE-01.15.md) — SRE-01.15 — Supply chain security (image signing/provenance, vuln/license scans)
 - [SRE-01.16](../team/devops-sre/tasks/SRE-01.16.md) — SRE-01.16 — Kubernetes baseline (manifests/Helm: resources, probes, HPA, NetworkPolicies)
 - [SRE-01.17](../team/devops-sre/tasks/SRE-01.17.md) — SRE-01.17 — CI/CD pipeline (build→test→codegen:check→SBOM→scan→docker push→staging canary→prod promote/rollback)
-- [SRE-01.2](../team/devops-sre/tasks/SRE-01.2.md) — SRE-01.2 — Secrets management baseline (templates, rotation policy)
-- [SRE-01.3](../team/devops-sre/tasks/SRE-01.3.md) — SRE-01.3 — CI caching + codegen checks
-- [SRE-01.4](../team/devops-sre/tasks/SRE-01.4.md) — SRE-01.4 — Resource limits/requests; health/restart policy; ulimits
-- [SRE-01.5](../team/devops-sre/tasks/SRE-01.5.md) — SRE-01.5 — Backup/restore stub scripts + runbook
-- [SRE-01.6](../team/devops-sre/tasks/SRE-01.6.md) — SRE-01.6 — OTEL collector in compose; export to stdout/OTLP (dev)
-- [SRE-01.7](../team/devops-sre/tasks/SRE-01.7.md) — SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
-- [SRE-01.8](../team/devops-sre/tasks/SRE-01.8.md) — SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI
+- [SRE-01.2](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.2.md) — SRE-01.2 — Secrets management baseline (templates, rotation policy)
+- [SRE-01.3](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.3.md) — SRE-01.3 — CI caching + codegen checks
+- [SRE-01.4](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.4.md) — SRE-01.4 — Resource limits/requests; health/restart policy; ulimits
+- [SRE-01.5](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.5.md) — SRE-01.5 — Backup/restore stub scripts + runbook
+- [SRE-01.6](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.6.md) — SRE-01.6 — OTEL collector in compose; export to stdout/OTLP (dev)
+- [SRE-01.7](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.7.md) — SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
+- [SRE-01.8](../team/devops-sre/tasks/Completed%20Tasks/SRE-01.8.md) — SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI
 - [SRE-01.9](../team/devops-sre/tasks/SRE-01.9.md) — SRE-01.9 — Data retention/minimization: log/event retention policies + purge tooling
 - [SRE-02.1](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.1.md) — SRE-02.1 — Add OpenTelemetry Collector to compose (OTLP exporters)
 - [SRE-02.2](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.2.md) — SRE-02.2 — Correlation IDs in logs + log format policy
@@ -496,8 +385,8 @@ Run a task: `make engineer-loop ENGINEER=<team/path> TASK='<task-id>'`
 - [SRE-02.9](../team/devops-sre/tasks/Completed%20Tasks/SRE-02.9.md) — SRE-02.9 — Alert hygiene (dedupe, silence windows, runbook links) and on-call guide
 
 ## security
-- [SEC-01.1](../team/security/tasks/SEC-01.1.md) — SEC-01.1 — Logging redaction utility
-- [SEC-01.2](../team/security/tasks/SEC-01.2.md) — SEC-01.2 — AuthZ matrix documentation (scopes/actions)
+- [SEC-01.1](../team/security/tasks/Completed%20Tasks/SEC-01.1.md) — SEC-01.1 — Logging redaction utility
+- [SEC-01.2](../team/security/tasks/Completed%20Tasks/SEC-01.2.md) — SEC-01.2 — AuthZ matrix documentation (scopes/actions)
 - [SEC-02.1](../team/security/tasks/SEC-02.1.md) — SEC-02.1 — Threat model & data flow (STRIDE)
 - [SEC-02.10](../team/security/tasks/SEC-02.10.md) — SEC-02.10 — Incident Response plan & drills (IRP)
 - [SEC-02.11](../team/security/tasks/SEC-02.11.md) — SEC-02.11 — Audit logging policy (PHI‑safe; retention; WORM)

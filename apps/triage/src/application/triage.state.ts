@@ -19,6 +19,7 @@ import { createDedupStore, type DedupEntry } from './dedup';
 import type { TextNormalizeOptions } from './text-normalize';
 import { assertValidTriageDecision, assertValidTriageInput } from './contracts';
 import { logFeatureVector } from '../featuresHook';
+import { callWithGuard } from './guard';
 
 export interface TriageContext extends MachineContext {
   config: ResolvedConfig;
@@ -83,7 +84,9 @@ export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | vo
 
 ensureTracing('triage');
 
-const TRIAGE_ALLOWED_TOPICS = new Set<string>([Topics.tasks.created]);
+const TRIAGE_TASKS_CREATED_TOPIC = Topics.tasks.created;
+const TRIAGE_DECISION_TOPIC = (Topics.triage as { decision?: string } | undefined)?.decision ?? 'triage.decision';
+const TRIAGE_ALLOWED_TOPICS = new Set<string>([TRIAGE_TASKS_CREATED_TOPIC, TRIAGE_DECISION_TOPIC]);
 const DEDUP_CACHE_LIMIT = 50;
 const dedupStore = createDedupStore({ maxEntriesPerPatient: DEDUP_CACHE_LIMIT });
 const DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
@@ -229,7 +232,7 @@ export class ScoredState extends BaseState<TriageContext, TriageEvent> {
 
   async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
     const score = typeof ctx.score === 'number' ? ctx.score : 0;
-    ctx.priority = determinePriority(ctx.config, score);
+    ctx.priority = determinePriority(ctx.config, score, ctx.features);
     await logFeatureVector({
       source: 'triage',
       store: ctx.featureStore,
@@ -262,7 +265,7 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     const bus = ensureTriageBus(ctx);
     const correlationId = ensureCorrelationId(ctx);
     const score = typeof ctx.score === 'number' ? ctx.score : 0;
-    const priority = ctx.priority ?? determinePriority(ctx.config, score);
+    const priority = ctx.priority ?? determinePriority(ctx.config, score, ctx.features);
     ctx.priority = priority;
 
     const timestamp = new Date().toISOString();
@@ -275,11 +278,38 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
       ttlSeconds,
       execute: async () => {
         const taskResource = buildTaskResource(ctx, priority, timestamp);
-        const reference = await createTaskResource(ctx.fhirRepository!, taskResource);
+        let reference;
+        try {
+          reference = await callWithGuard(
+            'fhir.createTask',
+            async (signal) =>
+              createTaskResource(ctx.fhirRepository!, taskResource, {
+                idempotencyKey,
+                signal,
+              }),
+            {
+              correlationId,
+            },
+          );
+        } catch (error) {
+          const mapped = classifyFhirTaskError(error);
+          logger.error('triage.fhir_task.failed', {
+            code: mapped.code,
+            message: mapped.message,
+            correlationId,
+          });
+          throw mapped;
+        }
 
         ctx.taskReference = reference;
         ctx.taskId = reference.id;
         ctx.taskCreatedAt = timestamp;
+
+        const decision = buildTriageDecision(ctx, timestamp);
+        assertValidTriageDecision(decision);
+        ctx.decision = decision;
+
+        const decisionEnvelope = createEnvelope(TRIAGE_DECISION_TOPIC, decision, correlationId);
 
         const payload: TaskCreatedEvent = {
           taskId: reference.id,
@@ -287,9 +317,10 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
           priority,
           owner: ctx.taskOwner,
         };
-        const envelope = createEnvelope(Topics.tasks.created, payload, correlationId);
+        const envelope = createEnvelope(TRIAGE_TASKS_CREATED_TOPIC, payload, correlationId);
         const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
-        await bus.publish(Topics.tasks.created, envelope, headers);
+        await bus.publish(TRIAGE_DECISION_TOPIC, decisionEnvelope, headers);
+        await bus.publish(TRIAGE_TASKS_CREATED_TOPIC, envelope, headers);
         ctx.taskEventPublished = true;
 
         await notifyQueue(ctx, {
@@ -405,7 +436,57 @@ function sanitizeNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-export function determinePriority(config: ResolvedConfig, score: number): PriorityCode {
+function classifyFhirTaskError(error: unknown): Error & { code: string } {
+  const baseMessage = 'FHIR task creation failed';
+  const mapped = { code: 'upstream_unavailable', message: baseMessage };
+
+  if (error && typeof error === 'object') {
+    const status = Number((error as { status?: number }).status);
+    const retryable = (error as { retryable?: boolean }).retryable === true;
+    if (status === 409) {
+      mapped.code = 'conflict';
+      mapped.message = 'FHIR reported a conflict while creating the task';
+    } else if (status === 429) {
+      mapped.code = 'too_many_requests';
+      mapped.message = 'FHIR rate limit exceeded while creating the task';
+    } else if (status === 400 || status === 422) {
+      mapped.code = 'invalid_fhir';
+      mapped.message = 'FHIR rejected the task payload';
+    } else if (status === 401 || status === 403) {
+      mapped.code = 'forbidden';
+      mapped.message = 'FHIR denied authorization for task creation';
+    } else if (retryable || (error as { name?: string }).name === 'AbortError') {
+      mapped.code = 'upstream_timeout';
+      mapped.message = 'FHIR task creation timed out';
+    } else if (Number.isFinite(status) && status >= 500) {
+      mapped.code = 'upstream_unavailable';
+      mapped.message = 'FHIR service unavailable during task creation';
+    }
+  }
+
+  if (error instanceof Error) {
+    return Object.assign(error, { code: mapped.code, message: mapped.message });
+  }
+  return Object.assign(new Error(mapped.message), { code: mapped.code });
+}
+
+function getPriorityTieBreaker(config: ResolvedConfig): { epsilon: number; acuityPromotion: number } {
+  const raw = ((config.triage as { priority_tiebreaker?: Record<string, unknown> } | undefined)?.priority_tiebreaker ??
+    {}) as Record<string, unknown>;
+
+  const epsilon = sanitizeNumber(raw.epsilon, 0.01);
+  const acuityPromotion = sanitizeNumber(raw.acuity_promotion, 0.85);
+  return {
+    epsilon: epsilon > 0 ? epsilon : 0.01,
+    acuityPromotion: Math.min(Math.max(acuityPromotion, 0), 1),
+  };
+}
+
+export function determinePriority(
+  config: ResolvedConfig,
+  score: number,
+  features?: TriageFeatureVector,
+): PriorityCode {
   const raw = (config.priority_thresholds as Record<string, unknown> | undefined) ?? {};
   const thresholds = {
     STAT: sanitizeNumber(raw.stat, 0.9),
@@ -414,10 +495,46 @@ export function determinePriority(config: ResolvedConfig, score: number): Priori
     ROUTINE: sanitizeNumber(raw.routine, 0),
   };
 
-  if (score >= thresholds.STAT) return 'STAT';
-  if (score >= thresholds.URGENT) return 'URGENT';
-  if (score >= thresholds.SOON) return 'SOON';
-  return 'ROUTINE';
+  const tieBreaker = getPriorityTieBreaker(config);
+  const acuity = typeof features?.acuity === 'number' && Number.isFinite(features.acuity) ? features.acuity : 0;
+
+  let priority: PriorityCode = 'ROUTINE';
+  if (score >= thresholds.STAT) {
+    priority = 'STAT';
+  } else if (score >= thresholds.URGENT) {
+    priority = 'URGENT';
+  } else if (score >= thresholds.SOON) {
+    priority = 'SOON';
+  }
+
+  if (priority === 'STAT') {
+    return 'STAT';
+  }
+
+  const nextThresholdByPriority: Record<PriorityCode, number | undefined> = {
+    STAT: undefined,
+    URGENT: thresholds.STAT,
+    SOON: thresholds.URGENT,
+    ROUTINE: thresholds.SOON,
+  };
+
+  const promotedPriority: Record<PriorityCode, PriorityCode> = {
+    ROUTINE: 'SOON',
+    SOON: 'URGENT',
+    URGENT: 'STAT',
+    STAT: 'STAT',
+  };
+
+  const nextThreshold = nextThresholdByPriority[priority];
+  if (
+    nextThreshold !== undefined &&
+    nextThreshold - score <= tieBreaker.epsilon &&
+    acuity >= tieBreaker.acuityPromotion
+  ) {
+    return promotedPriority[priority];
+  }
+
+  return priority;
 }
 
 function mapPriorityToFhirCode(priority: PriorityCode): 'stat' | 'urgent' | 'asap' | 'routine' {
@@ -469,6 +586,52 @@ function buildTaskResource(ctx: TriageContext, priority: PriorityCode, timestamp
   }
 
   return resource;
+}
+
+function buildTriageDecision(ctx: TriageContext, generatedAt: string): TriageDecision {
+  if (!ctx.patientId) {
+    throw new Error('patient_id_missing');
+  }
+  const score = typeof ctx.score === 'number' && Number.isFinite(ctx.score) ? ctx.score : 0;
+  const priority = ctx.priority ?? determinePriority(ctx.config, score, ctx.features);
+  const decision: TriageDecision = {
+    patientId: ctx.patientId,
+    score,
+    priority,
+    generatedAt,
+  };
+
+  const normalizedReasons =
+    ctx.decisionReasons
+      ?.map((code) => (typeof code === 'string' ? code.trim().toLowerCase() : ''))
+      .filter((code) => code.length > 0 && /^[a-z0-9_.-]{1,64}$/.test(code))
+      .slice(0, 10) ?? [];
+  if (normalizedReasons.length > 0) {
+    decision.reasons = normalizedReasons as [string, ...string[]];
+  }
+
+  if (ctx.isDuplicate && ctx.duplicateReference) {
+    decision.duplicateOf = `${ctx.patientId}:${ctx.duplicateReference.timestamp}`;
+  }
+
+  const featureEntries = Object.entries(ctx.features ?? {}).filter(
+    ([, value]) => typeof value === 'number' && Number.isFinite(value),
+  );
+  if (featureEntries.length > 0) {
+    decision.features = Object.fromEntries(featureEntries);
+  }
+
+  if (ctx.taskOwner || ctx.queueName) {
+    decision.assignment = {};
+    if (ctx.taskOwner) {
+      decision.assignment.owner = ctx.taskOwner;
+    }
+    if (ctx.queueName) {
+      decision.assignment.team = ctx.queueName;
+    }
+  }
+
+  return decision;
 }
 
 interface QueueNotificationPayload {

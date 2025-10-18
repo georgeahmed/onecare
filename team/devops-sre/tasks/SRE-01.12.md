@@ -4,10 +4,12 @@ Task: SRE-01.12 — Secrets manager integration (Vault/KMS), sealed‑secrets, r
 
 Context
 - Move beyond .env for sensitive values; integrate a secrets manager and define rotation procedures.
+- Current state: services read secrets from process env (`.env`, GitHub secrets); no `infra/secrets/` scaffolding or rotation guidance exists.
 
 Files
 - docs/SECURITY.md (expand)
 - infra/secrets/* (examples)
+- .env.example, config/*
 
 Steps
 1) Choose a secrets manager (Vault/cloud KMS); document access policies and how apps retrieve secrets (env injectors/sidecars).
@@ -22,4 +24,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.12' && make team-status-write
-

@@ -5,12 +5,29 @@ const fs = require('fs');
 const fsPromises = fs.promises;
 const path = require('path');
 const readline = require('readline');
+const crypto = require('node:crypto');
+const { logger, createCounter, createHistogram } = require('@onecare/observability');
 
 const DEFAULT_INPUT = process.env.ANALYTICS_SINK_PATH || 'var/analytics/metrics.jsonl';
 const DEFAULT_OUTPUT = process.env.ANALYTICS_QUALITY_REPORT || 'var/analytics/quality.md';
 const DEFAULT_QUARANTINE = process.env.ANALYTICS_QUALITY_QUARANTINE || 'var/analytics/quarantine.jsonl';
 const DEFAULT_ZSCORE = Number(process.env.ANALYTICS_QUALITY_ZSCORE || '3');
 const MAX_SAMPLES_PER_ISSUE = 5;
+
+const qualityRunCounter = createCounter('analytics.quality.run');
+const qualityDurationHistogram = createHistogram('analytics.quality.duration_ms');
+const qualityRecordsCounter = createCounter('analytics.quality.records_processed');
+const qualityQuarantineCounter = createCounter('analytics.quality.quarantine_records');
+const qualityMissingCounter = createCounter('analytics.quality.missing_fields');
+const qualityErrorCounter = createCounter('analytics.quality.errors');
+
+function generateRunId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `analytics-quality-${Date.now()}-${suffix}`;
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -55,10 +72,14 @@ async function fileExists(filePath) {
   }
 }
 
-async function readMetrics(inputPath) {
+async function readMetrics(inputPath, context = {}) {
   const exists = await fileExists(inputPath);
   if (!exists) {
-    console.warn(`[analytics-quality] input file not found: ${inputPath}`);
+    logger.info('analytics-quality input file not found', {
+      inputPath,
+      runId: context.runId,
+    });
+    qualityErrorCounter.add(1, { reason: 'input_not_found', runId: context.runId });
     return [];
   }
 
@@ -72,7 +93,12 @@ async function readMetrics(inputPath) {
     try {
       records.push(JSON.parse(trimmed));
     } catch (err) {
-      console.warn('[analytics-quality] invalid JSON line skipped', { line: trimmed.slice(0, 100), error: err.message });
+      logger.warn('analytics-quality invalid JSON line skipped', {
+        line: trimmed.slice(0, 100),
+        error: err.message,
+        runId: context.runId,
+      });
+      qualityErrorCounter.add(1, { reason: 'parse_error', runId: context.runId });
     }
   }
 
@@ -119,32 +145,68 @@ function formatNumber(value) {
   return value.toFixed(2);
 }
 
-async function writeReport(outputPath, markdown) {
+async function writeReport(outputPath, markdown, context = {}) {
   await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
   await fsPromises.writeFile(outputPath, markdown, 'utf8');
-  console.info('[analytics-quality] wrote report', { outputPath });
+  logger.info('analytics-quality wrote report', {
+    outputPath,
+    runId: context.runId,
+  });
 }
 
-async function writeQuarantine(outputPath, records) {
+async function writeQuarantine(outputPath, records, context = {}) {
   if (!records.length) {
-    console.info('[analytics-quality] no records to quarantine');
+    logger.info('analytics-quality no records to quarantine', {
+      outputPath,
+      runId: context.runId,
+    });
     return;
   }
   await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
   const lines = records.map((entry) => JSON.stringify(entry));
   await fsPromises.writeFile(outputPath, `${lines.join('\n')}\n`, 'utf8');
-  console.info('[analytics-quality] wrote quarantine file', { outputPath, count: records.length });
+  logger.info('analytics-quality wrote quarantine file', {
+    outputPath,
+    count: records.length,
+    runId: context.runId,
+  });
 }
 
-async function run() {
-  const { input, output, quarantine, zscore } = parseArgs(process.argv.slice(2));
+async function run(argv = process.argv.slice(2)) {
+  const startedAt = Date.now();
+  const runId = generateRunId();
+  const runContext = { runId };
+  qualityRunCounter.add(1, runContext);
+
+  const { input, output, quarantine, zscore } = parseArgs(argv);
   const inputPath = path.resolve(input || DEFAULT_INPUT);
   const outputPath = path.resolve(output || DEFAULT_OUTPUT);
   const quarantinePath = path.resolve(quarantine || DEFAULT_QUARANTINE);
   const threshold = zscore || DEFAULT_ZSCORE || 3;
 
-  const records = await readMetrics(inputPath);
+  const exists = await fileExists(inputPath);
+  if (!exists) {
+    logger.info('analytics-quality input file not found, skipping', {
+      inputPath,
+      runId,
+    });
+    qualityErrorCounter.add(1, { reason: 'input_not_found', runId });
+    qualityDurationHistogram.record(Date.now() - startedAt, runContext);
+    return;
+  }
+
+  const records = await readMetrics(inputPath, runContext);
   const total = records.length;
+  qualityRecordsCounter.add(total, runContext);
+
+  if (!total) {
+    logger.info('analytics-quality no records to evaluate', {
+      inputPath,
+      runId,
+    });
+    qualityDurationHistogram.record(Date.now() - startedAt, runContext);
+    return;
+  }
 
   const missing = {
     name: { count: 0, samples: [] },
@@ -184,6 +246,13 @@ async function run() {
         numericSamples.set(entry.name, sampleBucket);
       }
     }
+  }
+
+  if (missing.name.count > 0) {
+    qualityMissingCounter.add(missing.name.count, { ...runContext, field: 'name' });
+  }
+  if (missing.value.count > 0) {
+    qualityMissingCounter.add(missing.value.count, { ...runContext, field: 'value' });
   }
 
   const outliers = [];
@@ -231,6 +300,17 @@ async function run() {
   }
 
   outliers.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+
+  if (quarantineRecords.length > 0) {
+    const quarantineByReason = new Map();
+    for (const entry of quarantineRecords) {
+      const reason = typeof entry.reason === 'string' ? entry.reason : 'unknown';
+      quarantineByReason.set(reason, (quarantineByReason.get(reason) || 0) + 1);
+    }
+    for (const [reason, count] of quarantineByReason.entries()) {
+      qualityQuarantineCounter.add(count, { ...runContext, reason });
+    }
+  }
 
   const generatedAt = new Date().toISOString();
   let markdown = '';
@@ -282,11 +362,41 @@ async function run() {
     });
   }
 
-  await writeReport(outputPath, markdown);
-  await writeQuarantine(quarantinePath, quarantineRecords);
+  await writeReport(outputPath, markdown, runContext);
+  await writeQuarantine(quarantinePath, quarantineRecords, runContext);
+
+  const durationMs = Date.now() - startedAt;
+  qualityDurationHistogram.record(durationMs, runContext);
+
+  logger.info('analytics-quality completed', {
+    runId,
+    inputPath,
+    outputPath,
+    quarantinePath,
+    total,
+    missingName: missing.name.count,
+    missingValue: missing.value.count,
+    outliers: outliers.length,
+    quarantineCount: quarantineRecords.length,
+    durationMs,
+    threshold,
+  });
 }
 
-run().catch((err) => {
-  console.error('[analytics-quality] fatal error', err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  run().catch((err) => {
+    logger.error('analytics-quality fatal error', {
+      error: err instanceof Error ? err.message : err,
+    });
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  computeStats,
+  parseArgs,
+  readMetrics,
+  run,
+  writeQuarantine,
+  writeReport,
+};

@@ -59,9 +59,9 @@ Access to the above paths is gated by Vault policies and audited. Request access
 
 ## Dependency & License Scanning
 
-- CI runs `npm audit --audit-level=high` and `pip-audit` (see `.github/workflows/ci.yml`) to detect vulnerable dependencies. Both steps upload SARIF-style output as artifacts for triage.
-- Use `npx license-checker --json` locally before introducing new packages. The allowlist is: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`. Raise an exception if you need anything else.
-- When a scan flags an issue, record it in the security backlog with remediation ETA. Block releases if a critical/high advisory lacks an approved exception.
+- CI runs `npm audit --audit-level=high`, `pip-audit`, and Trivy (filesystem) in `.github/workflows/ci.yml`; results are evaluated against `config/security/vuln-policy.json` by `scripts/ci/enforce_security_policy.mjs`. Only vulnerabilities added to the allowlist (with justification + `expires`) are tolerated.
+- Use `npx license-checker --json` locally before introducing new packages. The allowlist is maintained in `config/security/license-policy.json` (`MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`). Add an exception with expiry if you must ship another license.
+- When a scan flags an issue, record it in the security backlog with remediation ETA. Block releases if a critical/high advisory lacks an approved (and non-expired) exception.
 
 ## Secret Scanning Pipeline
 
@@ -74,6 +74,13 @@ Access to the above paths is gated by Vault policies and audited. Request access
 - Kubernetes deployments must apply the deny-by-default NetworkPolicy template in `infra/k8s/networkpolicies/egress-deny.yaml` and then explicitly allow necessary hosts/ports.
 - For HTTP clients, enforce SSRF mitigations by validating hostnames and IPs against the allowlist before issuing requests (see `apps/orchestrator/src/index.ts` for existing URL guards).
 - Document every exception request (team, hostname, expiry) in the environment runbooks and review quarterly.
+
+## Broker TLS (NATS)
+
+- All environments must connect to NATS over TLS. Local development uses self-signed certificates generated via `scripts/ops/generate-dev-certs.sh`, which emits a CA bundle plus server/client certificates under `infra/tls/dev/`.
+- Docker Compose mounts the certificates into NATS (`/etc/nats/certs/*`) and the Node services (`/etc/onecare/tls/*`) and enforces mutual TLS (`NATS_TLS_ENABLED=1`, `NATS_TLS_REQUIRED=1`).
+- Production/staging certificates must be provisioned through the managed secrets pipeline (Vault + sealed secrets). Never reuse the dev CA for shared environments.
+- When rotating broker certificates, deploy the new CA + server/client material to staging first, trigger `npm run bus:tls:refresh` (or restart the pods), verify successful reconnect, then promote to production. Update the rotation log with timestamps and operators.
 
 ## Pentest Playbook
 

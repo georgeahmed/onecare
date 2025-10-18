@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/clinician/task-summary.json",
+  "title": "ClinicianTaskSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "clinicId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "status": { "type": "string", "enum": ["NEW", "IN_PROGRESS", "DONE"] },
+    "shortReason": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "patientId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "waitMs": { "type": "integer", "minimum": 0 },
+    "interpreter": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "assignee": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "required": ["id", "clinicId", "priority", "status", "shortReason", "patientId", "waitMs", "createdAt"]
+}
+

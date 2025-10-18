@@ -13,3 +13,4 @@ export {
   AnalyticsMetricValidationError,
   startAnalyticsConsumer,
 } from './consumer';
+export { TriageDecisionObserver, startTriageDecisionObserver } from './triageDecisionObserver';

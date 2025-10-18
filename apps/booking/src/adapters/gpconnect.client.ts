@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import { createHistogram, createCounter, startSpan, getCorrelationId, logger } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { callWithGuard, type GuardOptions } from './callWithGuard';
+import { URL } from 'node:url';
+import { isIP } from 'node:net';
 
 export interface GpConnectClientOptions {
   baseUrl: string;
@@ -83,6 +85,7 @@ export class GpConnectHttpClient implements GpConnectClient {
   private readonly authHeaders: Record<string, string>;
 
   constructor(options: GpConnectClientOptions) {
+    assertSafeEndpoint(options.baseUrl);
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 5_000;
@@ -334,4 +337,42 @@ function buildMetricAttributes(operation: 'search' | 'create', practiceId?: stri
     practiceId: practiceId ?? 'unknown',
     target: identifier ?? 'unknown',
   };
+}
+
+function assertSafeEndpoint(raw: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('gp_connect_url_invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('gp_connect_url_insecure');
+  }
+  if (isPrivateHostname(parsed.hostname)) {
+    throw new Error('gp_connect_url_private');
+  }
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  if (!hostname) return true;
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.local') || lower.endsWith('.internal')) {
+    return true;
+  }
+  const ipType = isIP(hostname);
+  if (ipType === 4) {
+    const parts = hostname.split('.').map((part) => Number(part));
+    if (parts[0] === 10) return true;
+    if (parts[0] === 127) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  }
+  if (ipType === 6) {
+    const normalized = hostname.toLowerCase();
+    if (normalized === '::1') return true;
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+    if (normalized.startsWith('fe80')) return true;
+  }
+  return false;
 }

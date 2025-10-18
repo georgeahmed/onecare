@@ -10,3 +10,4 @@ export {
   withCorrelationContext,
   type Span,
 } from './otel';
+export * from './dlq';

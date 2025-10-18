@@ -1,6 +1,14 @@
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { logger } from '@onecare/observability';
-import type { SecurityServices, AuthContext } from '@onecare/security';
+import type {
+  SecurityServices,
+  AuthContext,
+  ConsentDecision,
+  ConsentCheckOptions,
+  ConsentEvidence,
+} from '@onecare/security';
+
+export type { ConsentEvidence } from '@onecare/security';
 
 function resolveReplayWindowMs(): number {
   const raw = process.env.SECURITY_REPLAY_WINDOW_MS;
@@ -53,15 +61,6 @@ interface ConsentEntry {
 }
 
 type ConsentCache = Record<string, ConsentEntry[]>;
-
-export interface ConsentEvidence {
-  reference: string;
-  purpose: string;
-  resources: string[];
-  expiresAt?: string;
-  grantedAt?: string;
-  scopes?: string[];
-}
 
 const consentEvidenceCache = new Map<string, ConsentEvidence>();
 
@@ -173,37 +172,66 @@ function createDefaultSecurityServices(): SecurityServices {
       }
       return false;
     },
-    async checkConsent(patientId: string, purpose: string, requestedResources: string[]): Promise<boolean> {
+    async checkConsent(
+      patientId: string,
+      purpose: string,
+      requestedResources: string[],
+      options?: ConsentCheckOptions,
+    ): Promise<ConsentDecision> {
       const normalizedPurpose = purpose.trim().toLowerCase();
       const key = consentCacheKey(patientId, normalizedPurpose);
       consentEvidenceCache.delete(key);
-      if (!patientId || !normalizedPurpose || requestedResources.length === 0) {
-        return false;
+      const correlationId = options?.correlationId;
+      const patientIdHash = hashIdentifier(patientId);
+      const requiredResources = requestedResources.map(normaliseResource).filter(Boolean);
+
+      if (!patientId || !normalizedPurpose || requiredResources.length === 0) {
+        logger.warn('consent check denied - invalid request', {
+          patientIdHash,
+          purpose: normalizedPurpose,
+          correlationId,
+        });
+        return { allowed: false, reason: 'invalid_request' };
       }
+
       const consentCache = loadConsentCache();
       const entries = consentCache[patientId];
       if (!Array.isArray(entries) || entries.length === 0) {
         logger.warn('consent check denied - no entries', {
-          patientIdHash: hashIdentifier(patientId),
+          patientIdHash,
           purpose: normalizedPurpose,
+          correlationId,
         });
-        return false;
+        return { allowed: false, reason: 'not_found' };
       }
+
       const now = Date.now();
-      const requiredResources = requestedResources.map(normaliseResource);
+      let sawRevoked = false;
+      let sawExpired = false;
+      let sawScopeMismatch = false;
+
       for (const entry of entries) {
         if (!entry || typeof entry !== 'object') continue;
-        if (entry.revoked === true) continue;
+        if (entry.revoked === true) {
+          sawRevoked = true;
+          continue;
+        }
         if (typeof entry.purpose !== 'string') continue;
         if (entry.purpose.trim().toLowerCase() !== normalizedPurpose) continue;
         const resources = Array.isArray(entry.resources)
           ? entry.resources.map(normaliseResource).filter(Boolean)
           : [];
         if (resources.length === 0) continue;
-        if (!requiredResources.every((res) => resources.includes(res))) continue;
+        if (!requiredResources.every((res) => resources.includes(res))) {
+          sawScopeMismatch = true;
+          continue;
+        }
         if (entry.expiresAt) {
           const expires = Date.parse(entry.expiresAt);
-          if (Number.isFinite(expires) && expires <= now) continue;
+          if (Number.isFinite(expires) && expires <= now) {
+            sawExpired = true;
+            continue;
+          }
         }
         if (!entry.reference || typeof entry.reference !== 'string') continue;
         const evidence: ConsentEvidence = {
@@ -215,14 +243,24 @@ function createDefaultSecurityServices(): SecurityServices {
           scopes: Array.isArray(entry.scopes) ? entry.scopes : undefined,
         };
         consentEvidenceCache.set(key, evidence);
-        return true;
+        logger.info('consent check granted', {
+          patientIdHash,
+          purpose: normalizedPurpose,
+          correlationId,
+        });
+        return { allowed: true, reason: 'granted', evidence };
       }
-      logger.warn('consent check denied - no matching consent', {
-        patientIdHash: hashIdentifier(patientId),
+
+      const reason: ConsentDecision['reason'] =
+        sawRevoked ? 'revoked' : sawExpired ? 'expired' : sawScopeMismatch ? 'scope_mismatch' : 'not_found';
+      logger.warn('consent check denied', {
+        patientIdHash,
         purpose: normalizedPurpose,
         requestedResources: requiredResources,
+        reason,
+        correlationId,
       });
-      return false;
+      return { allowed: false, reason };
     },
   };
 }

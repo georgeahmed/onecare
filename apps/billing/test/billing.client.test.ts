@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BillingHttpClient, BillingClientError, type ClaimPayload } from '../src/adapters/billing.client';
+import { BillingHttpClient, BillingClientError } from '../src/adapters/billing.client';
 import type { ResolvedConfig, BillingConfig } from '@onecare/config';
+import type { BillingClaim } from '@onecare/events';
 
-const claim: ClaimPayload = {
+const claim: BillingClaim = {
   claimId: 'claim-1',
   encounterId: 'enc-1',
   amount: 125.5,
@@ -28,10 +29,11 @@ beforeEach(() => {
 
 describe('BillingHttpClient', () => {
   it('submits claim with correlation header and TLS config', async () => {
-    const dispatcher = vi.fn(async (_claim: ClaimPayload, context) => {
+    const dispatcher = vi.fn(async (_claim: BillingClaim, context) => {
       expect(context.headers.Authorization).toBe('Bearer secret');
       expect(context.headers['x-trace']).toBe('trace-123');
       expect(context.headers['x-corr']).toBe('corr-123');
+      expect(context.headers.Accept).toBe('application/json');
       expect(context.operation).toBe('claim');
       return {
         claimId: claim.claimId,
@@ -51,6 +53,7 @@ describe('BillingHttpClient', () => {
     const responseDispatcher = vi.fn(async (id: string, context) => {
       expect(context.headers.Authorization).toBe('Bearer secret');
       expect(context.headers['x-corr']).toBeUndefined();
+      expect(context.headers.Accept).toBe('application/json');
       expect(context.operation).toBe('response');
       expect(id).toBe('claim-1');
       return { claimId: id, status: 'pending' as const };

@@ -24,6 +24,10 @@ Environment Variables
 - NATS_CONNECT_TIMEOUT_MS — connect timeout (default: 2000ms)
 - NATS_MAX_RECONNECT_ATTEMPTS — reconnect attempts before marking not ready (default: 10)
 - NATS_RECONNECT_DELAY_MS — delay before retrying manual reconnects (default: 1500ms)
+- ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL / ORCHESTRATOR_MAX_CONCURRENCY_DEFAULT — global + per-route concurrency budgets (default 64 / 32). Override individual routes via `ORCHESTRATOR_MAX_CONCURRENCY_SAFETY`, `ORCHESTRATOR_MAX_CONCURRENCY_BOOKING`, `ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG`.
+- ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE / ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE — actor rate limits; optional window/penalty overrides `ORCHESTRATOR_RATE_LIMIT_WINDOW_MS`, `ORCHESTRATOR_RATE_LIMIT_BLOCK_MS`, `ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS`, `ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS`.
+- ORCHESTRATOR_BUS_PUBLISH_TIMEOUT_MS / ORCHESTRATOR_BUS_PUBLISH_MAX_RETRIES / ORCHESTRATOR_BUS_PUBLISH_BACKOFF_MS — guardrail settings for event publishes before routing to the DLQ.
+- ORCHESTRATOR_SHUTDOWN_DRAIN_TIMEOUT_MS — maximum drain window before shutdown proceeds (default 10s).
 
 Example: copy .env.example to .env and adjust as needed.
 
@@ -44,6 +48,7 @@ Localization & Accessibility Tooling
 - Pseudo-locale: choose “Pseudo (debug)” from the portal language switcher (dev only) to surface truncation/missing keys.
 - Accessibility audit: `npm run a11y:portal` (runs pa11y against intake + booking flows).
 - High-contrast theme: switch via the header “Theme” menu; tokens live in `apps/portal/src/styles/tokens.css`.
+- Audit reports are written to `var/reports/portal-a11y-report.json`; track the `contrast` counter before sign-off.
 
 QA Matrix (Accessibility + i18n)
 | Scenario | Assistive Tech | Browser / Device | Notes |
@@ -56,6 +61,7 @@ QA Matrix (Accessibility + i18n)
 
 Runbook
 - Before releasing new strings: run extraction, regenerate locales, and request translation review via shared glossary.
+- Route new copy through the Content Reviewer lane (see docs/CONVENTIONS.md) and document sign-off in the PR checklist.
 - Record QA runs (matrix above) in the PR checklist; capture defects in `team/frontend/tasks/*`.
 - For zoom fallbacks verify `<html data-zoom="high">` is applied at ≥200 % and that header/nav stack vertically (see CSS in `apps/portal/src/styles/global.css`).
 
@@ -80,6 +86,16 @@ Makefile Shortcuts
 - make py-scribe — start Scribe locally on 8082
 - make dev-run — start Safety Gate + Orchestrator (keeps running)
 - make dev-stop — stop Safety Gate + Orchestrator started by dev-run
+- One‑shot full dev stack (Portal + Proxy + Orchestrator + Safety Gate + Booking stub):
+  - npm run dev:all — starts everything locally
+  - npm run dev:all:stop — stops all started processes
+  - Prereqs: set FHIR_BASE_URL and FHIR_TOKEN (or FHIR_AUTH_TOKEN). Example:
+    - export FHIR_BASE_URL="https://fhir-dev.example.com"
+    - export FHIR_TOKEN="<bearer token>"
+  - Notes:
+    - Uses BUS_IMPL=memory (no NATS required)
+    - Booking slots served by a local stub on :4002; confirm is proxied stub
+    - Portal points to signing proxy on :4000; proxy injects zero‑trust headers
 - make docker-up / make docker-down — compose lifecycle
 - make demo-docker — end-to-end demo via Docker (safety-check)
 - make demo-local — local demo (uvicorn + orchestrator)
@@ -113,6 +129,7 @@ Health checks
 - Safety Gate docs: curl http://localhost:8081/docs
 
 Run with Docker Compose
+- First-time setup: `bash scripts/ops/generate-dev-certs.sh` (creates self-signed CA + client certs under `infra/tls/dev`)
 - Start: docker-compose up --build
 - Stop: docker-compose down -v
 - Services: orchestrator waits for NATS to become healthy; readiness at /ready only turns green after the bus connects
@@ -135,11 +152,17 @@ Analytics Consumer
 - Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
 - Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
 - Data hygiene: `npm run metrics:quality` produces a markdown report flagging missing fields and numeric outliers. Adjust the z-score threshold via `--zscore` or `ANALYTICS_QUALITY_ZSCORE`.
+- Quarantine export: `npm run analytics:quarantine:export` gzips the NDJSON quarantine file and copies it to long-term storage. Configure destination/retention with `ANALYTICS_QUARANTINE_ARCHIVE_DIR`, `ANALYTICS_QUARANTINE_RETENTION_DAYS`, and `ANALYTICS_QUARANTINE_DELETE_SOURCE`.
 - Feature backfill: `npm run feature:backfill -- --input <events.jsonl> --output <features.jsonl>` hydrates the feature store from historical triage events, validating payloads against `triage-core`.
 - Feature ingest: `npm run feature:ingest -- --input data/feature-stream.jsonl` replays JSONL envelopes through the streaming ingestion worker (`@onecare/feature-store-ingest`) using the in-memory online store adapter.
 - Feature compaction: `node scripts/feature_compact.js --input <features.jsonl> --retention-days 7` enforces retention and deduplicates feature records.
 - Feature purge: `node scripts/feature_store_purge.js --url "$FEATURE_STORE_URL" --retention-days 30` deletes feature rows older than the retention window. The `feature-store-purge` GitHub Action runs this nightly for `dev`, `staging`, and `prod` when the respective `FEATURE_STORE_URL_*` secrets are configured.
+- Feature views: `npm run feature:views -- --input data/triage-core.jsonl --view triage-core.sliding-windows --output var/features/feature-views.jsonl --online` materialises sliding-window aggregates and pushes them into the configured online store. Rebuild `@onecare/feature-store-offline` first (`npx tsc -p packages/feature-store-offline/tsconfig.json`).
 - Drift report: `node scripts/drift_report.js --input data/drift/sample.json --output var/reports/drift-report.md` generates a Markdown summary of distribution drift using PSI/mean/std thresholds.
+
+CI/CD
+- CI (`.github/workflows/ci.yml`) runs codegen/typecheck/tests, generates SBOMs via `bash scripts/sbom-generate.sh artifacts/sbom`, enforces the vulnerability/license policy (`config/security/*.json`), and signs container images with cosign when registry + signing secrets are present.
+- CD (`.github/workflows/cd.yml`) deploys to staging (requires `KUBE_CONFIG_STAGING`, `STAGING_NAMESPACE`, `STAGING_BASE_URL` secrets), runs HTTP smoke checks via `scripts/ci/http_smoke.sh`, and promotes to production behind an environment approval. Provide `KUBE_CONFIG_PRODUCTION`, `PROD_NAMESPACE`, and optionally `PROD_BASE_URL` for the production job.
 
 Team & Status
 - Team status: make team-status
@@ -165,7 +188,7 @@ HTTP Endpoints (Dev)
     - Request (PortalSubmission): { "practiceId": "p1", "patient": { "id": "abc" }, "narrative": "...", "channel": "web" }
     - Response (SafetyDecision): { "outcome": "SAFE_TO_CONTINUE" | "DIVERTED", "reason"?: string }
     - Required headers: `Authorization: Bearer <token>`, `X-Actor-Type`, `X-Actor-Id`, `X-Request-Id`; optional `X-Auth-Scope` (space-delimited). Correlation ID header remains optional.
-    - Side-effect (dev): on SAFE_TO_CONTINUE, publishes triage.input event using EventEnvelope on in-memory bus
+    - Side-effect (dev): on SAFE_TO_CONTINUE, publishes triage.input and triage.decision events using EventEnvelope on in-memory bus
 
 - Safety Gate (FastAPI)
   - POST /analyze (from PortalSubmission) → SafetyDecision
@@ -185,7 +208,7 @@ Schemas and Contracts
 Dev Bus Demo
 - Build orchestrator and triage: npm -w @onecare/app-orchestrator run build && npm -w @onecare/app-triage run build
 - Start triage dev worker: node apps/triage/dist/dev/worker.js (or npm -w @onecare/app-triage run dev:worker)
-- POST to /safety-check with the zero-trust headers and observe triage worker log the triage.input receipt
+- POST to /safety-check with the zero-trust headers and observe triage worker log the triage.input receipt and analytics observer log the triage.decision publication
 
 CI (GitHub Actions)
 - codegen job: generates TS + Python contracts and auto-commits changes on PRs from same repo

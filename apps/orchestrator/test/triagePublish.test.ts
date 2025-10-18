@@ -9,6 +9,7 @@ import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
 import { setConsentFixtureEnv } from './consentFixture';
 import { resetSecurityServices } from '../src/adapters/security';
 import { deriveIdempotencyKey } from '../src/application/idempotency';
+import { safePatientReference } from '../src/support/privacy';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -131,7 +132,7 @@ describe('triage input publishing', () => {
     const successEvent = auditEvents.find((event) => event.type === 'orchestrator.access.success');
     expect(successEvent).toBeDefined();
     const payload = successEvent?.payload as Record<string, unknown> | undefined;
-    expect(payload?.patientId).toBe(submission.patient.id);
+    expect(payload?.patientRef).toBe(safePatientReference(submission.patient.id));
     expect(payload?.outcome).toBe('SAFE_TO_CONTINUE');
   });
 });

@@ -1,0 +1,185 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\setlist{nosep}
+
+\title{ONECARE: A Plain-English Overview}
+\author{ONECARE Team}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{What We Are Building}
+ONECARE is a clinical operating system that makes it easy for patients to reach their practice any time (web or phone), and helps care teams respond safely, fairly, and on time. In simple terms, it:
+\begin{itemize}
+  \item Gives patients a single front door to say ``what's going on'' and request help.
+  \item Checks for urgent red flags immediately and routes emergencies to the right advice.
+  \item Scores and prioritizes requests so the right clinician sees the right case first.
+  \item Helps book appointments across local clinics and hubs when needed.
+  \item Assists clinicians with a privacy-first ``ambient scribe'' that drafts notes for review.
+  \item Keeps everything audited, safe, and connected to the patient's health record.
+\end{itemize}
+
+\section*{Who Uses It}
+\begin{itemize}
+  \item \textbf{Patients and carers:} Use the web portal or phone line to describe their issue, share preferences (e.g., language, accessibility), and receive updates or book appointments.
+  \item \textbf{Clinicians (GPs, nurses, pharmacists):} See a prioritized queue, review brief case summaries, contact patients, approve drafted notes, and complete tasks.
+  \item \textbf{Practice staff and managers:} Monitor demand, shape capacity (e.g., release held-back slots), manage callback windows, and view high-level service metrics.
+\end{itemize}
+
+\section*{What the Main Screens Look Like}
+This is a simple mental picture of the core experiences. Exact visuals vary by site, language, and accessibility settings.
+
+\subsection*{Patient Portal (Web)}
+\begin{itemize}
+  \item \textbf{Intake page:} A clear form that asks the patient to describe their concern in their own words and provide key details (e.g., symptoms, duration, preferences). It supports multiple languages and accessibility features (keyboard navigation, high contrast, screen readers).
+  \item \textbf{Safety check:} Behind the scenes, the system screens for red-flag symptoms. If urgent, the page shows immediate guidance (e.g., call emergency services) and alerts the practice.
+  \item \textbf{Confirmation:} After submission, patients receive a confirmation with a reference/correlation ID. If appropriate, they can proceed to booking.
+  \item \textbf{Booking:} A simple flow to filter and pick a slot (phone, video, in-person) when the care plan requires it. Clear errors and retry guidance are shown if a slot is taken during selection.
+\end{itemize}
+
+\subsection*{Phone (Telephony Parity)}
+\begin{itemize}
+  \item \textbf{Call flow:} Callers use a cloud phone menu or simply speak their concern. Speech-to-text creates a short transcript so the same safety and triage steps apply as on the web.
+  \item \textbf{Callback windows:} Based on early signals, callers are offered practical callback windows (e.g., within 2 hours, same day). This removes the ``8am rush'' and keeps phone and web fair.
+\end{itemize}
+
+\subsection*{Clinician Workspace}
+\begin{itemize}
+  \item \textbf{Triage queue:} A list of new and aging cases with clear priority labels (STAT, URGENT, SOON, ROUTINE). Each card shows who the patient is, the summary of the issue, and any flags.
+  \item \textbf{Case view:} Key context (history, meds, allergies) and the patient's narrative. Actions include: message/call patient, book or propose a slot, route to pharmacy, or complete.
+  \item \textbf{Ambient scribe:} During consultations (when both parties consent), the system drafts a note for the clinician to approve or edit. Nothing is saved to the record until a human approves.
+\end{itemize}
+
+\subsection*{Operations and Management}
+\begin{itemize}
+  \item \textbf{Capacity shaping:} Release held-back appointment slots, balance clinics, and manage templates during the day based on live demand.
+  \item \textbf{Reports:} High-level metrics for safety checks, response times, and fairness (e.g., proportion served via phone vs web) with appropriate data protections.
+\end{itemize}
+
+\section*{Core Features (At a Glance)}
+\begin{itemize}
+  \item \textbf{Unified access:} Same experience across web and phone; everything lands in one triage flow.
+  \item \textbf{Safety-first:} Automatic red-flag diversion with fast timeouts and safe fallbacks.
+  \item \textbf{Smart triage:} Scores requests using acuity, risk, complexity, time waiting, and current capacity.
+  \item \textbf{SLA aging:} Open cases rise in priority over time to protect response targets.
+  \item \textbf{Booking:} Local practice, PCN enhanced access, or national connectors (e.g., GP Connect) when required.
+  \item \textbf{Pharmacy First:} Routes eligible cases to community pharmacy with patient notification.
+  \item \textbf{Ambient scribe:} Consent-driven transcription and note drafting for clinician approval.
+  \item \textbf{Privacy and audit:} Strong controls, minimal data sharing, and full audit trails.
+\end{itemize}
+
+\section*{How It Works (Plain Language)}
+Think of ONECARE as a coordinated team of small services that talk to each other through an internal messenger.
+\begin{itemize}
+  \item \textbf{Front door (Orchestrator):} Checks identity and consent, validates inputs, stores a clean copy in the health record system, runs a quick safety check, and then sends the case onward.
+  \item \textbf{Safety gate:} A fast language model looks for urgent red flags in the patient's words. If it finds them (or times out), the system shows urgent advice and alerts staff.
+  \item \textbf{Triage:} Calculates a priority score using the patient's situation and current clinic capacity. It creates a task in the clinician queue and notifies the right team.
+  \item \textbf{Booking:} Searches available appointments, including partner hubs, and books when needed. Idempotency means accidental double-clicks do not double-book.
+  \item \textbf{Pharmacy router:} If the case fits Pharmacy First rules, it builds the referral and sends the patient a clear message on what to expect.
+  \item \textbf{Ambient scribe:} With consent, transcribes a consultation and drafts a note that the clinician reviews and approves before anything is saved.
+  \item \textbf{Health record \/ evidence:} Everything important is saved in a standards-based record system; large files (like audio) are stored as links. All actions are audit-logged.
+\end{itemize}
+
+\section*{Sign-In (Login) and Identity}
+\begin{itemize}
+  \item \textbf{Who signs in:} Patients and staff sign in before taking actions that touch personal data.
+  \item \textbf{How it's verified:} The portal includes a secure token with each request. The front door checks that token, confirms who you are (patient, clinician, or system), and enforces permissions.
+  \item \textbf{Short-lived sessions:} Tokens expire and must be refreshed, reducing risk if a device is lost.
+  \item \textbf{Consent-aware:} Requests that need explicit consent (e.g., recording audio for scribe) are checked at the boundary.
+  \item \textbf{Development vs production:} In development we use a simple demo token; in production this is wired to your organization's identity provider (OIDC-based), so we never store passwords.
+\end{itemize}
+
+\section*{Data Flow (End to End)}
+Here is the life of a request in plain terms:
+\begin{enumerate}
+  \item You submit a request (web) or speak to the phone system (transcribed to text).
+  \item The system verifies your identity and checks consent. Each request carries a correlation ID so we can trace it without exposing personal details.
+  \item A quick safety screen looks for urgent red flags. If found, you see urgent advice and the practice is alerted.
+  \item The request is saved to the health record, then sent to triage where it is scored and turned into a task for the right clinician or team.
+  \item If an appointment is needed, the booking service searches available slots (local or partner hubs) and books safely (handling conflicts and retries).
+  \item If eligible for Pharmacy First, the system prepares a referral and updates you.
+  \item With consent, the scribe drafts notes during the consultation for the clinician to approve; final notes are written back to the record.
+\end{enumerate}
+
+\section*{A Typical Patient Journey}
+\begin{enumerate}
+  \item The patient submits their concern on the web or by phone. The system checks for urgent red flags immediately.
+  \item If urgent, the patient is shown clear guidance (e.g., call emergency services) and the practice is alerted. Otherwise, the case continues.
+  \item The orchestrator saves the request, adds helpful context, and passes it to triage.
+  \item Triage scores the case and creates a task for the most suitable clinician or team. If the case waits, its priority automatically rises over time.
+  \item If an appointment helps, the system offers slots (local or partner hub). Confirmation includes a reference ID.
+  \item During the consultation (if consented), the scribe drafts notes. The clinician approves or edits before saving to the record.
+  \item The task is completed, and the patient receives the agreed outcome and next steps.
+\end{enumerate}
+
+\section*{Safety, Privacy, and Trust}
+\begin{itemize}
+  \item \textbf{Minimum necessary data:} The system shares only what is needed to deliver care. Patient-identifiable data is never logged.
+  \item \textbf{Consent and control:} Ambient scribe is opt-in; patients and clinicians can decline. Sensitive actions always require human approval.
+  \item \textbf{Time-bound calls:} External calls have strict timeouts and limited retries so the system stays responsive.
+  \item \textbf{Idempotent by design:} Repeated submissions or clicks do not create duplicates.
+  \item \textbf{Audit and observability:} Every important step is recorded for safety and compliance. Correlation IDs help trace a request end to end without exposing personal details.
+\end{itemize}
+
+\section*{External Services We Rely On (Why and How)}
+ONECARE connects to a few trusted external systems so patients can get help faster while keeping data safe:
+\begin{itemize}
+  \item \textbf{Identity Provider (OIDC):} Your organization's sign-in system issues short-lived tokens. We verify them on every request and enforce scopes ("what this user is allowed to do"). In development this is stubbed; in production it's tied to your chosen IdP.\newline
+  \textit{Why:} Strong login without storing passwords. Easy revocation and audit.
+  \item \textbf{GP Connect (appointments):} Used by the booking service to search and book appointments across practices and hubs. We call only secure, public endpoints, add timeouts and limited retries, and handle booking conflicts gracefully.\newline
+  \textit{Why:} Patients can access more slots (not just one practice) using NHS-standard connectors.
+  \item \textbf{Cloud Telephony \/ Speech-to-Text:} For callers, the IVR captures intent and a short narrative; speech-to-text turns it into the same text flow used on the web.\newline
+  \textit{Why:} True parity between phone and web; no 8am bottlenecks.
+  \item \textbf{FHIR Clinical Record (EHR):} A standards-based health record where we store encounters, tasks, appointments, and documents. Large files (e.g., audio) are stored as references.\newline
+  \textit{Why:} Consistent, portable records with strong validation and audit.
+  \item \textbf{Event Bus (Messaging):} A secure internal messenger (e.g., NATS) connects services like orchestrator, triage, booking, and scribe.\newline
+  \textit{Why:} Keeps components small, reliable, and traceable.
+\end{itemize}
+
+\subsection*{GP Connect in Practice: How It Fits}
+\begin{itemize}
+  \item The booking page asks for available slots based on your filters (e.g., phone vs in-person).
+  \item The booking service queries GP Connect for slot summaries and shows them to the patient.
+  \item When a patient chooses a slot, we create the appointment via GP Connect. If someone else books that slot first, we detect the conflict, explain it clearly, and let the patient pick another slot.
+  \item All calls use secure endpoints with timeouts, minimal retries, idempotency (no accidental double-booking), and structured error messages.
+  \item The final appointment reference is saved in the health record and shown to the patient.
+\end{itemize}
+
+\section*{How Everything Connects}
+Behind the scenes, components are loosely coupled and communicate through messages:
+\begin{itemize}
+  \item The \textit{portal} and \textit{telephony} feed into the \textit{orchestrator} (the front door).
+  \item The orchestrator stores the patient request, runs the \textit{safety gate}, and publishes a triage message.
+  \item The \textit{triage} service creates a task and notifies the right queue. Aging ensures fairness over time.
+  \item If needed, the \textit{booking} service finds and books slots locally or via partner connectors.
+  \item The \textit{pharmacy router} handles Pharmacy First where appropriate.
+  \item With consent, the \textit{scribe} drafts a note for clinician approval; the final note is saved to the record.
+  \item All services write outcomes to a standards-based health record; large artifacts are stored as references. An audit log captures the who, what, and when.
+\end{itemize}
+
+\section*{What to Remember}
+\begin{itemize}
+  \item Patients get one simple way in, day or night, via web or phone.
+  \item Safety is checked first, every time, with clear escalation.
+  \item Clinicians see the right work at the right time, with helpful drafts and context.
+  \item Managers can shape capacity during the day based on real demand.
+  \item Everything is connected, private, and auditable.
+\end{itemize}
+
+\section*{Glossary (Plain Terms)}
+\begin{itemize}
+  \item \textbf{Triage:} Sorting requests so urgent ones are handled first.
+  \item \textbf{Callback window:} A promised time range when the practice will call back.
+  \item \textbf{Pharmacy First:} Sending suitable cases to a community pharmacist to help sooner.
+  \item \textbf{Ambient scribe:} A helper that drafts clinical notes during a conversation, with consent.
+  \item \textbf{Health record:} The system where a patient's care details are safely stored.
+\end{itemize}
+
+\vspace{1em}
+\noindent\textit{For technical details, see the developer docs in \texttt{docs\/} and the architecture notes in \texttt{Algorithm.md}.}
+
+\end{document}

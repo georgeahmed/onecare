@@ -14,8 +14,8 @@ Start Here
 - Config: config/nhs_gp_defaults.yaml (callback_windows_by_priority)
  - A11y/i18n: team/frontend/engineer-03.md (RTL, high‑contrast, ICU messages)
 
-Status: in-progress (6/17 tasks complete)
-Progress: 35%
+Status: in-progress (12/17 tasks complete)
+Progress: 71%
 
 Dependencies
 - backend/engineer-03 (Triage outputs)
@@ -41,15 +41,16 @@ Completed
 - [x] FE-02.3 — Select slot → booking confirmation view — idempotency key generation and confirmation dialog wired to API (apps/portal/src/pages/Booking.tsx; apps/portal/src/components/booking/ConfirmBooking.tsx; apps/portal/src/lib/booking.ts).
 - [x] FE-02.4 — Friendly error/conflict states for booking — conflict guidance, countdown, and focus management shipped (apps/portal/src/components/booking/BookingErrorView.tsx; apps/portal/test/booking.error.test.tsx).
 - [x] FE-02.5 — Accessibility (keyboard nav) for dialogs/forms — focus trap, listbox semantics, and axe coverage in place (apps/portal/src/components/booking/ConfirmBooking.tsx; apps/portal/src/components/booking/SearchSlots.tsx; apps/portal/test/a11y.test.ts).
+- [x] FE-02.6 — Calendar view with EA windows overlay (TZ-safe, high-contrast) — weekly grid renders enhanced access windows and slots with keyboard navigation and tests (apps/portal/src/components/booking/Calendar.tsx; apps/portal/src/lib/enhancedAccess.ts; apps/portal/test/booking/Calendar.test.tsx).
+- [x] FE-02.7 — Filters (in-person/phone), fairness notes, and empty states — fairness guidance, enriched empty states, and config parser wired into booking filters (apps/portal/src/components/booking/SearchSlots.tsx; apps/portal/src/lib/fairness.ts; apps/portal/test/fairness.test.ts).
+- [x] FE-02.8 — Performance: list virtualization, prefetch next-step assets — slot list virtualized with RUM signal and confirm prefetch (apps/portal/src/components/booking/SearchSlots.tsx; apps/portal/src/styles/global.css; apps/portal/test/booking/SearchSlots.test.tsx).
+- [x] FE-02.9 — Offline/spotty network UX (queue confirm, backoff, resume) — confirm dialog queues requests offline with exponential backoff and resume logic (apps/portal/src/components/booking/ConfirmBooking.tsx; apps/portal/src/lib/offlineQueue.ts; apps/portal/test/offlineQueue.test.ts).
 - [x] FE-02.10 — Error mapping (429/503/409/504) with friendly copy/backoff — error envelopes mapped to localized copy with retry handling (apps/portal/src/components/booking/BookingErrorView.tsx; docs/ERRORS.md).
+- [x] FE-02.11 — Observability (correlationId headers; RUM timing; PHI-safe logs) — telemetry helpers capture correlation IDs and timings for booking flows (apps/portal/src/lib/telemetry.ts; apps/portal/src/lib/api.ts; apps/portal/src/pages/Booking.tsx).
+- [x] FE-02.12 — Internationalization & Localization (labels/RTL/date-time) — added Arabic locale, RTL-aware layouts, and locale-aware booking copy (apps/portal/src/i18n/index.tsx; apps/portal/src/components/booking/*; apps/portal/src/styles/global.css).
+- [x] FE-02.14 — Testing: e2e booking flow, a11y (axe), contract (Ajv), unit — added booking cache/unit tests, Ajv contract coverage, and Playwright guidance (apps/portal/test/*; apps/portal/tests/e2e/booking.spec.ts; apps/portal/README.md).
 
 Incomplete
-- [ ] FE-02.6 — Calendar view with EA windows overlay (TZ-safe, high-contrast) — outstanding: no calendar component; booking UI limited to list view (apps/portal/src/components/booking).
-- [ ] FE-02.7 — Filters (in-person/phone), fairness notes, and empty states — filters exist but fairness messaging/CTA absent (apps/portal/src/components/booking/SearchSlots.tsx).
-- [ ] FE-02.8 — Performance: list virtualization, prefetch next-step assets — current slot rendering is simple map without virtualization or asset prefetch (apps/portal/src/components/booking/SearchSlots.tsx).
-- [ ] FE-02.9 — Offline/spotty network UX (queue confirm, backoff, resume) — no offline queue or resume logic in booking flow (apps/portal/src/pages/Booking.tsx; apps/portal/src/lib/api.ts).
-- [ ] FE-02.11 — Observability (correlationId headers; RUM timing; PHI-safe logs) — confirm adds headers but search lacks correlationId and no telemetry helpers exist (apps/portal/src/lib/api.ts).
-- [ ] FE-02.12 — Internationalization & Localization (labels/RTL/date-time) — translations present for en/es, yet RTL layout handling and locale-driven direction still pending (apps/portal/src/i18n/index.tsx; apps/portal/src/styles/global.css).
 - [ ] FE-02.13 — State/data architecture (idempotent confirm; cancel/retry) — idempotency handled, but cache layer/state context and documentation not yet built (apps/portal/src/pages/Booking.tsx; missing apps/portal/src/lib/data.ts).
 - [ ] FE-02.14 — Testing: e2e booking flow, a11y (axe), contract (Ajv), unit — unit/a11y tests exist but no e2e or Ajv contract coverage yet (apps/portal/test).
 - [ ] FE-02.15 — Documentation & microcopy guidelines (booking UX) — portal README and conventions lack booking microcopy guidance (apps/portal/README.md missing; docs/CONVENTIONS.md untouched).

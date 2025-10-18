@@ -13,8 +13,8 @@ Start Here
 - Algorithm.md: SLOs under 12) Observability; Telephony Parity sequence
 - Tools: choose k6/Locust; integrate with CI artifacts
 
-Status: in-progress
-Progress: 86%
+Status: stable
+Progress: 100%
 
 Dependencies
 - telephony-voice team (IVR/ASR)
@@ -26,10 +26,5 @@ Platform Checklist (pre-flight)
 - Stable endpoints for telephony parity tests; no PII in logs/artifacts.
 
 Tasks
-- [x] QA-02.1 — k6 baseline load for /safety-check (latency/throughput)
-- [x] QA-02.2 — Triage flow load test (publish triage.input → tasks.created)
-- [x] QA-02.3 — Booking flow load test (search/create)
-- [x] QA-02.4 — Telephony parity flow checks (IVR → ASR → intent)
-- [x] QA-02.5 — CI integration with SLO thresholds + artifacts
-- [x] QA-02.6 — Alert SLO tests
-- [ ] QA-02.5 — CI integration with SLO thresholds + artifacts
+- Completed items: QA-02.1 → QA-02.6 (see `team/qa-automation/Completed Tasks/`).
+- Backlog: none assigned.

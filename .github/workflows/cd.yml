@@ -1,0 +1,134 @@
+name: CD
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: 'Set to true to force production promotion (requires environment approval)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      skipped: ${{ steps.mode.outputs.skip }}
+    steps:
+      - name: Determine deployment mode
+        id: mode
+        env:
+          KUBE_CONFIG_STAGING: ${{ secrets.KUBE_CONFIG_STAGING }}
+        run: |
+          if [ -z "${KUBE_CONFIG_STAGING}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Staging deploy skipped::KUBE_CONFIG_STAGING secret not configured."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.mode.outputs.skip != 'true'
+
+      - uses: azure/setup-kubectl@v4
+        if: steps.mode.outputs.skip != 'true'
+        with:
+          version: 'v1.30.0'
+
+      - name: Deploy to staging
+        if: steps.mode.outputs.skip != 'true'
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_STAGING }}
+          DEPLOY_NAMESPACE: ${{ secrets.STAGING_NAMESPACE }}
+        run: bash scripts/ci/deploy.sh staging standard
+
+  staging-smoke:
+    needs: deploy-staging
+    if: ${{ needs.deploy-staging.outputs.skipped != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate staging base URL
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+        run: |
+          if [ -z "${STAGING_BASE_URL}" ]; then
+            echo "::error title=Missing staging base URL::Set the STAGING_BASE_URL secret to enable smoke checks."
+            exit 1
+          fi
+
+      - name: Run staging smoke tests
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          CORRELATION_ID: staging-${{ github.run_id }}-${{ github.run_number }}
+        run: bash scripts/ci/http_smoke.sh "${STAGING_BASE_URL}"
+
+  promote-production:
+    needs:
+      - deploy-staging
+      - staging-smoke
+    if: ${{ needs.deploy-staging.outputs.skipped != 'true' && (github.event_name == 'workflow_dispatch' && inputs.promote == 'true' || github.event_name != 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ secrets.PROD_BASE_URL }}
+    steps:
+      - name: Determine production deployment mode
+        id: prod-mode
+        env:
+          KUBE_CONFIG_PRODUCTION: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+        run: |
+          if [ -z "${KUBE_CONFIG_PRODUCTION}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Production deploy skipped::KUBE_CONFIG_PRODUCTION secret not configured."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.prod-mode.outputs.skip != 'true'
+
+      - uses: azure/setup-kubectl@v4
+        if: steps.prod-mode.outputs.skip != 'true'
+        with:
+          version: 'v1.30.0'
+
+      - name: Deploy production canary
+        if: steps.prod-mode.outputs.skip != 'true'
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+          DEPLOY_NAMESPACE: ${{ secrets.PROD_NAMESPACE }}
+        run: bash scripts/ci/deploy.sh production canary
+
+      - name: Canary bake window
+        if: steps.prod-mode.outputs.skip != 'true'
+        run: sleep 60
+
+      - name: Promote production rollout
+        if: steps.prod-mode.outputs.skip != 'true'
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+          DEPLOY_NAMESPACE: ${{ secrets.PROD_NAMESPACE }}
+        run: bash scripts/ci/deploy.sh production standard
+
+      - name: Post-deploy SLO guard
+        if: steps.prod-mode.outputs.skip != 'true'
+        run: bash scripts/ci/slo_guard.sh
+
+      - name: Production smoke checks
+        if: steps.prod-mode.outputs.skip != 'true'
+        env:
+          PROD_BASE_URL: ${{ secrets.PROD_BASE_URL }}
+          CORRELATION_ID: prod-${{ github.run_id }}-${{ github.run_number }}
+        run: |
+          if [ -z "${PROD_BASE_URL}" ]; then
+            echo "::notice title=Skipping production smoke::PROD_BASE_URL not set."
+            exit 0
+          fi
+          bash scripts/ci/http_smoke.sh "${PROD_BASE_URL}"

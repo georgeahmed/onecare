@@ -1,8 +1,8 @@
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { PortalSubmission, SafetyDecision } from '@onecare/events';
-import type { AuthContext } from '@onecare/security';
+import type { AuthContext, ConsentDecision, ConsentCheckOptions } from '@onecare/security';
 import type { MessageBus } from '@onecare/bus';
-import type { FhirBundle, FhirRepository, IdempotencyStore } from '@onecare/ports';
+import type { AuditEvent as LedgerAuditEvent, AuditOutcome, FhirBundle, FhirRepository, IdempotencyStore } from '@onecare/ports';
 import type { ConsentEvidence } from './adapters/security';
 import type { ErrorCode } from './application/error';
 import type { GuardOptions } from './adapters/services/callWithGuard';
@@ -24,13 +24,13 @@ export interface ShadowSafetyGateContext {
 
 export interface SecurityServices {
   verifySignatureAndReplayGuard(authHeader: string | undefined, requestId: string): Promise<boolean>;
-  authorize(
-    actor: AuthContext['actor'],
-    action: string,
-    patientId?: string,
-    scope?: string[],
-  ): Promise<boolean>;
-  checkConsent(patientId: string, purpose: string, resources: readonly string[]): Promise<boolean>;
+  authorize(actor: AuthContext['actor'], action: string, patientId?: string, scope?: string[]): Promise<boolean>;
+  checkConsent(
+    patientId: string,
+    purpose: string,
+    resources: readonly string[],
+    options?: ConsentCheckOptions,
+  ): Promise<ConsentDecision>;
 }
 
 export interface OrchestratorContext extends MachineContext {
@@ -81,10 +81,15 @@ export interface OrchestratorContext extends MachineContext {
   bus: MessageBus;
   triageTopic: string;
   busHeaders?: Record<string, string>;
+  busPublishOptions: {
+    timeoutMs?: number;
+    maxRetries?: number;
+    baseDelayMs?: number;
+  };
 
   // Auditing
-  emitAudit: (type: string, details: Record<string, unknown>) => Promise<void>;
-  recordAudit: (type: string, details: Record<string, unknown>) => void;
+  emitAudit: (type: string, options?: AuditRecordOptions) => Promise<void>;
+  recordAudit: (type: string, options?: AuditRecordOptions) => LedgerAuditEvent;
 
   // Result
   result?: SafetyDecision;
@@ -94,3 +99,11 @@ export interface OrchestratorContext extends MachineContext {
 }
 
 export type OrchestratorEvent = MachineEvent;
+
+export interface AuditRecordOptions {
+  actor?: AuthContext['actor'] | null;
+  subjectRef?: string | null;
+  outcome?: AuditOutcome | null;
+  reasonCode?: string | null;
+  details?: Record<string, unknown> | null;
+}

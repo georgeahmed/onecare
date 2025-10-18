@@ -16,7 +16,7 @@ Contracts To Validate
   - Egress: `schemas/portal/notify.json` for `Topics.portal.notify`. Validate idempotency key computation (minute-truncated timestamp).
 - Triage
   - Ingress: `schemas/triage/triage-input.json` from bus.
-  - Egress: `schemas/tasks/task-created.json` on successful Task creation; `tasks.updated` for SLA aging.
+  - Egress: `schemas/triage/triage-decision.json` for decision envelopes and `schemas/tasks/task-created.json` on successful Task creation; `tasks.updated` for SLA aging.
 - Booking
   - Ingress: `schemas/booking/booking-search-request.json` for search handler.
   - Egress: `schemas/booking/appointment-created.json` after write-back.
@@ -40,4 +40,3 @@ Execution Notes
 - Place tests near services under `apps/*/test` or a shared `tests/contracts/*` suite.
 - Keep tests deterministic; use fixtures committed in `tests/fixtures/*`.
 - Avoid network access; use fakes for ports/bus.
-

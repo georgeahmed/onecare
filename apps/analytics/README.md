@@ -20,3 +20,4 @@ Rollups
 Quality Checks
 - Run `npm run metrics:quality` (or `node scripts/analytics_quality.js`) to generate a markdown report highlighting missing fields and numeric outliers. Configure via `ANALYTICS_QUALITY_ZSCORE`, `ANALYTICS_SINK_PATH`, and `ANALYTICS_QUALITY_REPORT` or CLI flags (`--input`, `--output`, `--zscore`).
 - Set `ANALYTICS_QUALITY_QUARANTINE` (or `--quarantine`) to capture quarantined records as NDJSON for follow-up triage.
+- Run `npm run analytics:quarantine:export` (or `node scripts/analytics_quarantine_export.js`) to compress the NDJSON and copy it to long-term storage. Configure with `ANALYTICS_QUARANTINE_ARCHIVE_DIR`, `ANALYTICS_QUARANTINE_RETENTION_DAYS`, and optional `ANALYTICS_QUARANTINE_DELETE_SOURCE`.

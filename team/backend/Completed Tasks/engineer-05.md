@@ -30,6 +30,12 @@
 - [x] **BE-05.10 — Health/readiness & graceful shutdown**  \
   Evidence: `apps/pharmacy-router/src/adapters/consumer.ts:101` implements controlled start/stop with idle draining via semaphore for clean shutdown diagnostics.
 
+- [x] **BE-05.11 — Documentation & ADRs**  \
+  Evidence: `apps/pharmacy-router/README.md:1` documents architecture/operations and `docs/adr/2025-10-15-pharmacy-router-strategy.md:1` captures the ingress/egress + notification decisions.
+
+- [x] **BE-05.12 — Patient notification adapter**  \
+  Evidence: `apps/pharmacy-router/src/adapters/patient-notifier.ts:1` implements consent-aware notifications with retries/idempotency and `apps/pharmacy-router/test/patient-notifier.test.ts:1` exercises happy-path, consent skip, and retry exhaustion flows.
+
 - [x] **BE-05.13 — GP fallback path**  \
   Evidence: `apps/pharmacy-router/src/application/pharmacy.state.ts:141` raises escalation Tasks on ineligibility/referral failure.
 

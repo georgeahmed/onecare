@@ -1,7 +1,7 @@
 import { withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, createEnvelope, type AuditEvent, type IcsReferralAck } from '@onecare/events';
-import { logger } from '@onecare/observability';
+import { logger, summariseForDlq } from '@onecare/observability';
 import type { AutomationTaskCreation } from '../application/automation.rules';
 
 export interface PublishOptions {
@@ -127,9 +127,9 @@ export async function publishWithGuard<T>(
     }
   }
   // Fallback to DLQ
-  const dlqPayload: DLQMessage<T> = {
+  const dlqPayload: DLQMessage<unknown> = {
     originalTopic: topic,
-    payload,
+    payload: summariseForDlq ? summariseForDlq(payload) : fallbackDlqSummary(payload),
     correlationId: normalizedCorrelationId,
     error: lastErr instanceof Error ? lastErr.message : String(lastErr),
     ts: new Date().toISOString(),
@@ -243,4 +243,15 @@ export async function publishReferralAck(
 
 export function __resetPublishCircuitBreakersForTest(): void {
   circuitBreakers.clear();
+}
+
+function fallbackDlqSummary(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+  const summary: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    summary[key] = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+  }
+  return { redacted: true, fields: summary };
 }

@@ -22,17 +22,31 @@ const fsPromises = fs.promises;
 const path = require('path');
 const readline = require('readline');
 
-const FEATURE_SCHEMAS = {
+const DEFAULT_FEATURE_SCHEMAS = {
   'triage-core': 'https://onecare/schemas/features/triage-core.json',
   'acuity-signal': 'https://onecare/schemas/features/acuity-signal.json',
 };
 
+let FEATURE_SCHEMAS = { ...DEFAULT_FEATURE_SCHEMAS };
+
 let validateFeaturePayload = null;
 let getFeatureSchemaId = null;
+let listFeatureSets = null;
 
 try {
   // eslint-disable-next-line global-require
-  ({ validateFeaturePayload, getFeatureSchemaId } = require('@onecare/ports'));
+  ({ validateFeaturePayload, getFeatureSchemaId, listFeatureSets } = require('@onecare/ports'));
+  if (typeof listFeatureSets === 'function') {
+    const registrySets = listFeatureSets();
+    if (Array.isArray(registrySets) && registrySets.length > 0) {
+      FEATURE_SCHEMAS = registrySets.reduce((acc, set) => {
+        if (set?.name && set?.schemaId) {
+          acc[set.name] = set.schemaId;
+        }
+        return acc;
+      }, {});
+    }
+  }
 } catch (err) {
   console.warn('[feature-backfill] unable to load feature registry helpers from @onecare/ports', { message: err.message });
 }
@@ -50,6 +64,21 @@ if (typeof validateFeaturePayload !== 'function') {
 }
 
 if (typeof getFeatureSchemaId !== 'function') {
+  try {
+    const registryPath = path.resolve(__dirname, '..', 'schemas', 'features', 'registry.json');
+    const registryRaw = fs.readFileSync(registryPath, 'utf8');
+    const registry = JSON.parse(registryRaw);
+    if (registry?.featureSets && Array.isArray(registry.featureSets)) {
+      FEATURE_SCHEMAS = registry.featureSets.reduce((acc, set) => {
+        if (set?.name && set?.schemaId) {
+          acc[set.name] = set.schemaId;
+        }
+        return acc;
+      }, { ...FEATURE_SCHEMAS });
+    }
+  } catch (err) {
+    console.warn('[feature-backfill] unable to load registry.json from disk', { message: err.message });
+  }
   getFeatureSchemaId = (featureSet) => FEATURE_SCHEMAS[featureSet];
 }
 
@@ -195,7 +224,10 @@ async function run() {
   const featureSet = args.featureSet || DEFAULT_FEATURE_SET;
 
   if (!getFeatureSchemaId(featureSet)) {
-    console.error('[feature-backfill] unknown feature set', { featureSet });
+    console.error('[feature-backfill] unknown feature set', {
+      featureSet,
+      available: Object.keys(FEATURE_SCHEMAS),
+    });
     process.exitCode = 1;
     return;
   }

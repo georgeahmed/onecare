@@ -33,10 +33,14 @@ import {
   type AutomationTaskCreation,
 } from './automation.rules';
 import { SpanStatusCode } from '@opentelemetry/api';
+import { AuditSpool } from './audit.spool';
+import { ProcessingLimiter } from './backpressure';
 
 const routingDecisionCounter = createCounter('ics.routing.decisions_total');
 const routingBlockedCounter = createCounter('ics.routing.blocked_total');
 const routingRateLimitedCounter = createCounter('ics.routing.rate_limited_total');
+const routingLatencyHistogram = createHistogram('ics.routing.latency_ms');
+const processingOverloadCounter = createCounter('ics.backpressure.overload_total');
 const ackPublishedCounter = createCounter('ics.ack.published_total');
 const ackFailureCounter = createCounter('ics.ack.failed_total');
 const ackDuplicateCounter = createCounter('ics.ack.duplicate_total');
@@ -148,6 +152,9 @@ export interface IcsContext extends MachineContext {
   ackLatencyMs?: number;
   responseHeaders?: Record<string, string>;
   retryAfterSeconds?: number;
+  auditSpool?: AuditSpool;
+  processingLimiter?: ProcessingLimiter;
+  processingRelease?: (() => void) | null;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -202,6 +209,20 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     if (!ctx.auditIntents) {
       ctx.auditIntents = [];
     }
+    if (ctx.processingLimiter && !ctx.processingRelease) {
+      if (ctx.processingLimiter.isOverloaded()) {
+        applyBackpressureOutcome(ctx, ctx.processingLimiter, 'overloaded');
+        releaseProcessing(ctx);
+        return 'Validated';
+      }
+      try {
+        ctx.processingRelease = await ctx.processingLimiter.acquire(ctx.id ?? 'ics-message');
+      } catch (error) {
+        applyBackpressureOutcome(ctx, ctx.processingLimiter, 'queue_overflow');
+        releaseProcessing(ctx);
+        return 'Validated';
+      }
+    }
     if (!ctx.client) {
       throw new Error('ics_client_missing');
     }
@@ -226,6 +247,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       };
       pushAudit(ctx, 'ics.referral.validation_failed', { reason: validation.reason }, undefined, this.now);
       routingDecisionCounter.add(1, { outcome: 'invalid' });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -264,6 +286,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
         this.now,
       );
       routingDecisionCounter.add(1, { outcome: 'invalid' });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -321,6 +344,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       });
       routingDecisionCounter.add(1, { outcome: 'blocked', organisationId: normalisedOrg });
       routingBlockedCounter.add(1, { organisationId: normalisedOrg });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -362,6 +386,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       });
       routingDecisionCounter.add(1, { outcome: 'rate_limited', organisationId: normalisedOrg });
       routingRateLimitedCounter.add(1, { organisationId: normalisedOrg });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -387,6 +412,7 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
     if (ctx.routingOutcome?.status === 'invalid') {
       ctx.invalid = true;
+      releaseProcessing(ctx);
       return 'Invalid';
     }
     if (ctx.blocked) {
@@ -395,6 +421,7 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
         httpStatus: 403,
         error: createErrorEnvelope('forbidden', 'organisation_not_allowed'),
       };
+      releaseProcessing(ctx);
       return 'Blocked';
     }
     if (ctx.rateLimited) {
@@ -405,10 +432,17 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
         routeDecision: ctx.routeDecision ?? buildRouteDecisionFromContext(ctx),
         error: createErrorEnvelope('too_many_requests', 'rate_limit_exceeded'),
       };
+      releaseProcessing(ctx);
       return 'RateLimited';
     }
     if (!ctx.routePolicy) {
       throw new Error('route_policy_missing');
+    }
+    if (typeof ctx.receivedAtMs === 'number') {
+      const latency = Math.max(0, Date.now() - ctx.receivedAtMs);
+      routingLatencyHistogram.record(latency, {
+        organisationId: ctx.organisationId ?? 'unknown',
+      });
     }
     return 'Routed';
   }
@@ -429,6 +463,7 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
     if (!ctx.bus) {
       throw new Error('ics_bus_missing');
     }
+    try {
     const destinationOrgId = ctx.routeDecision?.destinationOrgId ?? ctx.organisationId ?? ctx.referral.org;
     const correlationId = ctx.correlationId;
     const idempotencyKey = deriveAckIdempotencyKey(ctx, destinationOrgId);
@@ -526,6 +561,9 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
     }
 
     return 'Acked';
+    } finally {
+      releaseProcessing(ctx);
+    }
   }
 }
 
@@ -535,6 +573,7 @@ export class InvalidState extends BaseState<IcsContext, IcsEvent> {
   }
 
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(_ctx);
     return 'Invalid';
   }
 }
@@ -689,12 +728,68 @@ function deriveAutomationDebounceTtl(tasks: AutomationTaskCreation[]): number | 
   return Math.max(...windows);
 }
 
+function applyBackpressureOutcome(
+  ctx: IcsContext,
+  limiter: ProcessingLimiter,
+  reason: 'overloaded' | 'queue_overflow',
+): void {
+  const retryAfterSeconds = limiter.retryAfterSecondsValue;
+  ctx.rateLimited = true;
+  ctx.blocked = false;
+  ctx.retryAfterSeconds = retryAfterSeconds;
+  ctx.responseHeaders ??= {};
+  ctx.responseHeaders['Retry-After'] = String(retryAfterSeconds);
+  ctx.routePolicy ??= { endpoint: 'ics-backpressure', rateLimit: limiter.capacity } as IcsOrganisationPolicy;
+  const decision = ctx.routeDecision ?? buildRouteDecisionFromContext(ctx);
+  ctx.routeDecision = decision;
+  ctx.routingOutcome = {
+    status: 'rate_limited',
+    httpStatus: 429,
+    policy: ctx.routePolicy!,
+    retryAfterMs: retryAfterSeconds * 1_000,
+    routeDecision: decision,
+    error: createErrorEnvelope('too_many_requests', 'processing_overloaded', {
+      reason,
+      queueSize: limiter.queueSize,
+      inflight: limiter.inflightCount,
+      capacity: limiter.capacity,
+    }),
+  };
+  processingOverloadCounter.add(1, { reason });
+  pushAudit(
+    ctx,
+    'ics.referral.backpressure',
+    {
+      reason,
+      queueSize: limiter.queueSize,
+      inflight: limiter.inflightCount,
+      capacity: limiter.capacity,
+    },
+    ctx.correlationId,
+  );
+}
+
+function releaseProcessing(ctx: IcsContext): void {
+  const release = ctx.processingRelease;
+  if (!release) return;
+  try {
+    release();
+  } catch (error) {
+    logger.error('ics.backpressure.release_failed', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    ctx.processingRelease = null;
+  }
+}
+
 export class AckedState extends BaseState<IcsContext, IcsEvent> {
   constructor() {
     super('Acked');
   }
 
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(_ctx);
     return 'Acked';
   }
 }
@@ -715,6 +810,7 @@ function pushAudit(
     details,
   };
   ctx.auditIntents?.push(event);
+  ctx.auditSpool?.enqueue(event, correlationId ?? undefined);
 }
 
 function deriveAckIdempotencyKey(ctx: IcsContext, destinationOrgId: string): string {
@@ -725,4 +821,17 @@ function deriveAckIdempotencyKey(ctx: IcsContext, destinationOrgId: string): str
   const envelopeId = ctx.referralEnvelope?.id ?? 'unknown-envelope';
   const orgId = destinationOrgId?.trim().length ? destinationOrgId : 'unknown-org';
   return `ics:ack:${orgId}:${referralId}:${envelopeId}`;
+}
+
+export function initialiseIcsContext(
+  ctx: IcsContext,
+  deps: { auditSpool?: AuditSpool; processingLimiter?: ProcessingLimiter },
+): IcsContext {
+  if (deps.auditSpool) {
+    ctx.auditSpool = deps.auditSpool;
+  }
+  if (deps.processingLimiter) {
+    ctx.processingLimiter = deps.processingLimiter;
+  }
+  return ctx;
 }

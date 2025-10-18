@@ -106,6 +106,13 @@ interface RouteOptionsResolved {
   rateLimitPerMinute?: number;
 }
 
+interface RouteCredentialUpdate {
+  headers?: Record<string, string>;
+  apiKey?: string | null;
+  correlationHeader?: string;
+  tls?: IcsTlsConfig;
+}
+
 const DEFAULT_TIMEOUT_MS = 3_000;
 const DEFAULT_CORRELATION_HEADER = 'x-correlation-id';
 const DEFAULT_RETRY_POLICY: RetryPolicy = {
@@ -317,6 +324,17 @@ export class IcsHttpClient implements IcsClient {
     );
   }
 
+  refreshRouteCredentials(organisationId: string | 'default', update: RouteCredentialUpdate): void {
+    const target =
+      organisationId === 'default'
+        ? this.defaultRoute
+        : this.routes.get(normaliseOrgId(organisationId));
+    if (!target) {
+      throw new Error('ics_route_missing');
+    }
+    applyRouteCredentialUpdate(target, update);
+  }
+
   private async executeWithGuard(
     operation: 'referral' | 'ack',
     route: RouteState,
@@ -507,7 +525,7 @@ function createRouteState(key: string, options: IcsRouteOptions): RouteState {
   const safeEndpoint = ensureSafeIcsEndpoint(options.endpoint);
   const resolved: RouteOptionsResolved = {
     endpoint: safeEndpoint,
-    headers: { ...(options.headers ?? {}) },
+    headers: sanitizeHeaders(options.headers),
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     retry: normalizeRetryPolicy(options.retry),
     circuitBreaker: normalizeCircuitPolicy(options.circuitBreaker),
@@ -653,6 +671,50 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function sanitizeHeaders(headers?: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (headers) {
+    for (const [key, value] of Object.entries(headers)) {
+      if (typeof value !== 'string') continue;
+      const trimmedKey = key.trim();
+      const trimmedValue = value.trim();
+      if (!trimmedKey || !trimmedValue) continue;
+      result[trimmedKey] = trimmedValue;
+    }
+  }
+  if (!result['Content-Type']) {
+    result['Content-Type'] = 'application/json';
+  }
+  if (!result.Accept) {
+    result.Accept = 'application/json';
+  }
+  return result;
+}
+
+function applyRouteCredentialUpdate(route: RouteState, update: RouteCredentialUpdate): void {
+  if (update.headers || update.apiKey !== undefined) {
+    const headersSource = update.headers ? { ...update.headers } : { ...route.options.headers };
+    if (update.apiKey !== undefined) {
+      const trimmed = update.apiKey?.trim();
+      if (!trimmed) {
+        delete headersSource.Authorization;
+      } else {
+        headersSource.Authorization = trimmed.startsWith('Bearer ')
+          ? trimmed
+          : `Bearer ${trimmed}`;
+      }
+    }
+    route.options.headers = sanitizeHeaders(headersSource);
+  }
+  if (update.correlationHeader !== undefined) {
+    const trimmed = update.correlationHeader?.trim() ?? '';
+    route.options.correlationHeader = trimmed.length > 0 ? trimmed : DEFAULT_CORRELATION_HEADER;
+  }
+  if (update.tls !== undefined) {
+    route.options.tls = update.tls || undefined;
+  }
 }
 
 function ensureSafeIcsEndpoint(candidate: string): string {

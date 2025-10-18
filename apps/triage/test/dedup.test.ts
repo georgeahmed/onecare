@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { getCounterRecords, getHistogramRecords, resetMetrics } from '@onecare/observability';
 import { DedupStore } from '../src/application/dedup';
 
 describe('DedupStore', () => {
   let store: DedupStore;
 
-  beforeEach(() => {
-    store = new DedupStore({ maxEntriesPerPatient: 3 });
-  });
+beforeEach(() => {
+  resetMetrics();
+  store = new DedupStore({ maxEntriesPerPatient: 3 });
+});
 
   it('identifies duplicates within the window above threshold', () => {
     const windowMs = 60 * 60 * 1_000;
@@ -33,6 +35,9 @@ describe('DedupStore', () => {
     expect(second.isDuplicate).toBe(true);
     expect(second.similarity).toBeGreaterThanOrEqual(threshold);
     expect(second.reference?.narrative).toContain('chest pain');
+    expect(getCounterRecords('triage.dedup.hit')).toHaveLength(1);
+    expect(getCounterRecords('triage.dedup.miss')).toHaveLength(1);
+    expect(getHistogramRecords('triage.dedup.similarity').length).toBeGreaterThan(0);
   });
 
   it('drops stale entries outside the dedup window', () => {
@@ -74,5 +79,7 @@ describe('DedupStore', () => {
     }
 
     expect(store.count('patient-3')).toBeLessThanOrEqual(3);
-  });
+    expect(getCounterRecords('triage.dedup.miss').length).toBeGreaterThan(0);
+    expect(getCounterRecords('triage.dedup.hit').length).toBeGreaterThan(0);
+});
 });

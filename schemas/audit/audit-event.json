@@ -5,12 +5,17 @@
   "type": "object",
   "properties": {
     "type": { "type": "string" },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "ts": { "type": "string", "format": "date-time" },
     "correlationId": { "type": ["string", "null"] },
-    "actor": { "type": ["string", "null"] },
-    "details": { "type": ["object", "null"] }
+    "actorRef": { "type": ["string", "null"] },
+    "subjectRef": { "type": ["string", "null"] },
+    "outcome": { "type": ["string", "null"] },
+    "reasonCode": { "type": ["string", "null"] },
+    "details": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    }
   },
-  "required": ["type", "timestamp"],
+  "required": ["type", "ts"],
   "additionalProperties": false
 }
-

@@ -4,6 +4,7 @@ import { publishWithGuard, publishAutomationTasks, __resetPublishCircuitBreakers
 import { replayDlqMessage } from '../src/dev/replay';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { AutomationTaskCreation } from '../src/application/automation.rules';
+import type { IdempotencyStore } from '@onecare/ports';
 
 class FlakyBus implements MessageBus {
   public publishes: { topic: string; payload: unknown; headers?: Record<string, string> }[] = [];
@@ -60,6 +61,7 @@ describe('publishWithGuard', () => {
     expect(dlqEnvelope.correlationId).toBe('cid-2');
     expect(dlqEnvelope.payload.originalTopic).toBe('ics.referral.ack');
     expect(dlqEnvelope.payload.correlationId).toBe('cid-2');
+    expect(dlqEnvelope.payload.payload).toMatchObject({ redacted: true });
     expect(dlq!.headers?.['x-original-topic']).toBe('ics.referral.ack');
   });
 
@@ -72,6 +74,7 @@ describe('publishWithGuard', () => {
     const dlqEnvelope = dlq!.payload as { topic: string; payload: DLQMessage };
     expect(dlqEnvelope.topic).toBe(Topics.broker.deadLetter);
     expect(dlqEnvelope.payload.error).toBe('publish_timeout');
+    expect(dlqEnvelope.payload.payload).toMatchObject({ redacted: true });
     expect(dlq!.headers?.['x-original-topic']).toBe('ics.referral.ack');
   });
 
@@ -181,4 +184,39 @@ describe('replayDlqMessage', () => {
     expect(call.headers?.['x-correlation-id']).toBe('corr-replay:replay');
     expect(call.headers?.['x-original-topic']).toBe(Topics.ics.referralAck);
   });
+
+  it('skips duplicate replays when idempotency store records key', async () => {
+    const bus = new RecordingBus();
+    const store = createInMemoryIdempotencyStore();
+    const dlq = {
+      originalTopic: Topics.ics.referralAck,
+      payload: { referralId: 'ref-dup', accepted: true },
+      correlationId: 'corr-dup',
+      ts: '2025-01-01T00:00:00.000Z',
+    } as const;
+
+    await replayDlqMessage(bus, dlq, { idempotencyStore: store, ttlSeconds: 120 });
+    expect(bus.publishes).toHaveLength(1);
+
+    await replayDlqMessage(bus, dlq, { idempotencyStore: store, ttlSeconds: 120 });
+    expect(bus.publishes).toHaveLength(1);
+  });
 });
+
+function createInMemoryIdempotencyStore(): IdempotencyStore {
+  const keys = new Map<string, number>();
+  return {
+    exists: async (key: string) => keys.has(key),
+    put: async (key: string, ttlSeconds: number) => {
+      keys.set(key, ttlSeconds);
+    },
+    reserve: async (key: string, ttlSeconds: number) => {
+      if (keys.has(key)) return 'exists';
+      keys.set(key, ttlSeconds);
+      return 'reserved';
+    },
+    delete: async (key: string) => {
+      keys.delete(key);
+    },
+  };
+}

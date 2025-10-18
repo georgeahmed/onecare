@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: safety-error-rate
+  labels:
+    team: devops-sre
+    service: orchestrator
+spec:
+  groups:
+    - name: safety-error-rate
+      rules:
+        - alert: SafetyCheckErrorRateWarning
+          expr: |
+            (
+              sum(rate(http_server_requests_total{route="/safety-check",status=~"5.."}[5m])) /
+              max(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
+            ) > 0.005
+          for: 10m
+          labels:
+            severity: warning
+            slo: error-rate
+            team: devops-sre
+            service: orchestrator
+          annotations:
+            summary: "Safety-check error rate >0.5% (warning)"
+            description: "Safety-check error rate exceeded 0.5% over the last 10 minutes."
+            runbook: https://onecare/runbooks/triage-latency
+        - alert: SafetyCheckErrorRateCritical
+          expr: |
+            (
+              sum(rate(http_server_requests_total{route="/safety-check",status=~"5.."}[5m])) /
+              max(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
+            ) > 0.01
+          for: 10m
+          labels:
+            severity: critical
+            slo: error-rate
+            team: devops-sre
+            service: orchestrator
+          annotations:
+            summary: "Safety-check error rate >1% (critical)"
+            description: "Safety-check error rate exceeded 1% over the last 10 minutes."
+            runbook: https://onecare/runbooks/triage-latency

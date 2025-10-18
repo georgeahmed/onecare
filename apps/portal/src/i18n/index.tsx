@@ -4,7 +4,7 @@ import enMessages from './messages/en';
 import { generatePseudoMessages } from './pseudo';
 
 const DEV_PSEUDO_LOCALE = 'pseudo' as const;
-const REAL_LOCALES = ['en', 'es'] as const;
+const REAL_LOCALES = ['en', 'es', 'ar'] as const;
 
 export type RealLocale = typeof REAL_LOCALES[number];
 export type Locale = RealLocale | typeof DEV_PSEUDO_LOCALE;
@@ -26,12 +26,14 @@ type LocaleContextValue = {
 const LOCALE_DEFINITIONS: Record<Locale, LocaleDefinition> = {
   en: { direction: 'ltr', labelId: 'locale.name.en' },
   es: { direction: 'ltr', labelId: 'locale.name.es' },
+  ar: { direction: 'rtl', labelId: 'locale.name.ar' },
   [DEV_PSEUDO_LOCALE]: { direction: 'ltr', labelId: 'locale.name.pseudo', devOnly: true }
 };
 
 const LOCALE_MESSAGE_LOADERS: Record<RealLocale, () => Promise<Record<string, string>>> = {
   en: async () => enMessages,
-  es: async () => import('./messages/es').then((module) => module.default)
+  es: async () => import('./messages/es').then((module) => module.default),
+  ar: async () => import('./messages/ar').then((module) => module.default)
 };
 
 const messageCache = new Map<Locale, Record<string, string>>([[ 'en', enMessages ]]);

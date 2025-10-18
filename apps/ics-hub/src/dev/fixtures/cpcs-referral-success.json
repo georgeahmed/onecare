@@ -1,0 +1,18 @@
+{
+  "organisationId": "PRACTICE1",
+  "serviceRequest": {
+    "id": "ref-success",
+    "patientReference": "Patient/1",
+    "presentingComplaintCode": "S76",
+    "consentTimestamp": "2025-10-12T11:00:00Z",
+    "metadata": {
+      "source": "sandbox",
+      "priority": "routine"
+    }
+  },
+  "summary": "Sandbox CPCS referral success",
+  "expected": {
+    "status": "accepted",
+    "reference": "cpcs-ref-success"
+  }
+}

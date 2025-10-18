@@ -2,6 +2,7 @@ import { logger } from '@onecare/observability';
 import type { AnalyzePortalSubmissionOptions } from '../adapters/services/safetyGate';
 import type { GuardOptions } from '../adapters/services/callWithGuard';
 import type { OrchestratorContext, ShadowSafetyGateContext } from '../types';
+import { safePatientReference } from '../support/privacy';
 
 function sanitizeEndpoint(raw?: string): string | undefined {
   if (!raw) return undefined;
@@ -104,9 +105,15 @@ export async function runShadowEvaluation(
       variant: config.variant,
     });
 
-    ctx.recordAudit(config.auditEvent, auditDetails);
+    const auditOptions = {
+      outcome: 'allow' as const,
+      reasonCode: 'shadow_evaluated',
+      subjectRef: safePatientReference(ctx.submission.patient?.id),
+      details: auditDetails,
+    };
+    ctx.recordAudit(config.auditEvent, auditOptions);
     try {
-      await ctx.emitAudit(config.auditEvent, auditDetails);
+      await ctx.emitAudit(config.auditEvent, auditOptions);
     } catch (auditError) {
       const auditReason = auditError instanceof Error ? auditError.message : String(auditError);
       logger.warn('safety.shadow.audit_failed', {

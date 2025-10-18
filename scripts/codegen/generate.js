@@ -22,6 +22,7 @@ const mappings = [
   { in: 'booking/booking-search-request.json', out: 'packages/events/src/contracts/booking.ts' },
   { in: 'booking/booking-search-response.json', out: 'packages/events/src/contracts/booking-search-response.ts' },
   { in: 'pharmacy/pharmacy-referral.json', out: 'packages/events/src/contracts/pharmacy.ts' },
+  { in: 'pharmacy/pharmacy-notification.json', out: 'packages/events/src/contracts/pharmacy-notification.ts' },
   { in: 'pharmacy/pharmacy-outcome.json', out: 'packages/events/src/contracts/pharmacy-outcome.ts' },
   { in: 'scribe/scribe-audio.json', out: 'packages/events/src/contracts/scribe.ts' },
   { in: 'safety/safety-decision.json', out: 'packages/events/src/contracts/safety.ts' },
@@ -38,6 +39,12 @@ const mappings = [
   { in: 'ics/referral-ack.json', out: 'packages/events/src/contracts/ics-referral-ack.ts' },
   { in: 'config/orchestrator.json', out: 'packages/config/src/contracts/orchestrator.ts' },
   { in: 'portal/notify.json', out: 'packages/events/src/contracts/portal.ts' },
+  { in: 'clinician/task-summary.json', out: 'packages/events/src/contracts/clinician-task-summary.ts' },
+  { in: 'clinician/task-detail.json', out: 'packages/events/src/contracts/clinician-task-detail.ts' },
+  { in: 'clinician/assign.json', out: 'packages/events/src/contracts/clinician-assign.ts' },
+  { in: 'clinician/resolve.json', out: 'packages/events/src/contracts/clinician-resolve.ts' },
+  { in: 'clinician/schedule-callback.json', out: 'packages/events/src/contracts/clinician-schedule-callback.ts' },
+  { in: 'clinician/book-slot.json', out: 'packages/events/src/contracts/clinician-book-slot.ts' },
 ];
 
 function ensureDir(p) {

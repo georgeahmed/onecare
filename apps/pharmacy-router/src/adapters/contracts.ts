@@ -1,8 +1,9 @@
 import { validate, type ValidationError as SchemaValidationError } from '@onecare/domain';
-import type { PharmacyOutcome, PharmacyReferral } from '@onecare/events';
+import type { PharmacyNotification, PharmacyOutcome, PharmacyReferral } from '@onecare/events';
 
 const PHARMACY_REFERRAL_SCHEMA_ID = 'https://onecare/schemas/pharmacy/pharmacy-referral.json';
 const PHARMACY_OUTCOME_SCHEMA_ID = 'https://onecare/schemas/pharmacy/pharmacy-outcome.json';
+const PHARMACY_NOTIFICATION_SCHEMA_ID = 'https://onecare/schemas/pharmacy/pharmacy-notification.json';
 
 export interface ContractViolation {
   path: string;
@@ -40,5 +41,12 @@ export function assertValidPharmacyOutcome(payload: PharmacyOutcome): void {
   const result = validate(PHARMACY_OUTCOME_SCHEMA_ID, payload);
   if (!result.ok) {
     throw new ContractValidationError(PHARMACY_OUTCOME_SCHEMA_ID, sanitizeErrors(result.errors));
+  }
+}
+
+export function assertValidPharmacyNotification(payload: PharmacyNotification): void {
+  const result = validate(PHARMACY_NOTIFICATION_SCHEMA_ID, payload);
+  if (!result.ok) {
+    throw new ContractValidationError(PHARMACY_NOTIFICATION_SCHEMA_ID, sanitizeErrors(result.errors));
   }
 }

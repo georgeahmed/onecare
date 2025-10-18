@@ -1,10 +1,15 @@
-import { setTimeout as delay } from 'node:timers/promises';
-import { logger } from '@onecare/observability';
-import type { AuditEvent as LedgerEvent, AuditLedger } from '@onecare/ports';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { logger, createCounter, createHistogram, redact as redactFields } from '@onecare/observability';
+import type { AuditEvent as LedgerEvent, AuditLedger, AuditOutcome } from '@onecare/ports';
+import { callWithGuard } from '../services/callWithGuard';
 
 interface AuditDetails {
-  correlationId?: string;
-  payload?: unknown;
+  correlationId?: string | null;
+  actorRef?: string | null;
+  subjectRef?: string | null;
+  outcome?: AuditOutcome | null;
+  reasonCode?: string | null;
+  details?: Record<string, unknown> | null;
 }
 
 interface BufferedAuditLedgerOptions {
@@ -19,6 +24,11 @@ interface BufferedEntry {
   event: LedgerEvent;
   attempts: number;
 }
+
+const writeOkCounter = createCounter('audit.write.ok');
+const writeFailCounter = createCounter('audit.write.fail');
+const queueDepthMetric = createHistogram('audit.queue.depth');
+const queueDropCounter = createCounter('audit.queue.drop');
 
 const DEFAULT_BUFFER_OPTIONS: BufferedAuditLedgerOptions = {
   maxQueueSize: 200,
@@ -44,14 +54,17 @@ class BufferedAuditLedger implements AuditLedger {
 
   async write(event: LedgerEvent): Promise<void> {
     if (this.queue.length >= this.options.maxQueueSize) {
-      logger.warn('audit.buffer.drop', {
+      const dropped = this.queue.shift();
+      queueDropCounter.add(1, { reason: 'queue_full' });
+      logger.warn('audit.queue.drop', {
         reason: 'queue_full',
-        size: this.queue.length,
-        type: event.type,
+        droppedType: dropped?.event.type,
+        droppedCorrelationId: dropped?.event.correlationId,
       });
-      return;
+      queueDepthMetric.record(this.queue.length);
     }
     this.queue.push({ event, attempts: 0 });
+    queueDepthMetric.record(this.queue.length);
     this.schedule();
   }
 
@@ -70,29 +83,39 @@ class BufferedAuditLedger implements AuditLedger {
     try {
       while (this.queue.length > 0) {
         const current = this.queue.shift()!;
+        queueDepthMetric.record(this.queue.length);
+        current.attempts += 1;
         try {
-          await this.writeWithTimeout(current.event);
+          await this.writeOnce(current);
+          writeOkCounter.add(1);
+          logger.info('audit.write.ok', {
+            type: current.event.type,
+            attempts: current.attempts,
+            correlationId: current.event.correlationId ?? undefined,
+          });
         } catch (error) {
-          const attempts = current.attempts + 1;
-          if (attempts >= this.options.maxAttempts) {
+          writeFailCounter.add(1);
+          const reason = error instanceof Error ? error.message : String(error);
+          logger.warn('audit.write.fail', {
+            type: current.event.type,
+            attempts: current.attempts,
+            correlationId: current.event.correlationId ?? undefined,
+            reason,
+          });
+          if (current.attempts >= this.options.maxAttempts) {
             logger.error('audit.write.dropped', {
               type: current.event.type,
-              attempts,
-              reason: error instanceof Error ? error.message : String(error),
+              attempts: current.attempts,
+              correlationId: current.event.correlationId ?? undefined,
+              reason,
             });
+            queueDropCounter.add(1, { reason: 'max_attempts' });
             continue;
           }
-          current.attempts = attempts;
           const delayMs = Math.min(
-            this.options.baseRetryDelayMs * 2 ** (attempts - 1),
+            this.options.baseRetryDelayMs * 2 ** (current.attempts - 1),
             this.options.maxRetryDelayMs,
           );
-          logger.warn('audit.write.retry', {
-            type: current.event.type,
-            attempts,
-            delayMs,
-            reason: error instanceof Error ? error.message : String(error),
-          });
           this.scheduleRetry(current, delayMs);
         }
       }
@@ -106,6 +129,13 @@ class BufferedAuditLedger implements AuditLedger {
     const handle = setTimeout(() => {
       this.pendingRetries = Math.max(0, this.pendingRetries - 1);
       this.queue.push(entry);
+      queueDepthMetric.record(this.queue.length);
+      logger.warn('audit.write.retry', {
+        type: entry.event.type,
+        attempts: entry.attempts,
+        delayMs,
+        correlationId: entry.event.correlationId ?? undefined,
+      });
       this.schedule();
     }, delayMs);
     if (typeof handle === 'object' && typeof (handle as { unref?: () => void }).unref === 'function') {
@@ -113,18 +143,38 @@ class BufferedAuditLedger implements AuditLedger {
     }
   }
 
-  private async writeWithTimeout(event: LedgerEvent): Promise<void> {
+  private async writeOnce(entry: BufferedEntry): Promise<void> {
+    const { event } = entry;
     if (this.options.writeTimeoutMs <= 0) {
       await this.base.write(event);
       return;
     }
-    const timeoutError = new Error('audit_write_timeout');
-    await Promise.race([
-      this.base.write(event),
-      delay(this.options.writeTimeoutMs).then(() => {
-        throw timeoutError;
-      }),
-    ]);
+    await callWithGuard(
+      'audit.write',
+      async (signal) => {
+        if (signal.aborted) {
+          const abortError = Object.assign(new Error('audit_write_aborted'), { code: 'audit_write_aborted' });
+          throw abortError;
+        }
+        const abortPromise = new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              reject(Object.assign(new Error('audit_write_timeout'), { code: 'audit_write_timeout' }));
+            },
+            { once: true },
+          );
+        });
+        await Promise.race([this.base.write(event), abortPromise]);
+      },
+      {
+        timeoutMs: this.options.writeTimeoutMs,
+        baseDelayMs: this.options.baseRetryDelayMs,
+        maxRetries: 0,
+        correlationId: event.correlationId ?? undefined,
+        sleep: (ms) => sleep(Math.min(ms, this.options.maxRetryDelayMs)),
+      },
+    );
   }
 
   async waitForIdle(): Promise<void> {
@@ -146,11 +196,19 @@ class ConsoleAuditLedger implements AuditLedger {
 let activeLedger: AuditLedger = new BufferedAuditLedger(new ConsoleAuditLedger());
 
 export function createAuditEvent(type: string, details: AuditDetails = {}): LedgerEvent {
+  const sanitizedDetails =
+    details.details && Object.keys(details.details).length > 0
+      ? (redactFields(details.details) as Record<string, unknown>)
+      : null;
   return {
     type,
     ts: new Date().toISOString(),
-    correlationId: details.correlationId,
-    payload: details.payload,
+    correlationId: details.correlationId ?? null,
+    actorRef: details.actorRef ?? null,
+    subjectRef: details.subjectRef ?? null,
+    outcome: details.outcome ?? 'unknown',
+    reasonCode: details.reasonCode ?? null,
+    ...(sanitizedDetails ? { details: sanitizedDetails } : {}),
   };
 }
 

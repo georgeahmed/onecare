@@ -7,6 +7,7 @@ export interface FeatureSnapshot {
     submissionId?: string;
     correlationId?: string;
     source?: string;
+    [key: string]: unknown;
   };
 }
 

@@ -14,7 +14,7 @@ Start Here
 - CI: .github/workflows/ci.yml; docker-compose.yml (NATS)
 
 Status: in-progress
-Progress: 35%
+Progress: 70%
 
 Dependencies
 - backend/engineer-02 (Bus impl)
@@ -29,12 +29,12 @@ Completed
 - [x] SRE-01.4 — Resource limits/requests; container health/restart policy; ulimits where needed
 - [x] SRE-01.5 — Backup/restore stub scripts + runbook (bus streams, config)
 - [x] SRE-01.6 — OTEL collector in compose; export to stdout/OTLP (dev)
+- [x] SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
+- [x] SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI (fail thresholds; allowlist policies)
+- [x] SRE-01.10 — Observability stack: OTEL collector, Prometheus/Grafana dashboards, logs (correlationId)
 
 Incomplete
-- [ ] SRE-01.7 — TLS for bus + services in dev/prod parity (self‑signed in dev)
-- [ ] SRE-01.8 — Supply chain: SBOM + vulnerability scanning in CI (fail thresholds; allowlist policies)
 - [ ] SRE-01.9 — Data retention/minimization: log/event retention policies + purge tooling (DLQ, logs)
-- [ ] SRE-01.10 — Observability stack: OTEL collector, Prometheus/Grafana dashboards, logs (correlationId)
 - [ ] SRE-01.11 — SLOs & alerting (latency p95, error rates, DLQ growth, readiness flaps; error budgets)
 - [ ] SRE-01.12 — Secrets manager integration (Vault/KMS), sealed‑secrets, rotation runbook
 - [ ] SRE-01.13 — Network security (cert‑manager, mTLS, Ingress, egress allowlist, k8s NetworkPolicies)

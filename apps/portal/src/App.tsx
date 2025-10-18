@@ -1,4 +1,5 @@
 import { Link, Navigate, Route, Routes } from 'react-router-dom';
+import { useIntl } from 'react-intl';
 import IntakePage from './pages/Intake';
 import BookingPage from './pages/Booking';
 import { I18nProvider } from './i18n';
@@ -7,31 +8,47 @@ import ThemeSwitcher from './components/ThemeSwitcher';
 import { ThemeProvider } from './theme';
 import useZoomFallback from './hooks/useZoomFallback';
 
-const App = () => {
+const App = () => (
+  <ThemeProvider>
+    <I18nProvider>
+      <AppLayout />
+    </I18nProvider>
+  </ThemeProvider>
+);
+
+const AppLayout = () => {
+  const intl = useIntl();
   useZoomFallback();
 
   return (
-    <ThemeProvider>
-      <I18nProvider>
-        <div className="app-shell">
-          <header>
-            <nav aria-label="Primary navigation">
-              <Link to="/intake">Intake</Link>
-              <Link to="/booking">Booking</Link>
-            </nav>
-            <div className="app-shell__tools">
-              <LocaleSwitcher />
-              <ThemeSwitcher />
-            </div>
-          </header>
-          <Routes>
-            <Route path="/intake" element={<IntakePage />} />
-            <Route path="/booking" element={<BookingPage />} />
-            <Route path="*" element={<Navigate to="/intake" replace />} />
-          </Routes>
+    <div className="app-shell">
+      <div className="skip-links" aria-label={intl.formatMessage({ id: 'app.skipLinks.label' })}>
+        <a className="skip-link" href="#main-content">
+          {intl.formatMessage({ id: 'app.skipToMain' })}
+        </a>
+        <a className="skip-link" href="#primary-navigation">
+          {intl.formatMessage({ id: 'app.skipToNavigation' })}
+        </a>
+      </div>
+      <header>
+        <nav
+          id="primary-navigation"
+          aria-label={intl.formatMessage({ id: 'app.primaryNavigation' })}
+        >
+          <Link to="/intake">{intl.formatMessage({ id: 'app.nav.intake' })}</Link>
+          <Link to="/booking">{intl.formatMessage({ id: 'app.nav.booking' })}</Link>
+        </nav>
+        <div className="app-shell__tools">
+          <LocaleSwitcher />
+          <ThemeSwitcher />
         </div>
-      </I18nProvider>
-    </ThemeProvider>
+      </header>
+      <Routes>
+        <Route path="/intake" element={<IntakePage />} />
+        <Route path="/booking" element={<BookingPage />} />
+        <Route path="*" element={<Navigate to="/intake" replace />} />
+      </Routes>
+    </div>
   );
 };
 

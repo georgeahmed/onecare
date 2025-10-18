@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/clinician/task-detail.json",
+  "title": "ClinicianTaskDetail",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "clinicId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "status": { "type": "string", "enum": ["NEW", "IN_PROGRESS", "DONE"] },
+    "shortReason": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "patientId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "waitMs": { "type": "integer", "minimum": 0 },
+    "interpreter": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "assignee": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "narrative": { "type": "string", "maxLength": 500000 },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "format": "uri",
+            "pattern": "^https://"
+          }
+        },
+        "required": ["contentType", "url"]
+      }
+    },
+    "actionsAllowed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 16
+    },
+    "audit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "when": { "type": "string", "format": "date-time" },
+          "who": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "what": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "required": ["when", "who", "what"]
+      }
+    },
+    "correlationId": { "type": "string", "minLength": 6, "maxLength": 128 }
+  },
+  "required": [
+    "id",
+    "clinicId",
+    "priority",
+    "status",
+    "shortReason",
+    "patientId",
+    "waitMs",
+    "createdAt",
+    "narrative",
+    "actionsAllowed",
+    "audit",
+    "correlationId"
+  ]
+}

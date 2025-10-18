@@ -2,6 +2,9 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { getBus, getNatsBusDiagnostics } from '@onecare/bus';
 import { initTracing, logger } from '@onecare/observability';
+import { AuditSpool } from './application/audit.spool';
+import { ProcessingLimiter } from './application/backpressure';
+import { initialiseIcsContext } from './application/ics.state';
 
 const READINESS_CACHE_MS = Math.max(250, Number(process.env.READINESS_CACHE_MS ?? 1_000));
 const PORT = resolvePort(process.env.PORT ?? process.env.ICS_HUB_PORT);
@@ -13,6 +16,18 @@ let readinessCache: CachedReadiness | null = null;
 let shuttingDown = false;
 
 const bus = getBus();
+const auditSpool = new AuditSpool(() => bus, {
+  maxSize: Number(process.env.ICS_AUDIT_SPOOL_MAX ?? 512),
+  maxAttempts: Number(process.env.ICS_AUDIT_SPOOL_ATTEMPTS ?? 5),
+  retryDelayMs: Number(process.env.ICS_AUDIT_SPOOL_DELAY_MS ?? 250),
+});
+
+const processingLimiter = new ProcessingLimiter({
+  maxConcurrency: Math.max(1, Math.floor(Number(process.env.ICS_PROCESSING_MAX_CONCURRENCY ?? 16))),
+  queueLimit: Math.max(1, Math.floor(Number(process.env.ICS_PROCESSING_QUEUE_LIMIT ?? 64))),
+  highWatermark: Math.max(1, Math.floor(Number(process.env.ICS_PROCESSING_HIGH_WATERMARK ?? 32))),
+  retryAfterSeconds: Math.max(1, Math.floor(Number(process.env.ICS_PROCESSING_RETRY_AFTER ?? 2))),
+});
 
 function resolvePort(raw: string | undefined): number {
   if (!raw) return 7100;
@@ -96,11 +111,16 @@ async function start(): Promise<void> {
     });
   });
 
-  const gracefulShutdown = (signal: string) => {
+  const gracefulShutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     readinessCache = null;
     logger.warn('ics.hub.shutdown.start', { signal });
+    try {
+      await auditSpool.flush();
+    } catch (error) {
+      logger.error('ics.hub.audit_spool.flush_failed', { reason: error instanceof Error ? error.message : String(error) });
+    }
     server.close((error) => {
       if (error) {
         logger.error('ics.hub.shutdown.error', { reason: error.message });
@@ -126,4 +146,11 @@ if (require.main === module) {
   });
 }
 
-export { start, createServer };
+export { start, createServer, initialiseIcsContext };
+export function getAuditSpool(): AuditSpool {
+  return auditSpool;
+}
+
+export function getProcessingLimiter(): ProcessingLimiter {
+  return processingLimiter;
+}

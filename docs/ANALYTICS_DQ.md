@@ -22,7 +22,17 @@ Quarantine Workflow
   - `ANALYTICS_QUALITY_ZSCORE` or `--zscore` – numeric outlier threshold (default `3`)
 - Quarantine entries contain a `reason` (`missing_name`, `missing_numeric_value`, `numeric_outlier`) and the offending record. Review the NDJSON output, remediate at the source, and replay via the analytics playback/backfill flow when available.
 
+Archive Automation
+------------------
+- Execute `npm run analytics:quarantine:export` (or `node scripts/analytics_quarantine_export.js`) after each quality run to gzip the NDJSON and ship it to archival storage.
+- Environment/CLI options:
+  - `ANALYTICS_QUARANTINE_ARCHIVE_DIR` / `--archive`: destination root (mount or synced object-store path). Defaults to `var/analytics/archive`.
+  - `ANALYTICS_QUARANTINE_RETENTION_DAYS` / `--retention-days`: optional retention window for archived payloads; files older than the window are pruned.
+  - `ANALYTICS_QUARANTINE_DELETE_SOURCE` / `--delete-source`: remove the local NDJSON once the archive copy succeeds.
+- Outputs are timestamped and grouped under `YYYY/MM/DD/analytics-quarantine-<timestamp>.jsonl.gz` for simple lifecycle management.
+- Recommended workflow: schedule the quality script, then invoke the export script; ensure the archive directory is backed by the agreed cold-storage tier once retention targets are finalised.
+
 Follow-ups
 ----------
-- Extend the quarantine job to push directly to long-term object storage once retention policies are finalised.
-- Automate periodic runs (cron / workflow) so reports and quarantine artefacts stay fresh without manual intervention.
+- Wire the quality + export commands into CI/cron once the retention target, archive mount, and secrets are finalised.
+- Automate periodic runs so reports and quarantine artefacts stay fresh without manual intervention.

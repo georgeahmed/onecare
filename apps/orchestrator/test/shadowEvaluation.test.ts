@@ -34,7 +34,7 @@ function createContext(shadow: ShadowSafetyGateContext) {
     security: {
       verifySignatureAndReplayGuard: vi.fn().mockResolvedValue(true),
       authorize: vi.fn().mockResolvedValue(true),
-      checkConsent: vi.fn().mockResolvedValue(true),
+      checkConsent: vi.fn().mockResolvedValue({ allowed: true, reason: 'granted' }),
     },
     consentPurpose: 'care',
     consentResources: ['QuestionnaireResponse'],

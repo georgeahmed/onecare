@@ -353,6 +353,14 @@ export interface PatientNotification {
   summary: string;
   status: string;
   correlationId?: string;
+  idempotencyKey?: string;
+  channel?: 'sms' | 'email' | 'push' | 'unknown';
+  metadata?: PatientNotificationMetadata;
+}
+
+export interface PatientNotificationMetadata {
+  template?: string;
+  locale?: string;
 }
 
 function buildServiceRequest(ctx: PharmacyContext): CpcsServiceRequest {
@@ -398,6 +406,9 @@ async function notifyPatient(ctx: PharmacyContext): Promise<void> {
           summary: ctx.referralSummary!,
           status: ctx.referralResult?.status ?? 'unknown',
           correlationId: ctx.correlationId,
+          idempotencyKey: key,
+          channel: 'unknown',
+          metadata: { template: 'pharmacy_referral_status' },
         });
         logger.info('pharmacy.notification.sent', {
           ctxId: ctx.id,

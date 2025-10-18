@@ -1,0 +1,15 @@
+{
+  "organisationId": "PRACTICE1",
+  "serviceRequest": {
+    "id": "ref-error",
+    "patientReference": "Patient/2",
+    "presentingComplaintCode": "B02",
+    "consentTimestamp": "2025-10-12T11:05:00Z"
+  },
+  "summary": "Sandbox CPCS referral failure",
+  "expected": {
+    "status": "rejected",
+    "reference": "cpcs-ref-error",
+    "code": "slot_unavailable"
+  }
+}

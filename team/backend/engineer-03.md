@@ -24,7 +24,7 @@ Contracts & Validation
 - Validate triage.input, tasks.created/updated payloads with Ajv (QA-01.1 harness pattern).
 
 Status: in-progress
-Progress: 5%
+Progress: 30%
 
 Dependencies
 - ml/engineer-02 (Acuity model)
@@ -40,19 +40,13 @@ Platform Checklist (pre-flight)
   - See also: docs/CONVENTIONS.md (Service Platform Checklist), infra/runbooks/tls-credentials.md, infra/event-bus/subjects-acls.md, infra/runbooks/idempotency-store.md, infra/event-bus/dlq-runbook.md
 
 Tasks
-- [ ] BE-03.6 — Contract-first triage models and validators (schemas update, codegen TS/Py, compiled validators, contract tests)
-- [ ] BE-03.7 — Event-driven ingress (consume triage.input via bus; idempotency keys; bounded retries + DLQ)
-- [ ] BE-03.1a — Feature extraction + normalization (pure; unit-tested)
-- [ ] BE-03.1b — Deterministic scoring with config weights; calibration + priority thresholds
-- [ ] BE-03.1c — Score bounding, tie-breakers, and stability across inputs
-- [ ] BE-03.2a — Text normalizer (lowercase, stopwords, stemming) + fixtures
-- [ ] BE-03.2b — Similarity (shingles/MinHash or cosine) with configurable window/threshold + eviction policy
-- [ ] BE-03.2c — Dedup decision function (recent window) + metrics/logs
-- [ ] BE-03.3a — FHIR Task create idempotently (stable IDs; retries/backoff; guardrails)
-- [ ] BE-03.3b — Emit tasks.created; contract tests and validators
+- [x] BE-03.1b — Deterministic scoring with config weights; calibration + priority thresholds
+- [x] BE-03.1c — Score bounding, tie-breakers, and stability across inputs
+- [x] BE-03.3a — FHIR Task create idempotently (stable IDs; retries/backoff; guardrails)
+- [x] BE-03.3b — Emit tasks.created; contract tests and validators
 - [ ] BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [ ] BE-03.4b — Tie-breakers and backpressure-aware assignment
-- [x] BE-03.5 — Queue notifier adapter (idempotent notify, backoff, minimal payload; metrics)
+- [ ] BE-03.7 — Event-driven ingress (consume triage.input via bus; idempotency keys; bounded retries + DLQ)
 - [ ] BE-03.8 — SLA aging and escalation (timer/interval, update Task priority/state; emit tasks.updated; tests)
 - [ ] BE-03.9 — Fallbacks for missing ML (rules-based scoring thresholds; config-driven; consistent outcomes)
 - [ ] BE-03.10 — Observability (correlationId propagation; metrics for scoring, dedup, assignment; spans)

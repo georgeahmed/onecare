@@ -13,7 +13,7 @@ function installSecurityStub(): void {
   const services: SecurityServices = {
     verifySignatureAndReplayGuard: vi.fn().mockResolvedValue(true),
     authorize: vi.fn().mockResolvedValue(true),
-    checkConsent: vi.fn().mockResolvedValue(true),
+    checkConsent: vi.fn().mockResolvedValue({ allowed: true, reason: 'granted' }),
   };
   setSecurityServices(services);
 }

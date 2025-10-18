@@ -9,10 +9,12 @@ import {
   type RoutingOutcome,
 } from '../src/application/ics.state';
 import type { IcsClient } from '../src/adapters/ics.client';
-import { resetMetrics, getCounterRecords, logger } from '@onecare/observability';
+import { resetMetrics, getCounterRecords, getHistogramRecords, logger } from '@onecare/observability';
 import { Topics, type TypedEnvelope, type IcsReferralRequest } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
+import { AuditSpool } from '../src/application/audit.spool';
+import { ProcessingLimiter } from '../src/application/backpressure';
 
 const baseEvent: IcsEvent = { type: 'ics.route' };
 
@@ -67,6 +69,9 @@ function createContext(overrides: Partial<IcsContext> = {}, envelope?: TypedEnve
     receivedAtMs: overrides.receivedAtMs,
     responseHeaders: overrides.responseHeaders,
     retryAfterSeconds: overrides.retryAfterSeconds,
+    auditSpool: overrides.auditSpool,
+    processingLimiter: overrides.processingLimiter,
+    processingRelease: overrides.processingRelease ?? null,
     ...overrides,
   };
 }
@@ -281,6 +286,29 @@ describe('InboundState', () => {
       ]),
     );
   });
+
+  it('pushes audit events through the audit spool', async () => {
+    const state = new InboundState({
+      ORG1: { endpoint: 'https://ics.example/org1', rateLimit: 5 },
+    });
+    const bus = new RecordingBus();
+    const spool = new AuditSpool(() => bus, { sleep: async () => {} });
+    const envelope = buildEnvelope();
+    const ctx = createContext(
+      {
+        rawEnvelope: envelope,
+        bus,
+        auditSpool: spool,
+      },
+      envelope,
+    );
+
+    const next = await state.handle(ctx, baseEvent);
+    expect(next).toBe('Validated');
+    await spool.flush();
+    const auditPublishes = bus.publishes.filter((entry) => entry.topic === Topics.audit.event);
+    expect(auditPublishes.length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('ValidatedState', () => {
@@ -339,6 +367,22 @@ describe('ValidatedState', () => {
     const missingPolicy = createContext({ blocked: false, rateLimited: false });
     await expect(state.handle(missingPolicy, baseEvent)).rejects.toThrow('route_policy_missing');
   });
+
+  it('records routing latency histogram on successful route', async () => {
+    const inbound = new InboundState({
+      ORG1: { endpoint: 'https://ics.example/org1', rateLimit: 10 },
+    });
+    const validated = new ValidatedState();
+    const envelope = buildEnvelope();
+    const ctx = createContext({ rawEnvelope: envelope, referralEnvelope: envelope });
+
+    await inbound.handle(ctx, baseEvent);
+    const next = await validated.handle(ctx, baseEvent);
+
+    expect(next).toBe('Routed');
+    const records = getHistogramRecords('ics.routing.latency_ms');
+    expect(records.length).toBeGreaterThan(0);
+  });
 });
 
 describe('RoutedState', () => {
@@ -370,6 +414,9 @@ describe('RoutedState', () => {
       },
       envelope,
     );
+    const limiter = new ProcessingLimiter({ maxConcurrency: 1 });
+    ctx.processingLimiter = limiter;
+    ctx.processingRelease = await limiter.acquire('ctx-ack');
     const state = new RoutedState();
 
     const next = await state.handle(ctx, baseEvent);
@@ -383,6 +430,7 @@ describe('RoutedState', () => {
     expect(ctx.ackPublished).toBe(true);
     expect(ctx.ackLatencyMs).toBeGreaterThanOrEqual(0);
     expect(ackPublish.headers?.['x-correlation-id']).toBe('corr-ack');
+    expect(ctx.processingRelease).toBeNull();
     const ackRecords = getCounterRecords('ics.ack.published_total');
     expect(ackRecords).toEqual(
       expect.arrayContaining([

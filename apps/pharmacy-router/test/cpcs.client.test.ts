@@ -187,6 +187,39 @@ describe('CpcsHttpClient', () => {
     expect(timeoutRecords[0].attributes).toMatchObject({ provider: 'cpcs', operation: 'slotless' });
   });
 
+  it('refreshes credentials without recreating client', async () => {
+    const dispatcher = vi.fn(async (_org, payload: CpcsDispatchPayload, _slot, context) => {
+      return {
+        status: 'accepted' as const,
+        reference: payload.id,
+        message: context?.headers.Authorization,
+      };
+    });
+    const client = new CpcsHttpClient({
+      baseUrl: 'https://override.test',
+      headers: { 'X-Env': 'true', Authorization: 'Bearer initial' },
+      dispatcher,
+    });
+    const result1 = await client.sendReferral('org-1', serviceRequest, summary);
+    expect(result1.reference).toBe(serviceRequest.id);
+    dispatcher.mockClear();
+
+    client.refreshCredentials({
+      headers: { Authorization: 'Bearer rotated', 'X-Env': 'true' },
+      correlationHeader: 'x-corr-2',
+    });
+    const result2 = await client.sendReferral('org-1', serviceRequest, summary, undefined, { correlationId: 'corr-2' });
+    expect(result2.reference).toBe(serviceRequest.id);
+    const lastCall = dispatcher.mock.calls.at(-1);
+    expect(lastCall?.[3]?.headers.Authorization).toBe('Bearer rotated');
+    expect(lastCall?.[3]?.headers['x-corr-2']).toBe('corr-2');
+    expect(client.getHeaders()).toMatchObject({
+      Authorization: 'Bearer rotated',
+      'X-Env': 'true',
+      Accept: 'application/json',
+    });
+  });
+
   it('maps 5xx errors to upstream_unavailable', async () => {
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const dispatcher = vi.fn(async () => {

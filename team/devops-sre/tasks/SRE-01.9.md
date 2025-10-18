@@ -4,6 +4,7 @@ Task: SRE-01.9 — Data retention/minimization: log/event retention policies + p
 
 Context
 - Enforce retention and minimization policies for logs and DLQ messages; provide operator tooling to purge data safely.
+- Current state: no purge tooling or retention policy entries exist beyond high-level mentions in `docs/CONVENTIONS.md`; `scripts/ops/` only has backup/restore helpers.
 
 Files
 - docs/SECURITY.md (retention policy)

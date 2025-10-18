@@ -1,4 +1,4 @@
-Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](SEC-01.2.md) | [Next](SEC-02.10.md)
+Navigation: [Task Index](../../../docs/TASK_INDEX.md) | [All Tasks Flow](../../all-tasks-flow.md) | [Prev](Completed%20Tasks/SEC-01.2.md) | [Next](SEC-02.10.md)
 
 Task: SEC-02.1 — Threat model & data flow (STRIDE)
 
@@ -22,4 +22,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=security/engineer-01 TASK='SEC-02.1' && make team-status-write
-

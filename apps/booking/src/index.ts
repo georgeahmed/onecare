@@ -1,7 +1,8 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { logger, setCorrelationId } from '@onecare/observability';
+import { performance } from 'node:perf_hooks';
+import { logger, setCorrelationId, createHistogram, createCounter } from '@onecare/observability';
 import {
   SearchState,
   BookedState,
@@ -21,6 +22,10 @@ import { BookingSearchError, BookingAppointmentError } from './application/booki
 const JSON_CONTENT_TYPE = 'application/json';
 const DEFAULT_BODY_LIMIT = 128 * 1024;
 const DEFAULT_MAX_CONCURRENCY = 20;
+
+const bookingHttpDuration = createHistogram('booking_http_duration_ms');
+const bookingHttpRequests = createCounter('booking_http_requests_total');
+const bookingHttpBackpressure = createCounter('booking_http_backpressure_total');
 
 export interface BookingServerOptions {
   client: GpConnectClient;
@@ -64,33 +69,63 @@ export function createBookingServer(options: BookingServerOptions): http.Server 
     const correlationId = ensureCorrelationId(req);
     setCorrelationId(correlationId);
     res.setHeader('x-correlation-id', correlationId);
+    const startedAt = performance.now();
+    let outcomeRecorded = false;
+    let path = normalizePath(req.url);
+
+    const recordOutcome = (outcome: string, status: number): void => {
+      if (outcomeRecorded) return;
+      outcomeRecorded = true;
+      const durationMs = performance.now() - startedAt;
+      bookingHttpDuration.record(durationMs, {
+        route: path,
+        method: req.method,
+        status,
+        outcome,
+      });
+      bookingHttpRequests.add(1, {
+        route: path,
+        method: req.method,
+        status,
+        outcome,
+      });
+    };
 
     try {
-      const path = normalizePath(req.url);
       if (req.method === 'GET' && path === '/healthz') {
-        return sendJson(res, 200, { ok: true });
+        const status = sendJson(res, 200, { ok: true });
+        recordOutcome('success', status);
+        return;
       }
       if (req.method === 'GET' && path === '/readyz') {
         const ready = await evaluateReadiness(options);
         if (ready) {
-          return sendJson(res, 200, { ok: true });
+          const status = sendJson(res, 200, { ok: true });
+          recordOutcome('success', status);
+          return;
         }
-        return sendError(res, 'upstream_unavailable', 'Booking dependencies unavailable', correlationId);
+        const status = sendError(res, 'upstream_unavailable', 'Booking dependencies unavailable', correlationId);
+        recordOutcome('upstream_unavailable', status);
+        return;
       }
       if (req.method === 'POST' && path === '/booking/search') {
-        await handleSearch(req, res, correlationId, searchState, options);
+        const status = await handleSearch(req, res, correlationId, searchState, options);
+        recordOutcome(status < 300 ? 'success' : 'client_error', status);
         return;
       }
       if (req.method === 'POST' && path === '/booking/appointments') {
         if (activeBookings >= maxConcurrency) {
-          sendError(res, 'too_many_requests', 'Booking concurrency limit reached', correlationId, {
+          const status = sendError(res, 'too_many_requests', 'Booking concurrency limit reached', correlationId, {
             maxConcurrency,
           });
+          bookingHttpBackpressure.add(1, { route: path, method: req.method });
+          recordOutcome('backpressure', status);
           return;
         }
         activeBookings += 1;
         try {
-          await handleBooking(req, res, correlationId, bookedState, options);
+          const status = await handleBooking(req, res, correlationId, bookedState, options);
+          recordOutcome(status < 300 ? 'success' : status >= 500 ? 'server_error' : 'client_error', status);
         } finally {
           activeBookings = Math.max(0, activeBookings - 1);
         }
@@ -99,6 +134,7 @@ export function createBookingServer(options: BookingServerOptions): http.Server 
 
       res.statusCode = 404;
       res.end();
+      recordOutcome('not_found', 404);
     } catch (error) {
       const envelope = errorEnvelope('internal_error', 'Unexpected booking error', { reason: asMessage(error) }, correlationId);
       res.statusCode = 500;
@@ -108,7 +144,11 @@ export function createBookingServer(options: BookingServerOptions): http.Server 
         correlationId,
         reason: error instanceof Error ? error.message : 'unknown_error',
       });
+      recordOutcome('unhandled_error', 500);
     } finally {
+      if (!outcomeRecorded && res.statusCode) {
+        recordOutcome('unknown', res.statusCode);
+      }
       setCorrelationId(undefined);
     }
   });
@@ -120,15 +160,21 @@ async function handleSearch(
   correlationId: string,
   searchState: SearchState,
   options: BookingServerOptions,
-): Promise<void> {
-  enforceJsonContentType(req);
+): Promise<number> {
+  try {
+    enforceJsonContentType(req);
+  } catch (error) {
+    if (error instanceof RequestError) {
+      return sendError(res, error.code, error.message, correlationId, error.details);
+    }
+    throw error;
+  }
   const payload = await readJson(req);
   const validation = validateBookingSearchRequest(payload);
   if (!validation.ok) {
-    sendError(res, 'invalid_input', 'Invalid booking search request', correlationId, {
+    return sendError(res, 'invalid_input', 'Invalid booking search request', correlationId, {
       errors: validation.errors,
     });
-    return;
   }
 
   const context = createContext('booking-search', options, correlationId);
@@ -136,12 +182,11 @@ async function handleSearch(
   try {
     await searchState.handle(context, { type: 'booking.search' });
   } catch (error) {
-    handleSearchError(res, error, correlationId);
-    return;
+    return handleSearchError(res, error, correlationId);
   }
 
   const body = context.lastSearchResponse ?? { slots: [] };
-  sendJson(res, 200, body);
+  return sendJson(res, 200, body);
 }
 
 async function handleBooking(
@@ -150,26 +195,30 @@ async function handleBooking(
   correlationId: string,
   bookedState: BookedState,
   options: BookingServerOptions,
-): Promise<void> {
-  enforceJsonContentType(req);
+): Promise<number> {
+  try {
+    enforceJsonContentType(req);
+  } catch (error) {
+    if (error instanceof RequestError) {
+      return sendError(res, error.code, error.message, correlationId, error.details);
+    }
+    throw error;
+  }
   const payload = await readJson(req);
   let parsed: ParsedAppointmentRequest;
   try {
     parsed = parseAppointmentRequest(payload);
   } catch (error) {
     if (error instanceof RequestError) {
-      sendError(res, error.code, error.message, correlationId, error.details);
-      return;
+      return sendError(res, error.code, error.message, correlationId, error.details);
     }
-    sendError(res, 'invalid_input', 'Invalid appointment request', correlationId);
-    return;
+    return sendError(res, 'invalid_input', 'Invalid appointment request', correlationId);
   }
 
   if (parsed.searchParams) {
     const validation = validateBookingSearchRequest(parsed.searchParams);
     if (!validation.ok) {
-      sendError(res, 'invalid_input', 'Invalid search parameters', correlationId, { errors: validation.errors });
-      return;
+      return sendError(res, 'invalid_input', 'Invalid search parameters', correlationId, { errors: validation.errors });
     }
     parsed.searchParams = validation.value as unknown as Record<string, unknown>;
   }
@@ -194,8 +243,7 @@ async function handleBooking(
   }
 
   if (!context.bus) {
-    sendError(res, 'internal_error', 'Booking bus not configured', correlationId);
-    return;
+    return sendError(res, 'internal_error', 'Booking bus not configured', correlationId);
   }
 
   if (!context.idempotencyKey) {
@@ -205,25 +253,22 @@ async function handleBooking(
   try {
     await bookedState.handle(context, { type: 'booking.book' } satisfies BookingEvent);
   } catch (error) {
-    handleBookingError(res, error, correlationId);
-    return;
+    return handleBookingError(res, error, correlationId);
   }
 
   if (context.lastBookingStatus === 'duplicate') {
-    sendError(
+    return sendError(
       res,
       'conflict',
       'Booking already processed for this idempotency key',
       correlationId,
       context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : undefined,
     );
-    return;
   }
 
   const confirmation = context.appointmentConfirmation;
   if (!confirmation) {
-    sendError(res, 'internal_error', 'Booking confirmation missing', correlationId);
-    return;
+    return sendError(res, 'internal_error', 'Booking confirmation missing', correlationId);
   }
 
   const responseBody = {
@@ -232,7 +277,7 @@ async function handleBooking(
     correlationId,
     status: 'booked' as const,
   };
-  sendJson(res, 201, responseBody);
+  return sendJson(res, 201, responseBody);
 }
 
 function createContext(id: string, options: BookingServerOptions, correlationId: string): BookingContext {
@@ -346,11 +391,12 @@ async function readJson(req: IncomingMessage, limit = DEFAULT_BODY_LIMIT): Promi
   });
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
+function sendJson(res: ServerResponse, status: number, body: unknown): number {
   const normalized = JSON.stringify(body);
   res.statusCode = status;
   res.setHeader('content-type', JSON_CONTENT_TYPE);
   res.end(normalized);
+  return status;
 }
 
 function sendError(
@@ -359,51 +405,44 @@ function sendError(
   message: string,
   correlationId: string,
   details?: Record<string, unknown>,
-): void {
+): number {
   const envelope = errorEnvelope(code, message, details, correlationId);
   res.statusCode = mapErrorToStatus(code);
   res.setHeader('content-type', JSON_CONTENT_TYPE);
   res.end(JSON.stringify(envelope));
+  return res.statusCode;
 }
 
-function handleSearchError(res: ServerResponse, error: unknown, correlationId: string): void {
+function handleSearchError(res: ServerResponse, error: unknown, correlationId: string): number {
   if (error instanceof BookingSearchError) {
     switch (error.code) {
       case 'booking.search.invalid_params':
-        sendError(res, 'invalid_input', 'Invalid booking search request', correlationId);
-        return;
+        return sendError(res, 'invalid_input', 'Invalid booking search request', correlationId);
       case 'booking.search.unavailable':
-        sendError(res, 'upstream_unavailable', 'GP Connect unavailable', correlationId);
-        return;
+        return sendError(res, 'upstream_unavailable', 'GP Connect unavailable', correlationId);
       default:
-        sendError(res, 'upstream_unavailable', 'Booking search failed', correlationId);
-        return;
+        return sendError(res, 'upstream_unavailable', 'Booking search failed', correlationId);
     }
   }
-  sendError(res, 'internal_error', 'Booking search failed', correlationId);
+  return sendError(res, 'internal_error', 'Booking search failed', correlationId);
 }
 
-function handleBookingError(res: ServerResponse, error: unknown, correlationId: string): void {
+function handleBookingError(res: ServerResponse, error: unknown, correlationId: string): number {
   if (error instanceof BookingAppointmentError) {
     switch (error.code) {
       case 'booking.create.conflict':
-        sendError(res, 'conflict', 'Appointment slot already booked', correlationId);
-        return;
+        return sendError(res, 'conflict', 'Appointment slot already booked', correlationId);
       case 'booking.create.unavailable':
-        sendError(res, 'upstream_unavailable', 'GP Connect unavailable', correlationId);
-        return;
+        return sendError(res, 'upstream_unavailable', 'GP Connect unavailable', correlationId);
       case 'booking.create.event_failed':
-        sendError(res, 'upstream_unavailable', 'Failed to publish booking event', correlationId);
-        return;
+        return sendError(res, 'upstream_unavailable', 'Failed to publish booking event', correlationId);
       case 'booking.create.invalid_event':
-        sendError(res, 'internal_error', 'Appointment payload invalid', correlationId);
-        return;
+        return sendError(res, 'internal_error', 'Appointment payload invalid', correlationId);
       default:
-        sendError(res, 'internal_error', 'Booking failed', correlationId);
-        return;
+        return sendError(res, 'internal_error', 'Booking failed', correlationId);
     }
   }
-  sendError(res, 'internal_error', 'Booking failed', correlationId);
+  return sendError(res, 'internal_error', 'Booking failed', correlationId);
 }
 
 function normalizePath(url: string | undefined): string {

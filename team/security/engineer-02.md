@@ -10,7 +10,7 @@ Initial Tasks
 - Establish secure SDLC guardrails in CI/PRs; turn on curated scanners; add targeted fuzzers and SSRF test harnesses; align with SRE and Integrations.
 
 Start Here
-- Docs: docs/SECURITY_HEADERS.md, docs/security/* (policies, IRP, DPIA, OIDC hardening)
+- Docs: docs/SECURITY.md, docs/SECURITY_HEADERS.md, docs/SECURITY_SCANNING.md, docs/SECURITY_AUTHZ.md
 - CI: .github/workflows/ci.yml
 - Code: apps/*, packages/*, services-py/*
 
@@ -30,14 +30,3 @@ Tasks
 - [ ] SEC-03.6 — SSRF test suite (egress mocks; private IP redirection tests)
 - [ ] SEC-03.7 — AuthZ matrix → automated tests (actors/actions/resources)
 - [ ] SEC-03.8 — WAF/rate‑limit/DoS policies for public endpoints (ingress config + docs)
-- [ ] SEC-03.9 — CSP enforcement + Subresource Integrity (SRI) for FE assets
-- [ ] SEC-03.10 — TLS config audit (min versions/ciphers) + automated checks
-- [ ] SEC-03.11 — IaC scanning (k8s/tf) with tfsec/kubeaudit and remediation backlog
-- [ ] SEC-03.12 — Backdoor/debug surface audit (ports, debug flags, default creds)
-- [ ] SEC-03.13 — Responsible disclosure & bug bounty triage workflow
-- [ ] SEC-03.14 — SBOM drift detection and SCA policy enforcement in CI
-- [ ] SEC-03.15 — Attack surface inventory (services, endpoints, data stores) + owner map
-- [ ] SEC-03.16 — SSO/RBAC hardening for internal tools (least privilege)
-- [ ] SEC-03.17 — Red/purple‑team tabletop scenarios and follow‑ups
-- [ ] SEC-03.18 — Documentation & developer training refresh (checklists, examples)
-

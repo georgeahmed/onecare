@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2025-10-17T13:54:32.158Z",
+  "baseUrl": "http://127.0.0.1:4173/",
+  "routes": [
+    {
+      "path": "/intake",
+      "label": "Intake start",
+      "wait": 1000
+    },
+    {
+      "path": "/booking",
+      "label": "Booking search",
+      "wait": 1500
+    }
+  ],
+  "totals": {
+    "errors": 1,
+    "contrast": 0
+  },
+  "issues": [
+    {
+      "route": "Intake start",
+      "path": "/intake",
+      "code": "WCAG2AA.Principle1.Guideline1_4.1_4_3.G18.Fail",
+      "message": "This element has insufficient contrast at this conformance level. Expected a contrast ratio of at least 4.5:1, but text in this element has a contrast ratio of 1.93:1. Recommendation:  change background to #008672.",
+      "selector": "#main-content > form > button"
+    }
+  ],
+  "contrastIssues": []
+}

@@ -1,12 +1,13 @@
 import * as http from 'http';
-import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID, createHash } from 'node:crypto';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
-import { getBus, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
+import { getBus, getNatsBusHealth, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
-import { createEnvelope, PortalSubmission, Topics, AuditEvent } from '@onecare/events';
+import { createEnvelope, PortalSubmission, Topics, AuditEvent as ContractAuditEvent } from '@onecare/events';
 import { validate } from '@onecare/domain';
 import {
   initTracing,
@@ -20,23 +21,34 @@ import { deriveIdempotencyKey, releaseIdempotency, InMemoryIdempotencyStore } fr
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
+import { OidcClient } from '@onecare/security';
 import { getSecurityServices, getConsentEvidence } from './adapters/security';
 import { loadConfig, type ResolvedConfig, type SafetyGateShadowConfig } from '@onecare/config';
 import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import { InMemoryFeatureStore } from '@onecare/feature-store-memory';
+import Ajv2020 from 'ajv/dist/2020';
+import addFormats from 'ajv-formats';
+import orchestratorSchema from '../../../schemas/config/orchestrator.json';
+import type { OrchestratorConfig } from '@onecare/config/src/contracts/orchestrator';
 import {
   withFhirValidation,
   type FeatureStore,
   type FhirRepository,
   type IdempotencyStore,
   type InvalidFhirError,
+  type ObjectStore,
+  type AuditEvent as LedgerAuditEvent,
+  getDefaultTtlSeconds,
 } from '@onecare/ports';
 import { resolveServerPort } from './support/port';
 import { createHttpFhirRepository, isFhirRequestError } from './adapters/persistence/fhir.repository';
+import { HttpObjectStore } from './adapters/persistence/object-store.client';
 import HttpError from './application/httpError';
 import { buildOrchestratorMachine, runOrchestratorMachine } from './application/orchestrator.machine';
-import type { OrchestratorContext, ShadowSafetyGateContext } from './types';
+import type { AuditRecordOptions, OrchestratorContext, ShadowSafetyGateContext } from './types';
 import type { GateDenialReason } from './application/orchestrator.state';
+import { ConcurrencyLimiter, RateLimiter } from './support/limits';
+import { hashIdentifier, safePatientReference } from './support/privacy';
 
 const port = resolveServerPort();
 const busImpl = (process.env.BUS_IMPL ?? '').trim().toLowerCase();
@@ -48,6 +60,10 @@ const reconnectScheduleCounter = createCounter('bus.reconnect.scheduled');
 const reconnectEventCounter = createCounter('bus.reconnect.events');
 const disconnectEventCounter = createCounter('bus.disconnect.events');
 const reconnectDelayHistogram = createHistogram('bus.reconnect.delay');
+const busHealthMaxAgeMs = parsePositiveInt(process.env.BUS_HEALTH_CACHE_MS, 2_000, 60_000);
+const busReadyLagThreshold = parsePositiveInt(process.env.BUS_READY_PENDING_LAG, 200, 100_000);
+const HEADER_TOKEN_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
 function resolvePracticeId(): string {
   const envValue = process.env.PRACTICE_ID?.trim();
   if (envValue) return envValue;
@@ -55,9 +71,41 @@ function resolvePracticeId(): string {
   throw new Error('PRACTICE_ID environment variable is required');
 }
 
+function assertHttpsUrl(raw: string, envName: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch (error) {
+    throw new Error(`${envName} must be a valid URL`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`${envName} must use HTTPS`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local')) {
+    throw new Error(`${envName} must not point to localhost`);
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    throw new Error(`${envName} must not use a raw IPv4 address`);
+  }
+  if (/^[0-9a-f:]+$/i.test(host) && (host.startsWith('fd') || host.startsWith('fc') || host.startsWith('fe80') || host === '::1')) {
+    throw new Error(`${envName} must not use a private IPv6 address`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${envName} must not include credentials`);
+  }
+  if (!parsed.port || parsed.port.trim().length === 0) {
+    parsed.port = '443';
+  }
+  return parsed;
+}
+
 function resolveFhirBaseUrl(): string {
   const envValue = process.env.FHIR_BASE_URL?.trim();
-  if (envValue) return envValue;
+  if (envValue) {
+    const url = assertHttpsUrl(envValue, 'FHIR_BASE_URL');
+    return url.toString();
+  }
   if (process.env.NODE_ENV === 'test') return 'http://localhost:9500/fhir';
   throw new Error('FHIR_BASE_URL environment variable is required');
 }
@@ -81,6 +129,93 @@ function resolveFhirAuthToken(): string | undefined {
   const trimmed = raw?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
+
+function resolveObjectStoreBaseUrl(): string | null {
+  const raw = process.env.OBJECT_STORE_BASE_URL?.trim();
+  if (!raw || raw.length === 0) return null;
+  const url = assertHttpsUrl(raw, 'OBJECT_STORE_BASE_URL');
+  return url.toString();
+}
+
+function resolveObjectStoreTimeoutMs(): number {
+  const raw = process.env.OBJECT_STORE_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 2_000;
+  return Math.max(200, Math.min(parsed, 30_000));
+}
+
+function resolveObjectStoreMaxRetries(): number {
+  const raw = process.env.OBJECT_STORE_MAX_RETRIES?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(0, Math.min(Math.floor(parsed), 4));
+}
+
+function resolveObjectStoreHealthPath(): string {
+  const raw = process.env.OBJECT_STORE_HEALTH_PATH;
+  if (raw === undefined || raw === null) return 'health';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/^\//, '');
+}
+
+function resolveObjectStoreAuthToken(): string | undefined {
+  const raw = process.env.OBJECT_STORE_TOKEN ?? process.env.OBJECT_STORE_AUTH_TOKEN;
+  const trimmed = raw?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveOidcIssuer(): string | null {
+  const raw = process.env.OIDC_ISSUER?.trim();
+  return raw && raw.length > 0 ? raw : null;
+}
+
+function resolveOidcAudience(): string[] {
+  const raw = process.env.OIDC_AUDIENCE ?? process.env.OIDC_CLIENT_ID;
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function resolveOidcJwksUri(): string | null {
+  const raw = process.env.OIDC_JWKS_URI ?? process.env.OIDC_JWKS_URL;
+  const trimmed = raw?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveOidcTimeoutMs(): number {
+  const raw = process.env.OIDC_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 2_000;
+  return Math.max(200, Math.min(parsed, 10_000));
+}
+
+function resolveOidcClockSkewSeconds(): number {
+  const raw = process.env.OIDC_CLOCK_SKEW_SECONDS?.trim();
+  const parsed = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 60;
+  return Math.max(0, Math.min(Math.floor(parsed), 600));
+}
+
+function buildBearerHeader(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const trimmed = token.trim();
+  if (!trimmed) return undefined;
+  if (/^(basic|bearer)\s/i.test(trimmed)) return trimmed;
+  return `Bearer ${trimmed}`;
+}
+
+type DependencyName = 'fhir' | 'objectStore' | 'oidc';
+
+interface DependencyState {
+  status: 'ok' | 'degraded' | 'error' | 'skipped';
+  details?: string;
+  checkedAt: number;
+}
+
+const HEALTH_TTL_MS = 30_000;
 
 function resolveFhirProfiles(config: ResolvedConfig): Record<string, string> | undefined {
   const rawFhirConfig = config.fhir;
@@ -119,16 +254,201 @@ function normaliseShadowSafetyGate(config?: SafetyGateShadowConfig): ShadowSafet
   };
 }
 
+type SafetyGateResolved = NonNullable<ResolvedConfig['safety_gate']>;
+
+interface RuntimeState {
+  practiceConfig: Readonly<ResolvedConfig>;
+  orchestratorConfig: Readonly<OrchestratorConfig>;
+  safetyGateSettings: Readonly<Partial<SafetyGateResolved>>;
+  safetyGateTimeoutMs: number;
+  safetyGateFallbackMode: 'rules' | 'none';
+  shadowSafetyGate?: ShadowSafetyGateContext;
+  idempotencyTtlSeconds: number;
+  bookingAvailabilityTimeoutMs: number;
+  configHash: string;
+}
+
+const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+addFormats(ajv);
+const validateOrchestratorConfiguration = ajv.compile<OrchestratorConfig>(
+  orchestratorSchema as Record<string, unknown>,
+);
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== 'object') return value;
+  if (Object.isFrozen(value)) return value;
+  const target = value as Record<string, unknown> | unknown[];
+  Object.freeze(target);
+  if (Array.isArray(target)) {
+    for (const item of target) {
+      deepFreeze(item);
+    }
+  } else {
+    for (const item of Object.values(target)) {
+      deepFreeze(item);
+    }
+  }
+  return value;
+}
+
+function toOrchestratorConfig(config: ResolvedConfig): OrchestratorConfig {
+  const result: OrchestratorConfig = {
+    practiceId: config.practiceId,
+  };
+
+  const safetySource = config.safety_gate;
+  if (safetySource) {
+    const mapped: NonNullable<OrchestratorConfig['safetyGate']> = {};
+    if (typeof safetySource.timeout_ms === 'number') {
+      mapped.timeoutMs = safetySource.timeout_ms;
+    }
+    const maxRetriesCandidate =
+      (safetySource as { max_retries?: unknown; maxRetries?: unknown }).max_retries ??
+      (safetySource as { max_retries?: unknown; maxRetries?: unknown }).maxRetries;
+    if (typeof maxRetriesCandidate === 'number' && Number.isFinite(maxRetriesCandidate)) {
+      mapped.maxRetries = Math.max(0, Math.round(maxRetriesCandidate));
+    }
+    if (safetySource.fallback === 'none') {
+      mapped.fallback = 'none';
+    } else if (safetySource.fallback === 'rules') {
+      mapped.fallback = 'rules';
+    }
+    const circuitSource = (safetySource as {
+      circuit_breaker?: { failure_threshold?: number; open_ms?: number };
+    }).circuit_breaker;
+    if (circuitSource && typeof circuitSource === 'object') {
+      const failureThreshold = Number(circuitSource.failure_threshold);
+      const openMs = Number(circuitSource.open_ms);
+      if (Number.isFinite(failureThreshold) && Number.isFinite(openMs)) {
+        mapped.circuitBreaker = {
+          failureThreshold,
+          openMs,
+        };
+      }
+    }
+    if (Object.keys(mapped).length > 0) {
+      result.safetyGate = mapped;
+    }
+  }
+
+  if (config.idempotency?.ttlSeconds !== undefined) {
+    result.idempotency = { ttlSeconds: config.idempotency.ttlSeconds };
+  }
+
+  if (config.booking?.availabilityTimeoutMs !== undefined) {
+    result.booking = { availabilityTimeoutMs: config.booking.availabilityTimeoutMs };
+  }
+
+  return result;
+}
+
+function hashConfig(config: OrchestratorConfig): string {
+  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+}
+
+function buildRuntimeState(practiceId: string): RuntimeState {
+  const resolved = loadConfig(practiceId);
+  const orchestratorConfig = toOrchestratorConfig(resolved);
+  if (!validateOrchestratorConfiguration(orchestratorConfig)) {
+    const errors =
+      validateOrchestratorConfiguration.errors?.map(
+        (error) => `${error.instancePath || '/'} ${error.message ?? 'invalid'}`,
+      ) ?? ['Invalid orchestrator configuration'];
+    const failure = new Error('orchestrator_config_invalid');
+    (failure as { details?: string[] }).details = errors;
+    throw failure;
+  }
+
+  deepFreeze(resolved);
+  deepFreeze(orchestratorConfig);
+
+  const safetyGateSettings = deepFreeze(
+    (resolved.safety_gate ?? {}) as Partial<SafetyGateResolved>,
+  );
+  const safetyGateTimeoutMs =
+    typeof safetyGateSettings.timeout_ms === 'number' ? safetyGateSettings.timeout_ms : 800;
+  const safetyGateFallbackMode: 'rules' | 'none' =
+    safetyGateSettings.fallback === 'none' ? 'none' : 'rules';
+  const shadowSafetyGate = normaliseShadowSafetyGate(safetyGateSettings.shadow);
+  const idempotencyTtlSeconds = resolved.idempotency?.ttlSeconds ?? 600;
+  const bookingAvailabilityTimeoutMs = resolved.booking?.availabilityTimeoutMs ?? 2_000;
+
+  return {
+    practiceConfig: resolved,
+    orchestratorConfig,
+    safetyGateSettings,
+    safetyGateTimeoutMs,
+    safetyGateFallbackMode,
+    shadowSafetyGate,
+    idempotencyTtlSeconds,
+    bookingAvailabilityTimeoutMs,
+    configHash: hashConfig(orchestratorConfig),
+  };
+}
+
+function logRuntimeConfig(state: RuntimeState, event: string): void {
+  const safetyGate = state.safetyGateSettings;
+  logger.info(event, {
+    practiceId: state.practiceConfig.practiceId,
+    hash: state.configHash,
+    safetyGate: {
+      timeoutMs: state.safetyGateTimeoutMs,
+      fallback: state.safetyGateFallbackMode,
+      redFlagThreshold: safetyGate.red_flag_threshold,
+      emergencyConfidence: safetyGate.emergency_confidence,
+      acuityThresholdEmergency: safetyGate.acuity_threshold_emergency,
+    },
+    idempotency: { ttlSeconds: state.idempotencyTtlSeconds },
+    booking: { availabilityTimeoutMs: state.bookingAvailabilityTimeoutMs },
+    fairnessFloors: state.practiceConfig.fairness_floors,
+    holdBackFraction: state.practiceConfig.hold_back_fraction,
+  });
+}
+
 const practiceId = resolvePracticeId();
-const practiceConfig: ResolvedConfig = loadConfig(practiceId);
-const safetyGateSettings = practiceConfig.safety_gate ?? {};
-const safetyGateTimeoutMs = safetyGateSettings.timeout_ms ?? 800;
-const safetyGateFallbackMode = safetyGateSettings.fallback ?? 'rules';
-const shadowSafetyGate = normaliseShadowSafetyGate(safetyGateSettings.shadow);
-const idempotencyConfig = practiceConfig.idempotency ?? { ttlSeconds: 600 };
-const idempotencyTtlSeconds = idempotencyConfig.ttlSeconds;
-const bookingAvailabilityTimeoutMs =
-  practiceConfig.booking?.availabilityTimeoutMs ?? 2_000;
+let runtime: RuntimeState;
+try {
+  runtime = buildRuntimeState(practiceId);
+} catch (error) {
+  const details =
+    error instanceof Error && (error as { details?: string[] }).details
+      ? (error as { details?: string[] }).details
+      : undefined;
+  logger.error('orchestrator.config.load_failed', {
+    reason: error instanceof Error ? error.message : String(error),
+    details,
+  });
+  process.exit(1);
+}
+
+let fhirProfiles = resolveFhirProfiles(runtime.practiceConfig);
+logRuntimeConfig(runtime, 'orchestrator.config.loaded');
+
+function currentPracticeConfig(): Readonly<ResolvedConfig> {
+  return runtime.practiceConfig;
+}
+
+function getSafetyGateTimeoutMs(): number {
+  return runtime.safetyGateTimeoutMs;
+}
+
+function getSafetyGateFallbackMode(): 'rules' | 'none' {
+  return runtime.safetyGateFallbackMode;
+}
+
+function getShadowSafetyGate(): ShadowSafetyGateContext | undefined {
+  return runtime.shadowSafetyGate;
+}
+
+function getIdempotencyTtlSeconds(): number {
+  return runtime.idempotencyTtlSeconds;
+}
+
+function getBookingAvailabilityTimeoutMs(): number {
+  return runtime.bookingAvailabilityTimeoutMs;
+}
+
 const bookingAvailabilityBase = (() => {
   const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
   if (!raw) return null;
@@ -152,6 +472,71 @@ function parseBooleanFlag(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function createDelegatingIdempotencyStore(getStore: () => IdempotencyStore): IdempotencyStore {
+  return {
+    async exists(key: string): Promise<boolean> {
+      return getStore().exists(key);
+    },
+    async put(key: string, ttlSeconds: number): Promise<void> {
+      await getStore().put(key, ttlSeconds);
+    },
+    async reserve(key: string, ttlSeconds: number): Promise<'reserved' | 'exists'> {
+      const store = getStore();
+      if (typeof store.reserve === 'function') {
+        return store.reserve(key, ttlSeconds);
+      }
+      const exists = await store.exists(key);
+      if (exists) {
+        return 'exists';
+      }
+      await store.put(key, ttlSeconds);
+      return 'reserved';
+    },
+    async delete(key: string): Promise<void> {
+      const store = getStore();
+      if (typeof store.delete === 'function') {
+        await store.delete(key);
+      }
+    },
+  };
+}
+
+function evaluateBusReadiness(): {
+  ready: boolean;
+  health: ReturnType<typeof getNatsBusHealth>;
+  reason?: string;
+} {
+  const health = getNatsBusHealth(bus, { maxAgeMs: busHealthMaxAgeMs });
+  if (!health) {
+    if (busReadyOverride !== null) {
+      return { ready: busReadyOverride, health: null, reason: busReadyOverride ? undefined : 'override' };
+    }
+    return { ready: true, health: null };
+  }
+  if (busReadyOverride !== null) {
+    return {
+      ready: busReadyOverride,
+      health,
+      reason: busReadyOverride ? undefined : 'override',
+    };
+  }
+  const pendingOk = busReadyLagThreshold <= 0 || health.pendingLag <= busReadyLagThreshold;
+  const ready = health.isReady && pendingOk;
+  if (ready) {
+    return { ready: true, health };
+  }
+  const reasons: string[] = [];
+  if (!health.isConnected) reasons.push('disconnected');
+  if (health.backpressure) reasons.push('backpressure');
+  if (health.subscribed <= 0) reasons.push('no_subscribers');
+  if (!pendingOk) reasons.push('pending_lag_exceeded');
+  return {
+    ready: false,
+    health,
+    reason: reasons.join(','),
+  };
 }
 
 function parseReconnectBaseDelay(raw: string | undefined): number {
@@ -185,57 +570,462 @@ function parseReconnectJitterRatio(raw: string | undefined): number {
   return parsed;
 }
 
+function parsePositiveInt(raw: string | undefined, fallback: number, max: number): number {
+  if (!raw) return fallback;
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
+}
+
+function parseLimitEnv(key: string, fallback: number, max: number): number {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  const coerced = Math.floor(parsed);
+  return Math.min(coerced, max);
+}
+
+function parseDurationMs(raw: string | undefined, fallback: number, min: number, max: number): number {
+  if (!raw) return fallback;
+  const trimmed = raw.trim().toLowerCase();
+  const match = /^(\d+)(ms|s|m)?$/.exec(trimmed);
+  if (!match) return fallback;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value < 0) return fallback;
+  const unit = match[2] ?? 'ms';
+  let milliseconds = value;
+  if (unit === 's') milliseconds *= 1000;
+  if (unit === 'm') milliseconds *= 60_000;
+  milliseconds = Math.floor(milliseconds);
+  if (milliseconds < min) return min;
+  if (milliseconds > max) return max;
+  return milliseconds;
+}
+
+const globalConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL', 64, 20_000);
+const defaultRouteConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_DEFAULT', 32, 10_000);
+const concurrencyLimiter = new ConcurrencyLimiter({
+  globalLimit: globalConcurrencyLimit,
+  defaultRouteLimit: defaultRouteConcurrencyLimit,
+  perRoute: {
+    'POST /safety-check': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_SAFETY', 24, 5_000),
+    'GET /booking/slots': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_BOOKING', 16, 5_000),
+    'POST /feature-log': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG', 12, 5_000),
+  },
+});
+
+const defaultRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE', 120, 100_000);
+const safetyRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE', 40, 10_000);
+const defaultRateLimiterConfig = {
+  maxRequests: defaultRateLimitPerMinute,
+  windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
+  blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_BLOCK_MS, 10_000, 0, 15 * 60_000),
+};
+const rateLimiter = new RateLimiter(defaultRateLimiterConfig, {
+  'POST /safety-check': {
+    maxRequests: safetyRateLimitPerMinute,
+    windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
+    blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS, 20_000, 0, 15 * 60_000),
+  },
+});
+
+const busPublishTimeoutMs = parseDurationMs(
+  process.env.ORCHESTRATOR_BUS_PUBLISH_TIMEOUT_MS,
+  500,
+  100,
+  5_000,
+);
+const busPublishMaxRetries = parseLimitEnv('ORCHESTRATOR_BUS_PUBLISH_MAX_RETRIES', 2, 20);
+const busPublishBackoffMs = parseDurationMs(
+  process.env.ORCHESTRATOR_BUS_PUBLISH_BACKOFF_MS,
+  50,
+  10,
+  2_000,
+);
+
+let shuttingDown = false;
+let inflightRequests = 0;
+let shutdownPromise: Promise<void> | null = null;
+const drainWaiters: Array<() => void> = [];
+
+function beginRequest(): void {
+  inflightRequests += 1;
+}
+
+function endRequest(): void {
+  inflightRequests = Math.max(0, inflightRequests - 1);
+  if (inflightRequests === 0) {
+    while (drainWaiters.length > 0) {
+      const resolve = drainWaiters.pop();
+      resolve?.();
+    }
+  }
+}
+
+function waitForDrain(): Promise<void> {
+  if (inflightRequests === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    drainWaiters.push(resolve);
+  });
+}
+
+function deriveRateLimitKey(req: http.IncomingMessage): { key: string; anonymised: string | null } {
+  const actorId = getHeader(req.headers, 'x-actor-id');
+  if (actorId) {
+    return { key: `actor:${actorId}`, anonymised: hashIdentifier(actorId) };
+  }
+  const requestId = getHeader(req.headers, 'x-request-id');
+  if (requestId) {
+    return { key: `request:${requestId}`, anonymised: hashIdentifier(requestId) };
+  }
+  const remote = req.socket.remoteAddress ?? 'unknown';
+  return { key: `ip:${remote}`, anonymised: hashIdentifier(remote) };
+}
+
+function validateIncomingHeaders(
+  headers: http.IncomingHttpHeaders,
+): { valid: true } | { valid: false; reason: string; header: string } {
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    const name = rawName?.trim();
+    if (!name) {
+      return { valid: false, reason: 'missing_name', header: rawName ?? '<unknown>' };
+    }
+    if (!HEADER_TOKEN_PATTERN.test(name)) {
+      return { valid: false, reason: 'invalid_name', header: name };
+    }
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    for (const candidate of values) {
+      if (candidate === undefined) continue;
+      const value = String(candidate);
+      if (HEADER_CONTROL_CHARS.test(value)) {
+        return { valid: false, reason: 'control_character', header: name };
+      }
+      if (value.length > 16_384) {
+        return { valid: false, reason: 'value_too_long', header: name };
+      }
+    }
+  }
+  return { valid: true };
+}
+
+const shutdownDrainTimeoutMs = parseDurationMs(
+  process.env.ORCHESTRATOR_SHUTDOWN_DRAIN_TIMEOUT_MS,
+  10_000,
+  1_000,
+  120_000,
+);
+
+let server: http.Server;
+
+async function drainInflightRequests(timeoutMs: number): Promise<void> {
+  if (inflightRequests === 0) return;
+  await Promise.race([
+    waitForDrain(),
+    delay(timeoutMs).then(() => {
+      throw new Error('drain_timeout');
+    }),
+  ]);
+}
+
+async function initiateShutdown(signal: NodeJS.Signals | 'test'): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  logger.warn('shutdown.initiated', { signal });
+
+  const perform = async () => {
+    try {
+      try {
+        await drainInflightRequests(shutdownDrainTimeoutMs);
+      } catch (error) {
+        logger.warn('shutdown.drain_timeout', {
+          reason: error instanceof Error ? error.message : String(error),
+          inflight: inflightRequests,
+        });
+      }
+      if (server) {
+        await new Promise<void>((resolve) => {
+          server.close((err) => {
+            if (err) {
+              logger.error('shutdown.server_close_failed', { reason: err.message });
+            }
+            resolve();
+          });
+        });
+      }
+      if (_natsConn) {
+        try {
+          await _natsConn.drain();
+        } catch (error) {
+          logger.warn('shutdown.nats_drain_failed', {
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } finally {
+      logger.info('shutdown.completed', { inflight: inflightRequests });
+    }
+  };
+
+  shutdownPromise = perform();
+  return shutdownPromise;
+}
+
+export async function initiateShutdownForTest(): Promise<void> {
+  await initiateShutdown('test');
+}
+
+export function resetShutdownStateForTest(): void {
+  shuttingDown = false;
+  shutdownPromise = null;
+  inflightRequests = 0;
+  drainWaiters.splice(0);
+  concurrencyLimiter.reset();
+  rateLimiter.reset();
+}
+
 const featureLoggingOn = parseBooleanFlag(process.env.FEATURE_LOGGING);
-let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore() : null;
+const featureLoggingTtlSeconds = Math.max(
+  getDefaultTtlSeconds('triage-core') ?? 0,
+  getDefaultTtlSeconds('acuity-signal') ?? 0
+);
+const featureStoreOptions =
+  featureLoggingTtlSeconds > 0 ? { ttlMs: featureLoggingTtlSeconds * 1000 } : undefined;
+let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore(featureStoreOptions) : null;
 const fhirBaseUrl = resolveFhirBaseUrl();
 const fhirTimeoutMs = resolveFhirTimeoutMs();
 const fhirMaxRetries = resolveFhirMaxRetries();
-const fhirProfiles = resolveFhirProfiles(practiceConfig);
+const fhirAuthToken = resolveFhirAuthToken();
+const objectStoreBaseUrl = resolveObjectStoreBaseUrl();
+const objectStoreTimeoutMs = resolveObjectStoreTimeoutMs();
+const objectStoreMaxRetries = resolveObjectStoreMaxRetries();
+const objectStoreHealthPath = resolveObjectStoreHealthPath();
+const objectStoreAuthToken = resolveObjectStoreAuthToken();
+const oidcIssuer = resolveOidcIssuer();
+const oidcAudience = resolveOidcAudience();
+const oidcJwksUri = resolveOidcJwksUri();
+const oidcTimeoutMs = resolveOidcTimeoutMs();
+const oidcClockSkewSeconds = resolveOidcClockSkewSeconds();
 function constructFhirRepository(): FhirRepository {
   const repository = createHttpFhirRepository({
     baseUrl: fhirBaseUrl,
-    authToken: resolveFhirAuthToken(),
+    authToken: fhirAuthToken,
     timeoutMs: fhirTimeoutMs,
     maxRetries: fhirMaxRetries,
     practiceId,
+    circuitBreakerThreshold: parsePositiveInt(process.env.FHIR_CIRCUIT_FAILURE_THRESHOLD, 3, 20),
+    circuitBreakerCooldownMs: parsePositiveInt(process.env.FHIR_CIRCUIT_COOLDOWN_MS, 15_000, 5 * 60_000),
+    circuitBreakerHalfOpenSuccesses: parsePositiveInt(process.env.FHIR_CIRCUIT_HALF_OPEN_SUCCESS, 2, 10),
   });
   return withFhirValidation(repository, { profiles: fhirProfiles });
 }
 
 let fhirRepository: FhirRepository = constructFhirRepository();
 
-logger.info('practice config applied', {
-  practiceId: practiceConfig.practiceId,
-  safetyGate: {
-    timeoutMs: safetyGateTimeoutMs,
-    fallback: safetyGateFallbackMode,
-    redFlagThreshold: safetyGateSettings.red_flag_threshold,
-    emergencyConfidence: safetyGateSettings.emergency_confidence,
-  },
-  shadowSafetyGate: shadowSafetyGate
-    ? {
-        sampleRate: shadowSafetyGate.sampleRate,
-        endpoint: shadowSafetyGate.endpoint ? safeUrlForLog(shadowSafetyGate.endpoint) : undefined,
-        variant: shadowSafetyGate.variant,
-        timeoutMs: shadowSafetyGate.timeoutMs ?? safetyGateTimeoutMs,
-        maxRetries: shadowSafetyGate.maxRetries ?? 0,
-      }
-    : { enabled: false },
-  fairnessFloors: practiceConfig.fairness_floors,
-  holdBackFraction: practiceConfig.hold_back_fraction,
-  idempotency: {
-    ttlSeconds: idempotencyTtlSeconds,
-  },
-  booking: {
-    availabilityTimeoutMs: bookingAvailabilityTimeoutMs,
-  },
-  fhir: {
-    baseUrl: safeUrlForLog(fhirBaseUrl),
-    timeoutMs: fhirTimeoutMs,
-    maxRetries: fhirMaxRetries,
-    profiles: fhirProfiles ? Object.keys(fhirProfiles) : [],
-  },
+function constructObjectStore(): ObjectStore | null {
+  if (!objectStoreBaseUrl) return null;
+  return new HttpObjectStore({
+    baseUrl: objectStoreBaseUrl,
+    timeoutMs: objectStoreTimeoutMs,
+    maxRetries: objectStoreMaxRetries,
+    authToken: objectStoreAuthToken,
+  });
+}
+
+let objectStore: ObjectStore | null = constructObjectStore();
+if (objectStoreBaseUrl && !objectStore) {
+  logger.warn('object store disabled - configuration incomplete');
+}
+
+function constructOidcClient(): OidcClient | null {
+  if (!oidcIssuer || !oidcJwksUri || oidcAudience.length === 0) {
+    return null;
+  }
+  return new OidcClient({
+    issuer: oidcIssuer,
+    audience: oidcAudience,
+    jwksUri: oidcJwksUri,
+    httpTimeoutMs: oidcTimeoutMs,
+    clockSkewSeconds: oidcClockSkewSeconds,
+  });
+}
+
+let oidcClient: OidcClient | null = constructOidcClient();
+
+process.on('SIGHUP', () => {
+  logger.info('orchestrator.config.reload_requested');
+  try {
+    runtime = buildRuntimeState(practiceId);
+    fhirProfiles = resolveFhirProfiles(runtime.practiceConfig);
+    fhirRepository = constructFhirRepository();
+    objectStore = constructObjectStore();
+    if (objectStoreBaseUrl && !objectStore) {
+      logger.warn('object store disabled after reload - configuration incomplete');
+    }
+    oidcClient = constructOidcClient();
+    logRuntimeConfig(runtime, 'orchestrator.config.reloaded');
+  } catch (error) {
+    const details =
+      error instanceof Error && (error as { details?: string[] }).details
+        ? (error as { details?: string[] }).details
+        : undefined;
+    logger.error('orchestrator.config.reload_failed', {
+      reason: error instanceof Error ? error.message : String(error),
+      details,
+    });
+  }
 });
+
+const dependencyCache: Record<DependencyName, DependencyState> = {
+  fhir: { status: fhirBaseUrl ? 'error' : 'skipped', checkedAt: 0 },
+  objectStore: { status: objectStoreBaseUrl ? 'error' : 'skipped', checkedAt: 0 },
+  oidc: { status: oidcIssuer && oidcAudience.length > 0 && oidcJwksUri ? 'error' : 'skipped', checkedAt: 0 },
+};
+
+async function evaluateDependency(name: DependencyName, fn: () => Promise<DependencyState>): Promise<DependencyState> {
+  const cached = dependencyCache[name];
+  const now = Date.now();
+  if (cached && now - cached.checkedAt < HEALTH_TTL_MS) {
+    return cached;
+  }
+  try {
+    const result = await fn();
+    dependencyCache[name] = result;
+    return result;
+  } catch (error) {
+    const failure: DependencyState = {
+      status: 'error',
+      details: error instanceof Error ? error.message : String(error),
+      checkedAt: Date.now(),
+    };
+    dependencyCache[name] = failure;
+    return failure;
+  }
+}
+
+async function probeFhir(): Promise<DependencyState> {
+  if (!fhirBaseUrl) {
+    return { status: 'skipped', checkedAt: Date.now() };
+  }
+  const metadataUrl = new URL('metadata', fhirBaseUrl).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(fhirTimeoutMs, 1_000));
+  try {
+    const headers: Record<string, string> = { accept: 'application/fhir+json' };
+    const authHeader = buildBearerHeader(fhirAuthToken);
+    if (authHeader) headers.authorization = authHeader;
+    const response = await fetch(metadataUrl, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      return {
+        status: 'degraded',
+        details: `status_${response.status}`,
+        checkedAt: Date.now(),
+      } satisfies DependencyState;
+    }
+    return { status: 'ok', checkedAt: Date.now() } satisfies DependencyState;
+  } catch (error) {
+    clearTimeout(timeout);
+    return {
+      status: 'error',
+      details: error instanceof Error ? error.message : String(error),
+      checkedAt: Date.now(),
+    } satisfies DependencyState;
+  }
+}
+
+async function probeObjectStore(): Promise<DependencyState> {
+  if (!objectStoreBaseUrl) {
+    return { status: 'skipped', checkedAt: Date.now() };
+  }
+  const healthPath = objectStoreHealthPath;
+  const healthUrl = new URL(healthPath || '.', objectStoreBaseUrl).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(objectStoreTimeoutMs, 1_000));
+  try {
+    const headers: Record<string, string> = { accept: 'application/json' };
+    const authHeader = buildBearerHeader(objectStoreAuthToken);
+    if (authHeader) headers.authorization = authHeader;
+    const response = await fetch(healthUrl, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      return {
+        status: 'degraded',
+        details: `status_${response.status}`,
+        checkedAt: Date.now(),
+      } satisfies DependencyState;
+    }
+    return { status: 'ok', checkedAt: Date.now() } satisfies DependencyState;
+  } catch (error) {
+    clearTimeout(timeout);
+    return {
+      status: 'error',
+      details: error instanceof Error ? error.message : String(error),
+      checkedAt: Date.now(),
+    } satisfies DependencyState;
+  }
+}
+
+async function probeOidc(): Promise<DependencyState> {
+  if (!oidcClient) {
+    return { status: 'skipped', checkedAt: Date.now() };
+  }
+  try {
+    await oidcClient.healthCheck();
+    return { status: 'ok', checkedAt: Date.now() } satisfies DependencyState;
+  } catch (error) {
+    return {
+      status: 'error',
+      details: error instanceof Error ? error.message : String(error),
+      checkedAt: Date.now(),
+    } satisfies DependencyState;
+  }
+}
+
+function formatDependency(state: DependencyState): { status: string; checkedAt: string; details?: string } {
+  const report: { status: string; checkedAt: string; details?: string } = {
+    status: state.status,
+    checkedAt: new Date(state.checkedAt).toISOString(),
+  };
+  if (state.details) {
+    report.details = state.details;
+  }
+  return report;
+}
+
+function computeOverallStatus(reports: Record<string, { status: string }>): 'ok' | 'degraded' | 'error' {
+  const statuses = Object.values(reports).map((report) => report.status);
+  if (statuses.includes('error')) return 'error';
+  if (statuses.includes('degraded')) return 'degraded';
+  return 'ok';
+}
+
+async function collectDependencyHealth(): Promise<
+  Record<'fhir' | 'objectStore' | 'oidc', { status: string; checkedAt: string; details?: string }>
+> {
+  const [fhirStatus, objectStoreStatus, oidcStatus] = await Promise.all([
+    evaluateDependency('fhir', probeFhir),
+    evaluateDependency('objectStore', probeObjectStore),
+    evaluateDependency('oidc', probeOidc),
+  ]);
+  return {
+    fhir: formatDependency(fhirStatus),
+    objectStore: formatDependency(objectStoreStatus),
+    oidc: formatDependency(oidcStatus),
+  };
+}
 
 void initTracing('orchestrator').catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -248,17 +1038,30 @@ const ORCHESTRATOR_ALLOWED_TOPICS = new Set<string>([
   Topics.tasks.created,
 ]);
 
+let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
+const delegatingIdempotencyStore = createDelegatingIdempotencyStore(() => idempotencyStore);
+
 function buildMessageBus(options?: Parameters<typeof getBus>[0]): MessageBus {
   const base = getBus(options);
+  const ttlSeconds = getIdempotencyTtlSeconds();
   return withMessageGuards(base, {
     allowedTopics: ORCHESTRATOR_ALLOWED_TOPICS,
+    idempotencyStore: delegatingIdempotencyStore,
+    idempotencyTtlSeconds: ttlSeconds,
+    onDuplicate: (message) => {
+      logger.warn('duplicate bus message skipped', {
+        topic: message.topic,
+        messageId: message.headers?.['x-message-id'],
+        correlationId: message.headers?.['x-correlation-id'],
+      });
+    },
   });
 }
 
 let bus: MessageBus = buildMessageBus();
 markNatsBusConnected(bus, !wantsNats);
-let idempotencyStore: IdempotencyStore = new InMemoryIdempotencyStore();
 let busReady = !wantsNats;
+let busReadyOverride: boolean | null = null;
 let _natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 let reconnectAttempts = 0;
@@ -672,9 +1475,69 @@ function handleHttp(
     outcome = value;
   };
 
-  const finalize = () => {
+  const recordMetrics = () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
     recordHttpMetrics(route, outcome, durationMs, correlationId);
+  };
+
+  const headerValidation = validateIncomingHeaders(req.headers);
+  if (!headerValidation.valid) {
+    req.resume();
+    logger.warn('http.headers.invalid', {
+      route,
+      correlationId,
+      header: headerValidation.header,
+      reason: headerValidation.reason,
+    });
+    respondError(res, 'invalid_input', 'Invalid HTTP headers', correlationId, setOutcome);
+    recordMetrics();
+    return;
+  }
+
+  if (shuttingDown) {
+    respondError(res, 'busy', 'Service is shutting down', correlationId, setOutcome);
+    recordMetrics();
+    return;
+  }
+
+  const release = concurrencyLimiter.enter(route);
+  if (!release) {
+    logger.warn('backpressure.reject', {
+      route,
+      correlationId,
+      active: concurrencyLimiter.active(route),
+    });
+    respondError(res, 'busy', 'Service is overloaded', correlationId, setOutcome);
+    recordMetrics();
+    return;
+  }
+
+  const { key: rateKey, anonymised } = deriveRateLimitKey(req);
+  const rateResult = rateLimiter.check(route, rateKey);
+  if (!rateResult.allowed) {
+    release();
+    if (typeof rateResult.retryAfterSeconds === 'number') {
+      res.setHeader('retry-after', rateResult.retryAfterSeconds.toString());
+    }
+    logger.warn('rate.limit.block', {
+      route,
+      identity: anonymised,
+      retryAfterSeconds: rateResult.retryAfterSeconds,
+      correlationId,
+    });
+    respondError(res, 'too_many_requests', 'Too many requests', correlationId, setOutcome);
+    recordMetrics();
+    return;
+  }
+
+  beginRequest();
+
+  const cleanup = () => {
+    try {
+      release();
+    } finally {
+      endRequest();
+    }
   };
 
   handler(setOutcome)
@@ -693,9 +1556,14 @@ function handleHttp(
         respondError(res, code, message, correlationId, setOutcome, details);
       }
     })
-    .finally(finalize)
+    .finally(() => {
+      try {
+        recordMetrics();
+      } finally {
+        cleanup();
+      }
+    })
     .catch((err) => {
-      // finalization errors should never occur; log defensively
       logger.error('request finalization failure', {
         route,
         correlationId,
@@ -793,36 +1661,67 @@ function buildAuthContext(headers: http.IncomingHttpHeaders): AuthContext | null
   };
 }
 
-async function emitAuditEvent(
-  type: string,
-  correlationId: string | undefined,
-  actor: AuthContext['actor'] | null | undefined,
-  details: Record<string, unknown>
-): Promise<void> {
-  const event: AuditEvent = {
-    type,
-    timestamp: new Date().toISOString(),
-    correlationId,
-    actor: actor ? `${actor.type}:${actor.id}` : null,
-    details,
-  };
+async function emitAuditEvent(event: ContractAuditEvent): Promise<void> {
   try {
-    const env = createEnvelope(Topics.audit.event, event, correlationId);
+    const env = createEnvelope(Topics.audit.event, event, event.correlationId ?? undefined);
     const headers = env.correlationId ? { 'x-correlation-id': env.correlationId } : undefined;
     await bus.publish(env.topic, env, headers);
   } catch (err) {
     logger.warn('failed to publish audit event', {
-      type,
-      correlationId,
+      type: event.type,
+      correlationId: event.correlationId,
       err: err instanceof Error ? err.message : err,
     });
   }
 }
 
-function recordAudit(type: string, correlationId: string | undefined, payload?: Record<string, unknown>): void {
-  const ledgerEvent = createAuditEvent(type, { correlationId, payload });
+function isAuditOptions(value: unknown): value is AuditRecordOptions {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    Object.prototype.hasOwnProperty.call(candidate, 'details') ||
+    Object.prototype.hasOwnProperty.call(candidate, 'actor') ||
+    Object.prototype.hasOwnProperty.call(candidate, 'subjectRef') ||
+    Object.prototype.hasOwnProperty.call(candidate, 'outcome') ||
+    Object.prototype.hasOwnProperty.call(candidate, 'reasonCode')
+  );
+}
+
+function normalizeAuditOptions(
+  value?: AuditRecordOptions | Record<string, unknown> | null
+): AuditRecordOptions {
+  if (!value) return {};
+  if (isAuditOptions(value)) {
+    return value as AuditRecordOptions;
+  }
+  return { details: value as Record<string, unknown> };
+}
+
+function formatActorRef(actor: AuthContext['actor'] | null | undefined): string | null {
+  if (!actor) return null;
+  if (actor.id) {
+    const hashed = hashIdentifier(actor.id);
+    return hashed ? `${actor.type}#${hashed}` : actor.type;
+  }
+  return actor.type;
+}
+
+function recordAudit(
+  type: string,
+  correlationId: string | undefined,
+  optionsInput: AuditRecordOptions | Record<string, unknown> = {}
+): LedgerAuditEvent {
+  const options = normalizeAuditOptions(optionsInput);
+  const event = createAuditEvent(type, {
+    correlationId: correlationId ?? null,
+    actorRef: formatActorRef(options.actor ?? null),
+    subjectRef: options.subjectRef ?? null,
+    outcome: options.outcome ?? 'unknown',
+    reasonCode: options.reasonCode ?? null,
+    details: options.details ?? null,
+  });
   void getAuditLedger()
-    .write(ledgerEvent)
+    .write(event)
     .catch((err) => {
       logger.warn('audit ledger write failed', {
         type,
@@ -830,6 +1729,7 @@ function recordAudit(type: string, correlationId: string | undefined, payload?: 
         err: err instanceof Error ? err.message : err,
       });
     });
+  return event;
 }
 
 function recordIdempotencyHit(key: string, correlationId: string | undefined): void {
@@ -987,7 +1887,93 @@ export function setFeatureStoreForTest(store: FeatureStore | null): void {
   featureStore = store;
 }
 
-const server = http.createServer((req, res) => withCorrelationContext(() => {
+export function getObjectStoreForTest(): ObjectStore | null {
+  return objectStore;
+}
+
+export function setObjectStoreForTest(store: ObjectStore | null): void {
+  objectStore = store;
+}
+
+export function getOidcClientForTest(): OidcClient | null {
+  return oidcClient;
+}
+
+export function setOidcClientForTest(client: OidcClient | null): void {
+  oidcClient = client;
+}
+
+async function respondHealth(res: http.ServerResponse): Promise<void> {
+  try {
+    const dependencies = await collectDependencyHealth();
+    const status = computeOverallStatus(dependencies);
+    res.statusCode = status === 'error' ? 503 : 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ status, dependencies }));
+  } catch (error) {
+    res.statusCode = 500;
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+}
+
+async function respondReady(res: http.ServerResponse): Promise<void> {
+  try {
+    const dependencies = await collectDependencyHealth();
+    const dependenciesStatus = computeOverallStatus(dependencies);
+    const previousBusReady = busReady;
+    const readiness = evaluateBusReadiness();
+    busReady = readiness.ready;
+    if (!busReady && previousBusReady) {
+      logger.error('bus readiness degraded', {
+        reason: readiness.reason,
+        health: readiness.health ?? { mode: 'memory' },
+      });
+    } else if (busReady && !previousBusReady) {
+      logger.info('bus readiness restored', {
+        health: readiness.health ?? { mode: 'memory' },
+      });
+    }
+    const draining = shuttingDown;
+    const ready = busReady && dependenciesStatus !== 'error' && !draining;
+    res.statusCode = ready ? 200 : 503;
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify({
+        status: ready ? 'ready' : 'not_ready',
+        bus: readiness.health
+          ? {
+              connected: readiness.health.isConnected,
+              backpressure: readiness.health.backpressure,
+              pendingLag: readiness.health.pendingLag,
+              inFlight: readiness.health.inFlight,
+              subscribed: readiness.health.subscribed,
+              reason: readiness.reason,
+            }
+          : { mode: 'memory', connected: true, reason: readiness.reason },
+        dependencies,
+        dependenciesStatus,
+        draining,
+      }),
+    );
+  } catch (error) {
+    res.statusCode = 500;
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify({
+        status: 'not_ready',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+}
+
+server = http.createServer((req, res) => withCorrelationContext(() => {
   if (!req.url) {
     res.statusCode = 400;
     res.end('Bad Request');
@@ -996,18 +1982,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
   const corr = cidFromHeaders(req.headers);
   setCorrelationId(corr);
   if (req.url === '/health') {
-    res.statusCode = 200;
-    res.end('ok');
+    void respondHealth(res);
     return;
   }
-  if (req.url === '/ready') {
-    const body = {
-      status: busReady ? 'ready' : 'not_ready',
-      bus: busReady ? 'connected' : 'disconnected',
-    };
-    res.statusCode = busReady ? 200 : 503;
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify(body));
+  if (req.url === '/ready' || req.url === '/readyz') {
+    void respondReady(res);
     return;
   }
   let parsedUrl: URL | null = null;
@@ -1026,7 +2005,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const requestId = getHeader(req.headers, 'x-request-id') ?? corr;
       const authHeader = getHeader(req.headers, 'authorization');
       const authContext = buildAuthContext(req.headers);
-      const deny = async (reason: GateDenialReason, extraDetails: Record<string, unknown> = {}): Promise<void> => {
+      const deny = async (
+        reason: GateDenialReason,
+        extraDetails: Record<string, unknown> = {},
+        overrides: Partial<AuditRecordOptions> = {},
+      ): Promise<void> => {
         logger.warn('booking slots denied', {
           reason,
           correlationId: corr,
@@ -1040,8 +2023,14 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
           scope: authContext?.scope,
           ...extraDetails,
         } satisfies Record<string, unknown>;
-        recordAudit(AUDIT_DENIED_TYPE, corr, auditDetails);
-        await emitAuditEvent(AUDIT_DENIED_TYPE, corr, authContext?.actor ?? null, auditDetails);
+        const auditEvent = recordAudit(AUDIT_DENIED_TYPE, corr, {
+          actor: authContext?.actor ?? null,
+          subjectRef: overrides.subjectRef ?? null,
+          outcome: 'deny',
+          reasonCode: reason,
+          details: auditDetails,
+        });
+        await emitAuditEvent(auditEvent);
         respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
       };
 
@@ -1060,26 +2049,33 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const patientIdFromQuery = parsedUrl?.searchParams?.get('patientId') ?? undefined;
       const patientIdHeader = getHeader(req.headers, 'x-patient-id');
       const patientId = patientIdHeader || patientIdFromQuery || undefined;
+      const patientRef = safePatientReference(patientId);
 
       if (actor.type === 'patient' && (!patientId || patientId !== actor.id)) {
-        await deny('not_authorized', { reason: 'patient_mismatch' });
+        await deny('not_authorized', { reason: 'patient_mismatch' }, { subjectRef: patientRef });
         return;
       }
 
       if (!(await security.authorize(actor, BOOKING_SCOPE, patientId, scope))) {
-        await deny('not_authorized');
+        await deny('not_authorized', {}, { subjectRef: patientRef });
         return;
       }
 
       let consentReference: string | null = null;
       if (patientId) {
-        if (!(await security.checkConsent(patientId, 'care', Array.from(BOOKING_RESOURCES)))) {
-          await deny('consent_denied');
+        const consentDecision = await security.checkConsent(
+          patientId,
+          'care',
+          Array.from(BOOKING_RESOURCES),
+          { correlationId: corr },
+        );
+        if (!consentDecision.allowed) {
+          await deny('consent_denied', { consentReason: consentDecision.reason }, { subjectRef: patientRef });
           return;
         }
-        const consentEvidence = getConsentEvidence(patientId, 'care');
+        const consentEvidence = consentDecision.evidence ?? getConsentEvidence(patientId, 'care');
         if (!consentEvidence) {
-          await deny('consent_denied', { reason: 'consent_evidence_missing' });
+          await deny('consent_denied', { reason: 'consent_evidence_missing' }, { subjectRef: patientRef });
           return;
         }
         consentReference = consentEvidence.reference;
@@ -1107,9 +2103,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       }
 
       const controller = new AbortController();
-      const timeoutMs = Number.isFinite(bookingAvailabilityTimeoutMs) && bookingAvailabilityTimeoutMs > 0
-        ? bookingAvailabilityTimeoutMs
-        : 3000;
+      const configuredBookingTimeout = getBookingAvailabilityTimeoutMs();
+      const timeoutMs =
+        Number.isFinite(configuredBookingTimeout) && configuredBookingTimeout > 0
+          ? configuredBookingTimeout
+          : 3000;
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       let upstream: Response;
@@ -1155,8 +2153,14 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
           consentReference,
           upstreamStatus: upstream.status,
         } satisfies Record<string, unknown>;
-        recordAudit('orchestrator.booking.proxy', corr, successAuditDetails);
-        await emitAuditEvent('orchestrator.booking.proxy', corr, authContext.actor, successAuditDetails);
+        const auditEvent = recordAudit('orchestrator.booking.proxy', corr, {
+          actor: authContext.actor,
+          subjectRef: patientRef,
+          outcome: 'allow',
+          reasonCode: upstream.status >= 400 ? String(upstream.status) : null,
+          details: successAuditDetails,
+        });
+        await emitAuditEvent(auditEvent);
         setOutcome('ok');
       }
     });
@@ -1177,15 +2181,22 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const deny = async (
         reason: string,
         code: ErrorCode = 'forbidden',
-        extraDetails: Record<string, unknown> = {}
+        extraDetails: Record<string, unknown> = {},
+        overrides: Partial<AuditRecordOptions> = {},
       ): Promise<void> => {
         const auditDetails = {
           reason,
           scope: extractScopes(req.headers),
           ...extraDetails,
         } satisfies Record<string, unknown>;
-        recordAudit('orchestrator.feature_log.denied', corr, auditDetails);
-        await emitAuditEvent('orchestrator.feature_log.denied', corr, authContext?.actor ?? null, auditDetails);
+        const auditEvent = recordAudit('orchestrator.feature_log.denied', corr, {
+          actor: authContext?.actor ?? null,
+          subjectRef: overrides.subjectRef ?? null,
+          outcome: 'deny',
+          reasonCode: reason,
+          details: auditDetails,
+        });
+        await emitAuditEvent(auditEvent);
         respondError(res, code, code === 'forbidden' ? 'Access denied' : 'Invalid request', corr, setOutcome, auditDetails);
       };
 
@@ -1239,18 +2250,23 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         await deny('patient_id_missing', 'invalid_input');
         return;
       }
+      const patientRef = safePatientReference(patientId);
       const correlationId =
         typeof payload.correlationId === 'string' && payload.correlationId.trim().length > 0 ? payload.correlationId : corr;
 
-      if (
-        !(await security.checkConsent(patientId, FEATURE_LOG_PURPOSE, Array.from(FEATURE_LOG_RESOURCES)))
-      ) {
-        await deny('consent_denied');
+      const consentDecision = await security.checkConsent(
+        patientId,
+        FEATURE_LOG_PURPOSE,
+        Array.from(FEATURE_LOG_RESOURCES),
+        { correlationId },
+      );
+      if (!consentDecision.allowed) {
+        await deny('consent_denied', 'forbidden', { consentReason: consentDecision.reason }, { subjectRef: patientRef });
         return;
       }
-      const consentEvidence = getConsentEvidence(patientId, FEATURE_LOG_PURPOSE);
+      const consentEvidence = consentDecision.evidence ?? getConsentEvidence(patientId, FEATURE_LOG_PURPOSE);
       if (!consentEvidence || consentEvidence.reference !== consentReferenceHeader) {
-        await deny('consent_mismatch', 'forbidden', { consentReference: consentEvidence?.reference ?? null });
+        await deny('consent_mismatch', 'forbidden', { consentReference: consentEvidence?.reference ?? null }, { subjectRef: patientRef });
         return;
       }
 
@@ -1299,8 +2315,14 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         consentReference: consentEvidence.reference,
         scope: scopes,
       } satisfies Record<string, unknown>;
-      recordAudit('orchestrator.feature_log.accepted', corr, successAuditDetails);
-      await emitAuditEvent('orchestrator.feature_log.accepted', corr, authContext?.actor ?? null, successAuditDetails);
+      const auditEvent = recordAudit('orchestrator.feature_log.accepted', corr, {
+        actor: authContext?.actor ?? null,
+        subjectRef: patientRef,
+        outcome: 'allow',
+        reasonCode: 'accepted',
+        details: successAuditDetails,
+      });
+      await emitAuditEvent(auditEvent);
 
       res.statusCode = 202;
       res.end('accepted');
@@ -1317,14 +2339,15 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         return;
       }
 
-      const maxBytes = resolveMaxBodyBytes();
-      const rawBuf = await readRequestBody(req, maxBytes);
-
       const ctype = (req.headers['content-type'] || '').toString().toLowerCase();
       if (!ctype.includes('application/json')) {
+        req.resume();
         respondError(res, 'unsupported_media_type', 'Only application/json is supported', corr, setOutcome);
         return;
       }
+
+      const maxBytes = resolveMaxBodyBytes();
+      const rawBuf = await readRequestBody(req, maxBytes);
 
       const raw = rawBuf.toString('utf8');
       let submission: PortalSubmission;
@@ -1362,12 +2385,18 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       res.setHeader('x-idempotency-key', idemKey);
       logger.info('idempotency.key.derived', { key: idemKey, correlationId: corr });
 
+      const practiceConfigSnapshot = currentPracticeConfig();
+      const safetyGateTimeoutMs = getSafetyGateTimeoutMs();
+      const safetyGateFallbackMode = getSafetyGateFallbackMode();
+      const shadowSafetyGate = getShadowSafetyGate();
+      const idempotencyTtlSeconds = getIdempotencyTtlSeconds();
+
       const orchestratorContext: OrchestratorContext = {
         id: requestId,
         correlationId: corr,
         requestId,
         submission,
-        practiceId: practiceConfig.practiceId,
+        practiceId: practiceConfigSnapshot.practiceId,
         authHeader,
         authContext,
         actor: authContext?.actor ?? undefined,
@@ -1412,8 +2441,41 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         bus,
         triageTopic: Topics.triage.input,
         busHeaders: undefined,
-        emitAudit: (type, details) => emitAuditEvent(type, corr, authContext?.actor ?? null, details),
-        recordAudit: (type, details) => recordAudit(type, corr, details),
+        busPublishOptions: {
+          timeoutMs: busPublishTimeoutMs,
+          maxRetries: busPublishMaxRetries,
+          baseDelayMs: busPublishBackoffMs,
+        },
+        emitAudit: async (type, options) => {
+          const normalized = normalizeAuditOptions(options);
+          const resolved: AuditRecordOptions = {
+            actor: normalized.actor ?? authContext?.actor ?? null,
+            subjectRef: normalized.subjectRef ?? null,
+            outcome: normalized.outcome ?? 'unknown',
+            reasonCode: normalized.reasonCode ?? null,
+            details: normalized.details ?? null,
+          };
+          const event = createAuditEvent(type, {
+            correlationId: corr ?? null,
+            actorRef: formatActorRef(resolved.actor ?? null),
+            subjectRef: resolved.subjectRef,
+            outcome: resolved.outcome,
+            reasonCode: resolved.reasonCode,
+            details: resolved.details,
+          });
+          await emitAuditEvent(event);
+        },
+        recordAudit: (type, options) => {
+          const normalized = normalizeAuditOptions(options);
+          const resolved: AuditRecordOptions = {
+            actor: normalized.actor ?? authContext?.actor ?? null,
+            subjectRef: normalized.subjectRef ?? null,
+            outcome: normalized.outcome ?? 'unknown',
+            reasonCode: normalized.reasonCode ?? null,
+            details: normalized.details ?? null,
+          };
+          return recordAudit(type, corr, resolved);
+        },
         result: undefined,
         classifyErrorCode,
       };
@@ -1452,7 +2514,33 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
   res.end('orchestrator skeleton');
 }));
 
+server.on('clientError', (err, socket) => {
+  logger.warn('http.client_error', {
+    reason: err instanceof Error ? err.message : String(err),
+  });
+  const envelope = errorEnvelope('invalid_input', 'Invalid HTTP request', undefined, undefined);
+  const body = JSON.stringify(envelope);
+  const response = [
+    'HTTP/1.1 400 Bad Request',
+    'Content-Type: application/json',
+    `Content-Length: ${Buffer.byteLength(body)}`,
+    'Connection: close',
+    '',
+    body,
+  ].join('\r\n');
+  socket.end(response);
+});
+
 if (process.env.NODE_ENV !== 'test') {
+  const shutdownSignals: Array<NodeJS.Signals> = ['SIGTERM', 'SIGINT'];
+  shutdownSignals.forEach((signal) => {
+    process.once(signal, () => {
+      void initiateShutdown(signal).finally(() => {
+        process.exit(0);
+      });
+    });
+  });
+
   server.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`orchestrator listening on :${port}`);
@@ -1460,23 +2548,34 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 export function setBusReadyForTest(ready: boolean): void {
+  busReadyOverride = ready;
   busReady = ready;
 }
 
 export function getBusReadyForTest(): boolean {
-  return busReady;
+  return busReadyOverride ?? busReady;
 }
 
 export function getMessageBusForTest(): MessageBus {
   return bus;
 }
 
+export function setMessageBusForTest(messageBus: MessageBus): void {
+  bus = messageBus;
+  busReady = true;
+  busReadyOverride = true;
+}
+
+export function setShuttingDownForTest(value: boolean): void {
+  shuttingDown = value;
+}
+
 export function getPracticeConfig(): ResolvedConfig {
-  return practiceConfig;
+  return currentPracticeConfig() as ResolvedConfig;
 }
 
 export function getSafetyGateSettings(): { timeoutMs: number; fallback: 'rules' | 'none' } {
-  return { timeoutMs: safetyGateTimeoutMs, fallback: safetyGateFallbackMode };
+  return { timeoutMs: getSafetyGateTimeoutMs(), fallback: getSafetyGateFallbackMode() };
 }
 
 export function setIdempotencyStoreForTest(store: IdempotencyStore): void {
@@ -1493,6 +2592,10 @@ export function setFhirRepositoryForTest(repository: FhirRepository): void {
 
 export function resetFhirRepositoryForTest(): void {
   fhirRepository = constructFhirRepository();
+}
+
+export async function shutdownForTest(): Promise<void> {
+  await initiateShutdownForTest();
 }
 
 export { server };

@@ -14,7 +14,7 @@ Start Here
 - Ports: packages/ports/src/feature-store.ts
 
 Status: in-progress
-Progress: 56%
+Progress: 61%
 
 Dependencies
 - mlops/engineer-02 (Feature monitoring)
@@ -38,13 +38,13 @@ Completed
 - [x] DE-02.8 — Online store adapter (memory/Redis) with TTL, upsert semantics, health/readiness (`packages/ports/src/feature-store.ts`, `@onecare/feature-store-online`)
 - [x] DE-02.9 — Point‑in‑time join library (leakage‑safe training sets) + tests (`packages/feature-store-offline/src/pit.ts`, associated Vitest coverage)
 - [x] DE-02.10 — Streaming ingestion (events→features) with idempotency, retries+jitter, DLQ (`@onecare/feature-store-ingest`, `scripts/feature_store/ingest_stream.js`, `docs/FEATURE_INGESTION.md`)
+- [x] DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization (`packages/feature-store-offline/src/views.ts`, `packages/feature-store-offline/test/views.test.ts`, `scripts/feature_store/views.js`, `docs/FEATURE_VIEWS.md`)
 
 Incomplete
-- [ ] DE-02.11 — Feature views & transformations (sliding windows, aggregates) + materialization (Outstanding: no feature view pipelines or materialization jobs.)
-- [ ] DE-02.12 — Data quality & freshness (constraints, SLI, alerts) and quarantine (Outstanding: no DQ checks or freshness monitors wired for features.)
-- [ ] DE-02.13 — Privacy & governance (PII minimization, IAM, encryption, audit logs) (Outstanding: no governance/PII docs or automation delivered.)
-- [ ] DE-02.14 — Backfill/recompute framework (range runs, job metadata, idempotent writes) (Outstanding: only single-run backfill script exists; no framework.)
-- [ ] DE-02.15 — Training/serving skew detection harness (monitoring hooks) (Outstanding: no skew detection harness or metrics.)
-- [ ] DE-02.16 — Drift monitoring integration (handoff to MLOps) + docs (Outstanding: no drift integration or docs.)
-- [ ] DE-02.17 — Performance/load testing (throughput/latency; cache strategy; cost/perf) (Outstanding: no load testing artifacts.)
-- [ ] DE-02.18 — Documentation & ADRs (registry, offline/online stores, PIT, DQ, governance) (Outstanding: extend governance/DQ sections and consolidate docs into service-level readiness checklist.)
+- [ ] DE-02.12 — Data quality & freshness (constraints, SLI, alerts) and quarantine (Outstanding: no `scripts/feature_store/dq.js`, `docs/FEATURE_DQ.md`, or monitoring hooks; ingestion currently validates schema only.)
+- [ ] DE-02.13 — Privacy & governance (PII minimization, IAM, encryption, audit logs) (Outstanding: `docs/FEATURE_GOVERNANCE.md` and IAM samples under `config/feature-store/` not present.)
+- [ ] DE-02.14 — Backfill/recompute framework (range runs, job metadata, idempotent writes) (Outstanding: `scripts/feature_backfill.js` still lacks ledger metadata, resume/dry-run flags, and only targets the in-memory sink; no `docs/FEATURE_BACKFILL.md`.)
+- [ ] DE-02.15 — Training/serving skew detection harness (monitoring hooks) (Outstanding: no skew CLI (`scripts/feature_store/skew.js`) or docs; monitoring metrics absent.)
+- [ ] DE-02.16 — Drift monitoring integration (handoff to MLOps) + docs (Outstanding: `docs/FEATURE_MONITORING.md`/`docs/FEATURE_SLO.md` not authored; no defined metrics export.)
+- [ ] DE-02.17 — Performance/load testing (throughput/latency; cache strategy; cost/perf) (Outstanding: `scripts/bench/feature_store_load.js` and `docs/FEATURE_PERF.md` missing.)
+- [ ] DE-02.18 — Documentation & ADRs (registry, offline/online stores, PIT, DQ, governance) (Outstanding: consolidated `docs/FEATURE_README.md` and the missing guides (DQ/governance/backfill/monitoring/skew) not yet written.)

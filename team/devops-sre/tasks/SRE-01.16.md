@@ -4,6 +4,7 @@ Task: SRE-01.16 — Kubernetes baseline (manifests/Helm: resources, probes, HPA,
 
 Context
 - Establish production‑ready Kubernetes defaults: resource requests/limits, liveness/readiness/startup probes, HPA targets, NetworkPolicies, and ingress. Ensure parity with docker‑compose for dev.
+- Current state: `infra/k8s/` only contains a draft network policy; no base manifests, Helm charts, or per-service values exist.
 
 Files
 - infra/k8s/base/ (new)
@@ -27,4 +28,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.16' && make team-status-write
-

@@ -108,7 +108,7 @@ describe('zero-trust gate', () => {
   it('denies when authorization check fails', async () => {
     const verify = vi.fn<SecurityServices['verifySignatureAndReplayGuard']>().mockResolvedValue(true);
     const authorize = vi.fn<SecurityServices['authorize']>().mockResolvedValue(false);
-    const consent = vi.fn<SecurityServices['checkConsent']>().mockResolvedValue(true);
+    const consent = vi.fn<SecurityServices['checkConsent']>().mockResolvedValue({ allowed: true, reason: 'granted' });
     setSecurityServices({ verifySignatureAndReplayGuard: verify, authorize, checkConsent: consent });
     const events: TypedEnvelope<AuditEvent>[] = [];
     const subscription = await subscribeAuditEvents((env) => events.push(env));
@@ -143,7 +143,7 @@ describe('zero-trust gate', () => {
   it('denies when consent is not present', async () => {
     const verify = vi.fn<SecurityServices['verifySignatureAndReplayGuard']>().mockResolvedValue(true);
     const authorize = vi.fn<SecurityServices['authorize']>().mockResolvedValue(true);
-    const consent = vi.fn<SecurityServices['checkConsent']>().mockResolvedValue(false);
+    const consent = vi.fn<SecurityServices['checkConsent']>().mockResolvedValue({ allowed: false, reason: 'not_found' });
     setSecurityServices({ verifySignatureAndReplayGuard: verify, authorize, checkConsent: consent });
     const events: TypedEnvelope<AuditEvent>[] = [];
     const subscription = await subscribeAuditEvents((env) => events.push(env));

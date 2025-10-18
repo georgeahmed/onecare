@@ -13,8 +13,8 @@ Start Here
 - Schemas: schemas/* (treat as contracts)
 - CI: .github/workflows/ci.yml (test stages)
 
-Status: stable
-Progress: 100%
+Status: in progress
+Progress: 27%
 
 Dependencies
 - backend/engineer-01 (Orchestrator)
@@ -28,25 +28,22 @@ Platform Checklist (pre-flight)
 - No PHI in test logs/artifacts; correlationId recorded for traceability.
 
 Tasks
-- [x] QA-01.1 — Schema validation harness for TS events (Ajv or similar)
-- [x] QA-01.2 — Contract tests for triage.input, tasks.created, appointment.created
-- [x] QA-01.3 — E2E test: portal submission → orchestrator → triage Task
-- [x] QA-01.4 — E2E test: booking search/create write-back
-- [x] QA-01.5 — OpenAPI validation for Python endpoints (expand CI script)
-- [x] QA-01.6 — Contract tests for pharmacy and ICS
- - [ ] QA-01.7 — Property-based and fuzz tests for contracts (boundary/randomized payloads)
- - [ ] QA-01.8 — E2E fault injection (timeouts, CB open, partial failures) with deterministic mocks
- - [ ] QA-01.9 — DLQ path verification (poison messages, retries bounded, minimal context)
- - [ ] QA-01.10 — Backpressure and rate limit tests (429/503 flows; retry-after)
- - [ ] QA-01.11 — Privacy/redaction tests (logs/events PHI-free; sensitive pattern scans)
- - [ ] QA-01.12 — CorrelationId propagation audit across HTTP→bus→services
- - [ ] QA-01.13 — Telephony parity E2E (call transcribed → intent → orchestrator)
- - [ ] QA-01.14 — Synthetic load smoke (light k6/newman) for key paths with budgets
- - [ ] QA-01.15 — Hermetic test env (compose profile; seed data; stable endpoints)
- - [ ] QA-01.16 — Flaky test detection and quarantine strategy in CI
- - [ ] QA-01.17 — Test data management (fixtures, anonymization, rotation policy)
- - [ ] QA-01.18 — Contract drift monitor (schema/codegen diff gates; snapshots)
- - [ ] QA-01.19 — Accessibility checks in E2E (axe) for critical flows
- - [ ] QA-01.20 — QA runbooks and coverage matrix (systems under test, scenarios)
- - [ ] QA-01.21 — DLQ reprocessing E2E (replay → success; idempotency; correlation)
- - [ ] QA-01.22 — System chaos drills (bus down, FHIR 5xx, CB open) with SLO checks
+- Completed items: QA-01.1 → QA-01.6 (see `team/qa-automation/Completed Tasks/` for full write-ups and artifacts).
+
+Incomplete Tasks
+- [ ] QA-01.7 — Property-based and fuzz tests for contracts (boundary/randomized payloads)
+- [ ] QA-01.8 — E2E fault injection (timeouts, CB open, partial failures) with deterministic mocks
+- [ ] QA-01.9 — DLQ path verification (poison messages, retries bounded, minimal context)
+- [ ] QA-01.10 — Backpressure and rate limit tests (429/503 flows; retry-after)
+- [ ] QA-01.11 — Privacy/redaction tests (logs/events PHI-free; sensitive pattern scans)
+- [ ] QA-01.12 — CorrelationId propagation audit across HTTP→bus→services
+- [ ] QA-01.13 — Telephony parity E2E (call transcribed → intent → orchestrator)
+- [ ] QA-01.14 — Synthetic load smoke (light k6/newman) for key paths with budgets
+- [ ] QA-01.15 — Hermetic test env (compose profile; seed data; stable endpoints)
+- [ ] QA-01.16 — Flaky test detection and quarantine strategy in CI
+- [ ] QA-01.17 — Test data management (fixtures, anonymization, rotation policy)
+- [ ] QA-01.18 — Contract drift monitor (schema/codegen diff gates; snapshots)
+- [ ] QA-01.19 — Accessibility checks in E2E (axe) for critical flows
+- [ ] QA-01.20 — QA runbooks and coverage matrix (systems under test, scenarios)
+- [ ] QA-01.21 — DLQ reprocessing E2E (replay → success; idempotency; correlation)
+- [ ] QA-01.22 — System chaos drills (bus down, FHIR 5xx, CB open) with SLO checks

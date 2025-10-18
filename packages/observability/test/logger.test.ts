@@ -103,6 +103,17 @@ describe('logger redaction', () => {
       slots: [1, 2, 3],
     });
   });
+
+  it('redacts cookie and set-cookie values', () => {
+    log('info', 'cookies present', {
+      Cookie: 'session=abc123; theme=blue',
+      'Set-Cookie': 'session=abc123; HttpOnly; Secure',
+    });
+
+    const payload = getLastPayload();
+    expect(payload.Cookie).toBe('[REDACTED]');
+    expect(payload['Set-Cookie']).toBe('[REDACTED]');
+  });
 });
 
 describe('correlation context', () => {

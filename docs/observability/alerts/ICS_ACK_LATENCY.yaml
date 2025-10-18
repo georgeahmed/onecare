@@ -1,0 +1,10 @@
+alert: ICSAckLatencyHigh
+expr: |
+  histogram_quantile(0.95, sum(rate(ics_ack_latency_ms_bucket[5m])) by (le)) > 0.03
+for: 10m
+labels:
+  severity: warning
+  service: ics-hub
+annotations:
+  summary: "ICS Hub ack latency p95 above 30ms"
+  description: "Ack publishing is slower than target. Check bus health, audit spool backlog, and processing limiter metrics."

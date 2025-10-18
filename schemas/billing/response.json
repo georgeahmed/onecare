@@ -1,0 +1,34 @@
+{
+  "$id": "https://onecare/schemas/billing/response.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claimId",
+    "status"
+  ],
+  "properties": {
+    "claimId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "pending",
+        "rejected"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditLedger, AuditEvent as LedgerAuditEvent } from '@onecare/ports';
-import { logger } from '@onecare/observability';
+import { getCounterTotal, logger, resetMetrics } from '@onecare/observability';
 import {
   createAuditEvent,
   flushAuditLedgerForTest,
@@ -18,6 +18,7 @@ describe('BufferedAuditLedger', () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     resetAuditLedger();
+    resetMetrics();
   });
 
   it('retries failed writes with backoff and eventually succeeds', async () => {
@@ -50,6 +51,8 @@ describe('BufferedAuditLedger', () => {
 
     expect(stubWrite).toHaveBeenCalledTimes(2);
     expect(stubWrite.mock.calls[1]?.[0]?.type).toBe('test.retry');
+    expect(getCounterTotal('audit.write.ok')).toBe(1);
+    expect(getCounterTotal('audit.write.fail')).toBe(1);
   });
 
   it('drops events when the buffer is full', async () => {
@@ -73,8 +76,9 @@ describe('BufferedAuditLedger', () => {
 
     await flushAuditLedgerForTest();
 
-    const dropLogged = warnSpy.mock.calls.some((call) => call[0] === 'audit.buffer.drop');
+    const dropLogged = warnSpy.mock.calls.some((call) => call[0] === 'audit.queue.drop');
     expect(dropLogged).toBe(true);
+    expect(getCounterTotal('audit.queue.drop')).toBe(1);
     expect(stubWrite).toHaveBeenCalledTimes(1);
   });
 });

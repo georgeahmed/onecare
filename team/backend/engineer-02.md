@@ -23,7 +23,7 @@ Contracts & Validation
 - ADR: docs/adr/2025-10-11-bus-injection.md
 
 Status: in-progress
-Progress: 34%
+Progress: 58%
 
 Dependencies
 - devops-sre/engineer-01 (Broker infra)
@@ -42,13 +42,6 @@ Tasks
 Completed tasks have moved to `team/backend/Completed Tasks/engineer-02.md`.
 
 Incomplete
-- [ ] BE-02.6b — Idempotency on consume (key propagation) (no idempotency store integration or key propagation).
-- [ ] BE-02.7 — Ordering/partitioning (keyed subjects; per-tenant ordering guarantees) (subjects remain unpartitioned).
-- [ ] BE-02.8 — Flow control/backpressure (prefetch/credits, size limits; pressure signals) (no adaptive flow control or pressure signals).
-- [ ] BE-02.9 — Security hardening (TLS, creds, subject ACLs; secret rotation readiness) (TLS creds/rotation not implemented).
-- [ ] BE-02.10 — Observability (latency histograms, error/retry counters, spans; correlationId propagation) (basic counters/histograms in place; spans and latency instrumentation still pending).
-- [ ] BE-02.11 — Health/readiness (ping bus, durable sub status; probe cache) (lack readiness probes beyond basic `busReady` flag).
-- [ ] BE-02.13 — Advanced DLQ/retry (bounded retries, poison detection, requeue tooling) (no advanced retry/DLQ tooling).
 - [ ] BE-02.14 — Parity tests vs MemoryBus (deterministic; no network in unit) (parity test suite not started).
 - [ ] BE-02.15 — Docs & ADRs (bus selection, semantics, operational playbook) (operational docs/playbooks still missing).
 - [ ] BE-02.16 — Multi-tenant isolation/quotas (partitioning, throughput caps) (no quotas or tenant isolation controls).

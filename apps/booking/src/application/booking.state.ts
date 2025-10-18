@@ -397,21 +397,21 @@ export class BookedState extends BaseState<BookingContext, BookingEvent> {
         await emitAudit(ctx, confirmation);
         await publishAppointmentCreated(ctx, confirmation);
         logger.info('booking.idempotency.executed', {
-          key: idempotencyKey,
+          keyFingerprint: fingerprintIdempotencyKey(idempotencyKey),
           correlationId: ctx.correlationId,
         });
         return confirmation;
       },
       onDuplicate: () => {
         logger.warn('booking.idempotency.duplicate', {
-          key: idempotencyKey,
+          keyFingerprint: fingerprintIdempotencyKey(idempotencyKey),
           slotId: slot.id,
           correlationId: ctx.correlationId,
         });
       },
       onError: (error) => {
         logger.error('booking.idempotency.failed', {
-          key: idempotencyKey,
+          keyFingerprint: fingerprintIdempotencyKey(idempotencyKey),
           correlationId: ctx.correlationId,
           reason: error instanceof Error ? error.message : 'unknown_error',
         });
@@ -515,12 +515,14 @@ async function notifyQueue(
   confirmation: { appointmentId: string; slotId: string },
 ): Promise<void> {
   if (!ctx.queueNotifier) return;
-  const payload = {
+  const payload: Record<string, unknown> = {
     appointmentId: confirmation.appointmentId,
     slotId: confirmation.slotId,
-    patientId: ctx.patientId,
     slot: ctx.selectedSlot,
   };
+  if (ctx.patientId) {
+    payload.patientHash = hashIdentifier(ctx.patientId);
+  }
   const queue = ctx.queueName ?? 'booking.notifications';
   await ctx.queueNotifier.notify(queue, payload);
 }
@@ -530,15 +532,18 @@ async function emitAudit(
   confirmation: { appointmentId: string; slotId: string },
 ): Promise<void> {
   if (!ctx.auditPublisher) return;
+  const payload: Record<string, unknown> = {
+    appointmentId: confirmation.appointmentId,
+    slotId: confirmation.slotId,
+    taskId: ctx.originatingTaskId,
+    correlationId: ctx.correlationId,
+  };
+  if (ctx.patientId) {
+    payload.patientHash = hashIdentifier(ctx.patientId);
+  }
   await ctx.auditPublisher.emit({
     type: 'booking.appointment.created',
-    payload: {
-      appointmentId: confirmation.appointmentId,
-      slotId: confirmation.slotId,
-      patientId: ctx.patientId,
-      taskId: ctx.originatingTaskId,
-      correlationId: ctx.correlationId,
-    },
+    payload,
   });
 }
 
@@ -548,7 +553,8 @@ export function deriveBookingIdempotencyKey(ctx: BookingContext): string {
   const slotId = ctx.selectedSlot?.id ?? ctx.appointmentConfirmation?.slotId ?? 'unknown-slot';
   const patientId = ctx.patientId ?? 'unknown-patient';
   const origin = ctx.originatingTaskId ?? ctx.correlationId ?? ctx.id;
-  return `booking:${patientId}:${slotId}:${origin}`;
+  const patientFingerprint = hashIdentifier(patientId);
+  return `booking:${patientFingerprint}:${slotId}:${origin}`;
 }
 
 export function resolveIdempotencyTtl(ctx: BookingContext): number {
@@ -573,4 +579,64 @@ function ensureCorrelationId(ctx: BookingContext): string | undefined {
   const normalized = normalizeCorrelationId(ctx.correlationId);
   ctx.correlationId = normalized;
   return normalized;
+}
+
+function hashIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function fingerprintIdempotencyKey(key: string): string {
+  return hashIdentifier(key).slice(0, 16);
+}
+
+function classifyErrorCode(error: unknown): string | undefined {
+  if (!error) return undefined;
+  const code = (error as { code?: string }).code ?? (error as { name?: string }).name;
+  return code ? String(code).toLowerCase() : undefined;
+}
+
+function createPublishHeaders(correlationId: string | undefined, messageId: string): Record<string, string> {
+  const headers: Record<string, string> = { 'x-message-id': messageId };
+  if (correlationId) headers['x-correlation-id'] = correlationId;
+  return headers;
+}
+
+async function publishAppointmentDlq(
+  ctx: BookingContext,
+  confirmation: { appointmentId: string; slotId: string },
+  payload: AppointmentCreated,
+  correlationId: string | undefined,
+  error: unknown,
+  attempts: number,
+): Promise<void> {
+  const bus = ensureBookingBus(ctx);
+  if (!bus) return;
+  const dlqPayload: DlqEvent = {
+    originalTopic: Topics.booking.appointmentCreated,
+    correlationId,
+    errorCode: classifyErrorCode(error) ?? 'event_publish_failed',
+    errorMessage: error instanceof Error ? error.message : 'unknown_error',
+    payloadRef: {
+      appointmentId: payload.appointmentId,
+      slotId: confirmation.slotId,
+    },
+    attempts,
+    ts: new Date().toISOString(),
+  };
+  const envelope = createEnvelope(Topics.booking.appointmentCreatedDlq, dlqPayload, correlationId);
+  try {
+    const headers = createPublishHeaders(correlationId, envelope.id);
+    await bus.publish(Topics.booking.appointmentCreatedDlq, envelope, headers);
+    appointmentEventDlqCounter.add(1, { topic: Topics.booking.appointmentCreated });
+    logger.warn('booking.create.event_dlq_published', {
+      appointmentId: confirmation.appointmentId,
+      attempts,
+      correlationId,
+    });
+  } catch (dlqError) {
+    logger.error('booking.create.event_dlq_failed', {
+      correlationId,
+      reason: dlqError instanceof Error ? dlqError.message : 'unknown_error',
+    });
+  }
 }

@@ -126,6 +126,26 @@ describe('GpConnectHttpClient', () => {
     ).rejects.toMatchObject({ code: 'unknown' });
     expect(getCounterTotal('gp_connect_create_error_total')).toBeGreaterThanOrEqual(1);
   });
+
+  it('rejects insecure GP Connect base URLs', () => {
+    expect(
+      () =>
+        new GpConnectHttpClient({
+          baseUrl: 'http://gp-connect.example',
+          apiKey: 'key',
+        }),
+    ).toThrow('gp_connect_url_insecure');
+  });
+
+  it('rejects private GP Connect endpoints', () => {
+    expect(
+      () =>
+        new GpConnectHttpClient({
+          baseUrl: 'https://192.168.0.10',
+          apiKey: 'key',
+        }),
+    ).toThrow('gp_connect_url_private');
+  });
 });
 
 describe('mapSlotsToView', () => {

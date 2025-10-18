@@ -105,3 +105,4 @@ export async function handlePharmacyReferral(
 export type { PharmacyRouterResult } from './application/router';
 export { PharmacyRouterConsumer } from './adapters/consumer';
 export { validatePharmacyReferralIngress, buildReferralRequest } from './adapters/referralIngress';
+export { PatientNotificationAdapter, type PatientNotificationAdapterOptions, type ConsentEvaluator } from './adapters/patient-notifier';

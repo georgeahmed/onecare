@@ -22,6 +22,10 @@ Data Sources
   - `analytics.ingest.dlq` — Messages routed to DLQ (attributes mirror error counter)
   - `analytics.ingest.lag_ms` — Histogram of clock skew between payload timestamp and persistence time
   - `analytics.sink.latency_ms` — Histogram of sink write duration
+- **Offline ETL metrics** — Command-line jobs emit structured counters/histograms via `@onecare/observability`:
+  - Rollups: `analytics.rollup.run`, `analytics.rollup.metrics_processed`, `analytics.rollup.windows_emitted`, `analytics.rollup.duration_ms`, `analytics.rollup.errors`
+  - Data quality: `analytics.quality.run`, `analytics.quality.records_processed`, `analytics.quality.missing_fields`, `analytics.quality.quarantine_records`, `analytics.quality.duration_ms`, `analytics.quality.errors`
+  - Quarantine export: `analytics.quarantine_export.run`, `analytics.quarantine_export.files_archived`, `analytics.quarantine_export.duration_ms`, `analytics.quarantine_export.retention_deleted`, `analytics.quarantine_export.errors`
 - **Raw sink (`metrics.jsonl`)** — Optional for drill-down. Each line mirrors the analytics metric contract (`name`, `value`, `labels`, `timestamp`).
 - **Dead-letter queue (`broker.dlq`)** — Optional for error investigation. Surface as a secondary panel when DLQ metrics are published.
 
@@ -55,6 +59,8 @@ Dashboard Layout
      - Histogram/percentiles of `analytics.ingest.lag_ms` to monitor end-to-end ingest latency.
      - Line chart of `analytics.ingest.ok` vs `analytics.ingest.error`/`analytics.ingest.dlq` (stacked or side-by-side) to gauge reliability.
      - Bar chart or sparkline of `analytics.ingest.retry` to uncover flapping sinks.
+     - Offline job summary table tracking `analytics.rollup.run`, `analytics.quality.run`, and `analytics.quarantine_export.run` counts per day to prove jobs executed.
+     - Duration trend panels for `analytics.rollup.duration_ms`, `analytics.quality.duration_ms`, and `analytics.quarantine_export.duration_ms` with thresholds for timeouts/SLOs.
    - Notes: break down by `metricName` attribute where volumes justify it; alert when errors or DLQ counts exceed agreed thresholds.
 
 6. **DLQ Intake (Bar)**

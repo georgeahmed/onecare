@@ -13,7 +13,15 @@ services:
         "-user",
         "onecare",
         "-pass",
-        "onecare-secret"
+        "onecare-secret",
+        "--tls",
+        "--tlscert",
+        "/etc/nats/certs/nats.crt",
+        "--tlskey",
+        "/etc/nats/certs/nats.key",
+        "--tlscacert",
+        "/etc/nats/certs/ca.crt",
+        "--tlsverify"
       ]
     environment:
       - NATS_USER=onecare
@@ -23,6 +31,7 @@ services:
       - "8222:8222"
     volumes:
       - nats-data:/data/jetstream
+      - ./infra/tls/dev:/etc/nats/certs:ro
     deploy:
       resources:
         limits:
@@ -76,13 +85,20 @@ services:
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
       - PY_SCRIBE_URL=http://scribe:8082
       - BUS_IMPL=nats
-      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_URL=tls://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
+      - NATS_TLS_ENABLED=1
+      - NATS_TLS_REQUIRED=1
+      - NATS_TLS_CA_PATH=/etc/onecare/tls/ca.crt
+      - NATS_TLS_CERT_PATH=/etc/onecare/tls/client.crt
+      - NATS_TLS_KEY_PATH=/etc/onecare/tls/client.key
     ports:
       - "3001:3001"
+    volumes:
+      - ./infra/tls/dev:/etc/onecare/tls:ro
     deploy:
       resources:
         limits:
@@ -140,14 +156,20 @@ services:
     restart: unless-stopped
     environment:
       - BUS_IMPL=nats
-      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_URL=tls://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
       - ANALYTICS_SINK_PATH=/var/analytics/metrics.jsonl
+      - NATS_TLS_ENABLED=1
+      - NATS_TLS_REQUIRED=1
+      - NATS_TLS_CA_PATH=/etc/onecare/tls/ca.crt
+      - NATS_TLS_CERT_PATH=/etc/onecare/tls/client.crt
+      - NATS_TLS_KEY_PATH=/etc/onecare/tls/client.key
     volumes:
       - analytics-metrics:/var/analytics
+      - ./infra/tls/dev:/etc/onecare/tls:ro
     deploy:
       resources:
         limits:
@@ -208,6 +230,7 @@ services:
       - "9090:9090"
     volumes:
       - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     deploy:
       resources:

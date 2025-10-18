@@ -11,6 +11,7 @@ const SSN_RE = /\b\d{3}-\d{2}-\d{4}\b/g;
 const KEY_VALUE_SECRET_RE =
   /\b(token|secret|password|key|authorization|bearer)\b\s*([:=])\s*([^\s,;]+)/gi;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+const COOKIE_HEADER_RE = /\b(cookie|set-cookie)\b\s*[:=]\s*([^\r\n;]+(?:;[^\r\n]+)*)/gi;
 const SAFE_ID_KEYS = new Set([
   'correlationid',
   'traceid',
@@ -41,6 +42,7 @@ const SAFE_ID_PARTS = [
 
 function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
+  if (lower === 'cookie' || lower === 'set-cookie') return true;
   if (SAFE_ID_KEYS.has(lower)) return false;
   if (SAFE_ID_PARTS.some((part) => lower.includes(part))) return false;
   if (lower === 'id') return true;
@@ -60,6 +62,7 @@ function redactString(value: string): string {
     const [prefix] = match.split(/\s+/, 1);
     return `${prefix} ${REDACTED_TEXT}`;
   });
+  result = result.replace(COOKIE_HEADER_RE, (_match, key) => `${key}: ${REDACTED_TEXT}`);
   return result;
 }
 

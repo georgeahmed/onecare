@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/pharmacy/pharmacy-notification.json",
+  "title": "PharmacyNotification",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "serviceRequestId": { "type": "string", "minLength": 1 },
+    "organisationId": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["accepted", "queued", "rejected"]
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 280 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "channel": {
+      "type": "string",
+      "enum": ["sms", "email", "push", "unknown"],
+      "default": "unknown"
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "template": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "locale": { "type": "string", "minLength": 2, "maxLength": 5 }
+      }
+    }
+  },
+  "required": ["serviceRequestId", "organisationId", "status", "summary", "recordedAt"]
+}

@@ -1,8 +1,10 @@
-import { describe, it, beforeAll, afterAll, expect } from 'vitest';
+import { describe, it, beforeAll, afterAll, beforeEach, afterEach, expect, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 
 let server: import('http').Server;
 let setBusReadyForTest: (ready: boolean) => void;
+let fetchSpy: ReturnType<typeof vi.spyOn> | null = null;
+let originalFetch: typeof fetch;
 
 function baseUrl(): string {
   const address = server.address();
@@ -29,6 +31,27 @@ describe('orchestrator readiness endpoints', () => {
     });
   });
 
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (typeof url === 'string' && url.includes('/fhir/metadata')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+      return originalFetch(input as RequestInfo, init as RequestInit);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    fetchSpy = null;
+  });
+
   it('reports ready when the bus is connected', async () => {
     setBusReadyForTest(true);
 
@@ -36,7 +59,9 @@ describe('orchestrator readiness endpoints', () => {
 
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ status: 'ready', bus: 'connected' });
+    expect(json.status).toBe('ready');
+    expect(json.bus).toMatchObject({ connected: true });
+    expect(json.dependencies).toBeDefined();
   });
 
   it('reports not ready when the bus is disconnected', async () => {
@@ -46,7 +71,8 @@ describe('orchestrator readiness endpoints', () => {
 
     expect(res.status).toBe(503);
     const json = await res.json();
-    expect(json).toEqual({ status: 'not_ready', bus: 'disconnected' });
+    expect(json.status).toBe('not_ready');
+    expect(json.bus).toMatchObject({ reason: 'override', connected: true });
   });
 
   it('fails safety-check requests fast when the bus is not ready', async () => {

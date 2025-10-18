@@ -42,6 +42,13 @@ Localization Authoring Guide
   - Exercise the QA matrix in `docs/USAGE.md` (screen reader + browser/device combos) for new flows.
   - Capture updates in the localization glossary and notify translators via shared channel.
 
+Media & Alt Text Guidelines
+- Provide descriptive, task-oriented alt text for informative imagery (who/what/action). Keep it under 125 characters when possible.
+- Mark purely decorative icons with `aria-hidden="true"` and empty `alt=""`; avoid redundant phrasing already expressed in adjacent text.
+- Supply captions or transcripts for audio/video content before publication; reference the transcript location in release notes.
+- Record ownership for captions/alt text in the Content Reviewer checklist and link updates in `apps/portal/README.md`.
+- Coordinate with Design when updating illustrations to ensure colour usage remains WCAG AA compliant (contrast verified via `npm run a11y:portal`).
+
 Service Platform Checklist Template
 - Broker & Topics
   - Broker reachable (NATS/Kafka) with TLS/credentials; firewall/egress allowed. See: infra/runbooks/tls-credentials.md
@@ -54,7 +61,8 @@ Service Platform Checklist Template
   - CorrelationId propagation; structured logs (no PHI), metrics (counters/histograms), and OpenTelemetry traces configured.
 - Security
   - SSRF allowlists for outbound calls; TLS verification; header/input sanitation; deny-by-default for missing consent.
-  - Outbound client adapters (CPCS, GP Connect, ICS) must redact secrets from logs, propagate correlation IDs, and reuse shared guard rails (timeouts, retries, circuit breakers).
+- Outbound client adapters (CPCS, GP Connect, ICS) must redact secrets from logs, propagate correlation IDs, and reuse shared guard rails (timeouts, retries, circuit breakers).
+- Object Store integrations must never log binary contents or raw URLs that could expose PHI; always log redacted keys (`hash(patientId)`), propagate `x-correlation-id`, and store artifacts via HTTPS endpoints that pass SSRF validation (`assertHttpsUrl`). See `apps/orchestrator/src/adapters/persistence/object-store.client.ts` for the reference implementation.
 - Backpressure & Rate Limits
   - Concurrency caps (semaphore) and per-tenant token-bucket limits; 429/503 envelopes; pressure metrics.
 - Health & Shutdown

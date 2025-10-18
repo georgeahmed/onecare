@@ -4,15 +4,16 @@ Task: SRE-01.14 — Backup/restore verification + DR (scheduled backups, test re
 
 Context
 - Turn backup scripts into a scheduled, verified DR plan with RTO/RPO targets.
+- Current state: `scripts/ops/backup.sh` and `restore.sh` create manual snapshots; `docs/RUNBOOKS.md` documents ad-hoc usage but lacks schedules, automation, or explicit RTO/RPO targets.
 
 Files
 - scripts/ops/backup.sh, restore.sh (extend)
 - docs/RUNBOOKS.md (DR section)
 
 Steps
-1) Schedule periodic backups of critical state (broker streams, configs); store off‑cluster with retention.
-2) Run periodic restore tests in staging; measure time to recover; compare to RTO/RPO; adjust as needed.
-3) Document DR scenarios and steps (broker loss, persistent volume loss, region outage) with expected timelines.
+1) Automate backups (cronjob/CI workflow) wrapping the existing scripts, store artefacts off-cluster with retention metadata, and log success/failure to observability stack.
+2) Implement periodic restore drills (staging namespace or sandbox cluster) that exercise the scripts end-to-end and capture recovery timings.
+3) Document RTO/RPO targets per scenario (broker loss, PV loss, region outage) in `docs/RUNBOOKS.md`, along with validation checklist and escalation plan for failures.
 
 Acceptance Criteria
 - Backups automated; restores tested; RTO/RPO documented; gaps identified.
@@ -22,4 +23,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.14' && make team-status-write
-

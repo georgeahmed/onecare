@@ -8,6 +8,7 @@ const FIXTURE_ROOT = path.join(__dirname, '..', 'fixtures', 'events');
 const EVENT_ENVELOPE_ID = 'https://onecare/schemas/common/event-envelope.json';
 const TRIAGE_INPUT_ID = 'https://onecare/schemas/triage/triage-input.json';
 const TASK_CREATED_ID = 'https://onecare/schemas/tasks/task-created.json';
+const TRIAGE_DECISION_ID = 'https://onecare/schemas/triage/triage-decision.json';
 const APPOINTMENT_CREATED_ID = 'https://onecare/schemas/booking/appointment-created.json';
 const PHARMACY_REFERRAL_ID = 'https://onecare/schemas/pharmacy/pharmacy-referral.json';
 const PHARMACY_OUTCOME_ID = 'https://onecare/schemas/pharmacy/pharmacy-outcome.json';
@@ -117,6 +118,32 @@ describe('core event contracts', () => {
           },
         ]
       `);
+    });
+  });
+
+  describe('triage.decision', () => {
+    const fixture = loadFixture('triage.decision.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(TRIAGE_DECISION_ID, env.payload);
+      }
+    });
+
+    it('rejects invalid priority or missing fields', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      invalidPayload.priority = 'INVALID';
+      delete invalidPayload.patientId;
+
+      const errors = collectErrorShape(TRIAGE_DECISION_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: '/priority', keyword: 'enum' }),
+          expect.objectContaining({ path: '/patientId', keyword: 'required' }),
+        ]),
+      );
     });
   });
 

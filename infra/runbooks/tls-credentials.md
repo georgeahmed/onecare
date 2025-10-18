@@ -8,6 +8,7 @@ Checklist
   - Obtain service/client certificates from the authority (sandbox or production).
   - Store private keys and certs in secrets manager; mount as files/env in deployment.
   - Maintain truststore/CA bundle for outbound TLS verification.
+- Local dev: `bash scripts/ops/generate-dev-certs.sh` seeds `infra/tls/dev/` with a self-signed CA plus NATS server/client certificates that mirror the production layout.
 - Configuration
   - Expose env vars for key paths/passwords (e.g., TLS_KEY, TLS_CERT, TLS_CA).
   - Enable hostname verification and strict TLS versions (TLS1.2+).

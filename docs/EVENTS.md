@@ -16,6 +16,11 @@ Versioning
 Topics
 - See `infra/event-bus/topics.md` and `packages/events/src/topics.ts`.
 
+Triage
+- Ingress: `schemas/triage/triage-input.json` consumed by the triage application (Topics.triage.input).
+- Egress: `schemas/triage/triage-decision.json` capturing scored outcomes and routing metadata (Topics.triage.decision).
+- Egress: `schemas/tasks/task-created.json` for downstream task orchestration (Topics.tasks.created).
+
 Codegen
 - TS: json-schema-to-typescript via `npm run codegen`
 - Python: datamodel-code-generator via `RUN_PY=1 npm run codegen`
@@ -24,8 +29,16 @@ DLQ
 - DLQ envelope schema: `schemas/common/dlq-event.json` (DlqEvent)
 - Keep DLQ payloads minimal and PHI-free; prefer `payloadRef`.
 - Operators can replay DLQ items safely; see `infra/event-bus/dlq-runbook.md`.
+- Use the orchestrator `publishWithRetry` helper when producing events so publishes wait for acks, retry with exponential backoff, emit `publish.ok` / `publish.retry` / `publish.fail` metrics (plus `publish.duration` histogram), and automatically route exhausted attempts to `Topics.broker.deadLetter` with validated `DlqEvent` payloads and stable `x-message-id` / `x-idempotency-key` headers.
 
 Booking
 - Search ingress must validate against `schemas/booking/booking-search-request.json`; responses serialize with `schemas/booking/booking-search-response.json`.
 - The booking HTTP adapter publishes `Topics.booking.appointmentCreated` with payload `schemas/booking/appointment-created.json`; duplicates route to `Topics.booking.appointmentCreatedDlq`.
+- DLQ payloads include `attempts`, `errorCode`, and sanitized `payloadRef` metadata to aid replay without exposing PHI.
 - Use `createEnvelope(Topics.booking.appointmentCreated, payload, correlationId)` after validating via `validateAppointmentCreatedEvent`.
+
+Pharmacy
+- Router ingress validates against `schemas/pharmacy/pharmacy-referral.json` before executing the state machine.
+- Successful write-back emits `pharmacy.outcome` envelopes shaped by `schemas/pharmacy/pharmacy-outcome.json`; payloads contain only serviceRequest identifiers, organisation IDs, status, and recorded timestamps.
+- Patient updates publish on `pharmacy.notification` with payloads conforming to `schemas/pharmacy/pharmacy-notification.json` (length-capped summaries, consent aware).
+- Always create envelopes via `createEnvelope(topic, payload, correlationId)` and include the referral idempotency key in the `x-idempotency-key` header to dedupe downstream consumers.

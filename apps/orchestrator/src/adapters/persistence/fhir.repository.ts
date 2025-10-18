@@ -5,17 +5,21 @@ import {
   createCounter,
   createHistogram,
   getCorrelationId,
+  logger,
   startSpan,
   type CounterMetric,
   type HistogramMetric,
 } from '@onecare/observability';
-import type { FhirBundle, FhirRepository, FhirResourceRef } from '@onecare/ports';
+import type { FhirBundle, FhirReadOptions, FhirRepository, FhirResourceRef } from '@onecare/ports';
 
 type FetchImpl = typeof fetch;
+type CircuitState = 'closed' | 'open' | 'half_open';
 
 const REQUEST_LATENCY_METRIC = 'fhir_request_latency_ms';
 const REQUEST_TOTAL_METRIC = 'fhir_requests_total';
 const REQUEST_ERROR_METRIC = 'fhir_request_errors_total';
+const CIRCUIT_OPEN_METRIC = 'fhir_circuit_open_total';
+const CIRCUIT_HALF_OPEN_METRIC = 'fhir_circuit_half_open_total';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_TIMEOUT_MS = 500;
@@ -24,10 +28,15 @@ const DEFAULT_MAX_RETRIES = 2;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY_MS = 150;
 const RETRY_JITTER_MS = 75;
+const DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 3;
+const DEFAULT_CIRCUIT_COOLDOWN_MS = 15_000;
+const DEFAULT_CIRCUIT_HALF_OPEN_SUCCESS = 2;
 
 const latencyHistogram: HistogramMetric = createHistogram(REQUEST_LATENCY_METRIC);
 const totalCounter: CounterMetric = createCounter(REQUEST_TOTAL_METRIC);
 const errorCounter: CounterMetric = createCounter(REQUEST_ERROR_METRIC);
+const circuitOpenedCounter: CounterMetric = createCounter(CIRCUIT_OPEN_METRIC);
+const circuitHalfOpenCounter: CounterMetric = createCounter(CIRCUIT_HALF_OPEN_METRIC);
 
 export interface HttpFhirRepositoryOptions {
   baseUrl: string;
@@ -36,6 +45,9 @@ export interface HttpFhirRepositoryOptions {
   maxRetries?: number;
   fetchImpl?: FetchImpl;
   practiceId?: string;
+  circuitBreakerThreshold?: number;
+  circuitBreakerCooldownMs?: number;
+  circuitBreakerHalfOpenSuccesses?: number;
 }
 
 export class FhirRequestError extends Error {
@@ -45,6 +57,7 @@ export class FhirRequestError extends Error {
     public readonly operation?: string,
     public readonly retryable?: boolean,
     public readonly body?: unknown,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'FhirRequestError';
@@ -94,6 +107,22 @@ function isAbortError(err: unknown): boolean {
   return false;
 }
 
+function parseRetryAfterHeader(value: string | null): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1_000);
+  }
+  const parsedDate = Date.parse(trimmed);
+  if (Number.isFinite(parsedDate)) {
+    const diff = parsedDate - Date.now();
+    return diff > 0 ? diff : 0;
+  }
+  return null;
+}
+
 async function parseJsonBody(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) return undefined;
@@ -111,6 +140,13 @@ export class HttpFhirRepository implements FhirRepository {
   private readonly maxRetries: number;
   private readonly fetchImpl: FetchImpl;
   private readonly practiceId?: string;
+  private readonly circuitFailureThreshold: number;
+  private readonly circuitCooldownMs: number;
+  private readonly circuitHalfOpenSuccessRequirement: number;
+  private circuitState: CircuitState = 'closed';
+  private circuitOpenedAt = 0;
+  private consecutiveFailures = 0;
+  private halfOpenSuccesses = 0;
 
   constructor(options: HttpFhirRepositoryOptions) {
     if (!options?.baseUrl) {
@@ -122,6 +158,18 @@ export class HttpFhirRepository implements FhirRepository {
     this.maxRetries = clampRetries(options.maxRetries);
     this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? globalThis.fetch.bind(globalThis);
     this.practiceId = options.practiceId;
+    this.circuitFailureThreshold =
+      Number.isFinite(options.circuitBreakerThreshold)
+        ? Math.max(1, Math.floor(options.circuitBreakerThreshold!))
+        : DEFAULT_CIRCUIT_FAILURE_THRESHOLD;
+    this.circuitCooldownMs =
+      Number.isFinite(options.circuitBreakerCooldownMs)
+        ? Math.max(1_000, Math.floor(options.circuitBreakerCooldownMs!))
+        : DEFAULT_CIRCUIT_COOLDOWN_MS;
+    this.circuitHalfOpenSuccessRequirement =
+      Number.isFinite(options.circuitBreakerHalfOpenSuccesses)
+        ? Math.max(1, Math.floor(options.circuitBreakerHalfOpenSuccesses!))
+        : DEFAULT_CIRCUIT_HALF_OPEN_SUCCESS;
   }
 
   async upsertBundle(bundle: FhirBundle): Promise<FhirBundle> {
@@ -131,6 +179,8 @@ export class HttpFhirRepository implements FhirRepository {
       body: bundle,
       operation: 'Bundle.upsert',
       preferRepresentation: true,
+      idempotent: true,
+      expectJsonBody: true,
     });
   }
 
@@ -141,6 +191,7 @@ export class HttpFhirRepository implements FhirRepository {
       body: task,
       operation: 'Task.create',
       preferRepresentation: true,
+      expectJsonBody: true,
     });
   }
 
@@ -151,6 +202,7 @@ export class HttpFhirRepository implements FhirRepository {
       body: appt,
       operation: 'Appointment.create',
       preferRepresentation: true,
+      expectJsonBody: true,
     });
   }
 
@@ -161,16 +213,36 @@ export class HttpFhirRepository implements FhirRepository {
       body: doc,
       operation: 'DocumentReference.create',
       preferRepresentation: true,
+      expectJsonBody: true,
     });
   }
 
-  async updateTask(taskId: string, patch: unknown): Promise<void> {
+  async readResource<T>(path: string, options?: FhirReadOptions): Promise<T> {
+    const resolvedPath = this.buildRelativePath(path, options?.searchParams);
+    const headers: Record<string, string> = { ...(options?.headers ?? {}) };
+    if (options?.prefer) {
+      headers.prefer = options.prefer;
+    }
+    return this.request<T>({
+      method: 'GET',
+      path: resolvedPath,
+      operation: `Resource.read`,
+      headers,
+      idempotent: true,
+      expectJsonBody: true,
+    });
+  }
+
+  async updateTask(taskId: string, patch: unknown, options?: { ifMatch?: string }): Promise<void> {
     await this.request<void>({
       method: 'PUT',
       path: `Task/${encodeURIComponent(taskId)}`,
       body: patch,
       operation: 'Task.update',
       preferRepresentation: false,
+      idempotent: true,
+      ifMatch: options?.ifMatch,
+      expectJsonBody: false,
     });
   }
 
@@ -180,14 +252,26 @@ export class HttpFhirRepository implements FhirRepository {
     body,
     operation,
     preferRepresentation,
+    headers,
+    idempotent,
+    ifMatch,
+    expectJsonBody,
+    signal,
   }: {
-    method: 'POST' | 'PUT';
+    method: 'GET' | 'POST' | 'PUT';
     path: string;
-    body: unknown;
+    body?: unknown;
     operation: string;
-    preferRepresentation: boolean;
+    preferRepresentation?: boolean;
+    headers?: Record<string, string>;
+    idempotent?: boolean;
+    ifMatch?: string;
+    expectJsonBody?: boolean;
+    signal?: AbortSignal;
   }): Promise<T> {
     const url = new URL(path, this.baseUrl).toString();
+    const wantsJsonResponse = expectJsonBody ?? (preferRepresentation === true || method === 'GET');
+    this.ensureCircuitAllowsRequest(operation);
     let attempt = 0;
     let lastError: unknown;
 
@@ -195,6 +279,20 @@ export class HttpFhirRepository implements FhirRepository {
       attempt += 1;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const externalSignal = signal;
+      const onExternalAbort = () => controller.abort();
+      if (externalSignal) {
+        if (externalSignal.aborted) {
+          controller.abort();
+        } else {
+          externalSignal.addEventListener('abort', onExternalAbort);
+        }
+      }
+      const cleanupExternal = () => {
+        if (externalSignal) {
+          externalSignal.removeEventListener('abort', onExternalAbort);
+        }
+      };
       const start = performance.now();
       const span = startSpan('fhir.request', {
         attributes: {
@@ -205,39 +303,70 @@ export class HttpFhirRepository implements FhirRepository {
         },
       });
       try {
-        const headers: Record<string, string> = {
-          accept: 'application/fhir+json',
-          'content-type': 'application/fhir+json',
+        const requestHeaders: Record<string, string> = {
+          accept: 'application/fhir+json; charset=utf-8',
         };
-        if (preferRepresentation) headers.prefer = 'return=representation';
-        if (this.authHeader) headers.authorization = this.authHeader;
+        if (method !== 'GET') {
+          requestHeaders['content-type'] = 'application/fhir+json; charset=utf-8';
+        }
+        if (preferRepresentation) {
+          requestHeaders.prefer = 'return=representation';
+        }
+        if (this.authHeader) {
+          requestHeaders.authorization = this.authHeader;
+        }
+        if (ifMatch) {
+          requestHeaders['if-match'] = ifMatch;
+        }
+        if (headers) {
+          Object.assign(requestHeaders, headers);
+        }
         const correlationId = getCorrelationId();
-        if (correlationId) headers['x-correlation-id'] = correlationId;
+        if (correlationId) {
+          requestHeaders['x-correlation-id'] = correlationId;
+        }
+
+        const payload = method !== 'GET' && body !== undefined ? JSON.stringify(body) : undefined;
+
+        logger.debug('fhir.request.dispatch', {
+          operation,
+          method,
+          path,
+          attempt,
+        });
 
         const response = await this.fetchImpl(url, {
           method,
-          headers,
-          body: body ? JSON.stringify(body) : undefined,
+          headers: requestHeaders,
+          body: payload,
           signal: controller.signal,
         });
 
         clearTimeout(timer);
-        const durationMs = performance.now() - start;
-        this.recordMetrics(durationMs, method, path, response.status, attempt);
+        cleanupExternal();
+        const elapsedMs = performance.now() - start;
+        this.recordMetrics(elapsedMs, method, path, response.status, attempt);
         span.setAttribute('http.status_code', response.status);
 
         if (!response.ok) {
           const responseBody = await parseJsonBody(response);
-          const retryable = isRetryableStatus(response.status);
+          const retryAfterMs = parseRetryAfterHeader(response.headers.get('retry-after'));
+          const conflict = response.status === 409 || response.status === 412;
+          const retryable = !conflict && isRetryableStatus(response.status);
+
           if (span.isRecording()) {
             span.setStatus({ code: SpanStatusCode.ERROR, message: String(response.status) });
-            span.recordException(
-              new Error(`FHIR request failed with status ${response.status}`),
-            );
+            span.recordException(new Error(`FHIR request failed with status ${response.status}`));
           }
 
           if (retryable && attempt <= this.maxRetries) {
-            await this.waitBeforeRetry(attempt);
+            logger.warn('fhir.request.retry', {
+              operation,
+              status: response.status,
+              attempt,
+            });
+            await this.waitBeforeRetry(attempt, retryAfterMs ?? undefined);
+            cleanupExternal();
             continue;
           }
 
@@ -247,17 +376,51 @@ export class HttpFhirRepository implements FhirRepository {
             operation,
             retryable,
             responseBody,
+            retryAfterMs ?? undefined,
           );
           errorCounter.add(1, this.metricAttributes(method, path, response.status, attempt));
+
+          const shouldTripCircuit = !conflict;
+          if (conflict && idempotent) {
+            logger.info('fhir.idempotent.conflict', {
+              operation,
+              status: response.status,
+            });
+            this.recordFailure(operation, false, error);
+          } else {
+            logger.warn('fhir.request.failed', {
+              operation,
+              status: response.status,
+              attempt,
+            });
+            this.recordFailure(operation, shouldTripCircuit, error);
+          }
           throw error;
         }
 
         if (span.isRecording()) {
           span.setStatus({ code: SpanStatusCode.OK });
         }
+        if (wantsJsonResponse && response.status !== 204) {
+          this.ensureJsonContentType(response, operation, path);
+        }
+        logger.debug('fhir.request.succeeded', {
+          operation,
+          method,
+          path,
+          attempt,
+          durationMs: Number(elapsedMs.toFixed(2)),
+        });
+        this.recordSuccess(operation);
+        if (method === 'GET') {
+          if (response.status === 204) {
+            return undefined as T;
+          }
+        }
         return (await parseJsonBody(response)) as T;
       } catch (err) {
         clearTimeout(timer);
+        cleanupExternal();
         const durationMs = performance.now() - start;
         let retryable = false;
         let errorToThrow: FhirRequestError | Error;
@@ -301,6 +464,11 @@ export class HttpFhirRepository implements FhirRepository {
           span.recordException(errorToThrow);
         }
 
+        const shouldTripCircuit = !(
+          isFhirRequestError(errorToThrow) &&
+          (errorToThrow.status === 409 || errorToThrow.status === 412)
+        );
+        this.recordFailure(operation, shouldTripCircuit, errorToThrow);
         lastError = errorToThrow;
         throw errorToThrow;
       } finally {
@@ -311,10 +479,124 @@ export class HttpFhirRepository implements FhirRepository {
     throw lastError ?? new Error('FHIR request failed');
   }
 
-  private async waitBeforeRetry(attempt: number): Promise<void> {
+  private async waitBeforeRetry(attempt: number, retryAfterMs?: number): Promise<void> {
+    if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+      await delay(retryAfterMs);
+      return;
+    }
     const backoff = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
     const jitter = Math.random() * RETRY_JITTER_MS;
     await delay(backoff + jitter);
+  }
+
+  private buildRelativePath(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      throw new Error('fhir_path_required');
+    }
+    if (!params || Object.keys(params).length === 0) {
+      return trimmed;
+    }
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined) continue;
+      search.set(key, String(value));
+    }
+    const query = search.toString();
+    if (!query) return trimmed;
+    return trimmed.includes('?') ? `${trimmed}&${query}` : `${trimmed}?${query}`;
+  }
+
+  private ensureCircuitAllowsRequest(operation: string): void {
+    if (this.circuitState === 'open') {
+      if (Date.now() - this.circuitOpenedAt >= this.circuitCooldownMs) {
+        this.circuitState = 'half_open';
+        this.halfOpenSuccesses = 0;
+        circuitHalfOpenCounter.add(1, { operation });
+        logger.warn('fhir.circuit.half_open', { operation });
+      } else {
+        throw this.circuitOpenError(operation);
+      }
+    }
+  }
+
+  private recordSuccess(operation: string): void {
+    this.consecutiveFailures = 0;
+    if (this.circuitState === 'half_open') {
+      this.halfOpenSuccesses += 1;
+      if (this.halfOpenSuccesses >= this.circuitHalfOpenSuccessRequirement) {
+        this.transitionToClosed(operation);
+      }
+    }
+  }
+
+  private recordFailure(operation: string, shouldTripCircuit: boolean, err: unknown): void {
+    if (!shouldTripCircuit) {
+      if (this.circuitState === 'half_open') {
+        this.transitionToClosed(operation);
+      }
+      this.consecutiveFailures = 0;
+      return;
+    }
+
+    this.consecutiveFailures += 1;
+    if (this.circuitState === 'half_open') {
+      this.openCircuit(operation, err);
+      return;
+    }
+    if (this.consecutiveFailures >= this.circuitFailureThreshold) {
+      this.openCircuit(operation, err);
+    }
+  }
+
+  private openCircuit(operation: string, err: unknown): void {
+    this.circuitState = 'open';
+    this.circuitOpenedAt = Date.now();
+    this.consecutiveFailures = 0;
+    this.halfOpenSuccesses = 0;
+    circuitOpenedCounter.add(1, { operation });
+    logger.error('fhir.circuit.open', {
+      operation,
+      cooldownMs: this.circuitCooldownMs,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  private transitionToClosed(operation: string): void {
+    if (this.circuitState !== 'closed') {
+      logger.info('fhir.circuit.closed', { operation });
+    }
+    this.circuitState = 'closed';
+    this.circuitOpenedAt = 0;
+    this.consecutiveFailures = 0;
+    this.halfOpenSuccesses = 0;
+  }
+
+  private circuitOpenError(operation: string): FhirRequestError {
+    return new FhirRequestError('circuit_open', undefined, operation, false);
+  }
+
+  private ensureJsonContentType(response: Response, operation: string, path: string): void {
+    const contentType = response.headers.get('content-type');
+    if (!contentType) {
+      throw new FhirRequestError('missing_content_type', response.status, operation, false);
+    }
+    const normalized = contentType.trim().toLowerCase();
+    if (!normalized.startsWith('application/fhir+json')) {
+      throw new FhirRequestError(
+        `unexpected_content_type:${contentType}`,
+        response.status,
+        operation,
+        false,
+      );
+    }
+    if (!/charset\s*=\s*utf-8/.test(normalized)) {
+      logger.warn('fhir.response.charset_missing', {
+        operation,
+        path,
+        contentType,
+      });
+    }
   }
 
   private recordMetrics(durationMs: number, method: string, path: string, status: number, attempt: number): void {

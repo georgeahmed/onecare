@@ -20,27 +20,34 @@
     "analytics:quarantine:export": "node scripts/analytics_quarantine_export.js",
     "feature:backfill": "node scripts/feature_backfill.js",
     "feature:ingest": "node scripts/feature_store/ingest_stream.js",
+    "feature:views": "node scripts/feature_store/views.js",
     "drift:report": "node scripts/drift_report.js",
     "a11y:portal": "npx tsx apps/portal/scripts/a11y-ci.ts",
+    "dev:clinician": "npm run --workspace @onecare/app-clinician dev",
+    "build:clinician": "npm run --workspace @onecare/app-clinician build",
+    "typecheck:clinician": "npm run --workspace @onecare/app-clinician typecheck",
     "i18n:portal": "npx tsx apps/portal/scripts/i18n/extract.ts",
     "i18n:portal:check": "npx tsx apps/portal/scripts/i18n/extract.ts --check",
-    "smoke:nats": "node scripts/smoke/nats-guard-smoke.js"
+    "smoke:nats": "node scripts/smoke/nats-guard-smoke.js",
+    "dev:all": "bash scripts/dev/dev-all.sh",
+    "dev:all:stop": "bash scripts/dev/dev-all-stop.sh"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^1.6.1",
     "eslint": "^8.57.0",
     "husky": "^9.1.6",
     "json-schema-to-typescript": "^13.1.1",
     "prettier": "^3.2.5",
     "rimraf": "^5.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.5.0",
-    "@vitest/coverage-v8": "^1.6.1"
+    "vitest": "^1.5.0"
   },
   "prepare": "husky install",
   "dependencies": {
+    "parquetjs-lite": "^0.8.7",
     "pg": "^8.11.5",
     "yaml": "^2.8.1"
   }

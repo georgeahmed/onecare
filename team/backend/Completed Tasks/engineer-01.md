@@ -26,6 +26,14 @@
 - [x] BE-01.12 — Security hardening (SSRF guard, attachment sanitisation) (apps/orchestrator/src/index.ts:283, apps/orchestrator/test/attachments.test.ts:72).
 - [x] BE-01.13 — Audit ledger resiliency with buffered writes, bounded retries, and tests (apps/orchestrator/src/adapters/audit/index.ts:31, apps/orchestrator/test/auditAdapter.test.ts:5).
 - [x] BE-01.15 — Contract compliance & codegen (Ajv validators + schema-driven types) (apps/orchestrator/src/application/validator.ts:13, scripts/codegen/generate.js:1).
+- [x] BE-01.14 — Backpressure + time budgets with concurrency limiter + HTTP 503 surfaces (apps/orchestrator/src/index.ts:1030, apps/orchestrator/test/resilience.test.ts:118).
+- [x] BE-01.16 — DLQ and retry policy for bus publishes (apps/orchestrator/src/application/orchestrator.state.ts:278, apps/orchestrator/test/resilience.test.ts:170).
+- [x] BE-01.17 — Rate limiting & abuse protection with token bucket guard (apps/orchestrator/src/index.ts:1030, apps/orchestrator/test/resilience.test.ts:130).
+- [x] BE-01.18 — Health/readiness reflects dependencies + graceful shutdown draining (apps/orchestrator/src/index.ts:1645, apps/orchestrator/test/resilience.test.ts:199).
+- [x] BE-01.19 — Fault injection tests for backpressure, rate limit, DLQ, shutdown (apps/orchestrator/test/resilience.test.ts:1).
+- [x] BE-01.20 — Privacy minimisation (hashed `patientRef` in logs/audits/DLQ) (apps/orchestrator/src/application/orchestrator.state.ts:20, apps/orchestrator/src/application/orchestrator.state.ts:278).
+- [x] BE-01.21 — Performance baselines documented (docs/perf/orchestrator-baselines.md:1, make perf-orchestrator target).
+- [x] BE-01.22 — Documentation & ADR updates for resilience/error handling (docs/adr/2025-10-16-orchestrator-resilience.md:1, apps/orchestrator/README.md:1, docs/USAGE.md:10).
 
 
 Status: planned

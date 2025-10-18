@@ -1,0 +1,137 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": false,
+  "gnetId": null,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "req/s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right" }
+      },
+      "targets": [
+        {
+          "expr": "rate(analytics_ingest_ok_total[$__rate_interval])",
+          "legendFormat": "ok",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(analytics_ingest_error_total[$__rate_interval])",
+          "legendFormat": "error",
+          "refId": "B"
+        }
+      ],
+      "title": "Analytics ingest throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "hidden" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(analytics_ingest_lag_ms_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "lag p95",
+          "refId": "A"
+        }
+      ],
+      "title": "Ingest lag p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "req/s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "hidden" }
+      },
+      "targets": [
+        {
+          "expr": "rate(analytics_ingest_dlq_total[$__rate_interval])",
+          "legendFormat": "dlq",
+          "refId": "A"
+        }
+      ],
+      "title": "DLQ publish rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "req/s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right" }
+      },
+      "targets": [
+        {
+          "expr": "rate(analytics_triage_decision_observed_total[$__rate_interval])",
+          "legendFormat": "triage decisions",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(analytics_triage_decision_duplicate_total[$__rate_interval])",
+          "legendFormat": "duplicates",
+          "refId": "B"
+        }
+      ],
+      "title": "Triage decision feed",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["analytics"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "Analytics Pipeline",
+  "uid": "analytics-pipeline",
+  "version": 1
+}

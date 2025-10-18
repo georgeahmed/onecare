@@ -20,6 +20,10 @@ Baseline Grafana dashboards to monitor the Python ML services. These definitions
 | Scribe draft latency p95 | `histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{service="scribe", route="/draft"}[$__interval])) by (le))` | Tail latency; alert if >10 s. |
 | Scribe draft error rate | `sum(rate(http_server_requests_total{service="scribe", route="/draft", status_code=~"5.."}[$__interval])) / sum(rate(http_server_requests_total{service="scribe", route="/draft"}[$__interval]))` | Server error percentage. |
 | Scribe throughput | `sum(rate(http_server_requests_total{service="scribe"}[$__interval]))` | Total requests per second (all endpoints). |
+| Booking latency p95 | `histogram_quantile(0.95, sum(rate(booking_http_duration_ms_bucket{route="/booking/appointments"}[$__interval])) by (le))` | Booking handler tail latency; target < 1500 ms. |
+| Booking backpressure (rate) | `rate(booking_http_backpressure_total[$__interval])` | Highlights sustained 429 responses from concurrency caps. |
+| Booking event DLQ | `rate(booking_event_dlq_total[$__interval])` | Monitors DLQ throughput; sustained >0 suggests retry/backoff tuning. |
+| GP Connect conflicts | `rate(gp_connect_create_conflict_total[$__interval])` | Track frequency of 409 conflicts returned by GP Connect. |
 
 Adjust label names if your exporter uses different label keys (e.g., `http_route`, `http_status_code`).
 

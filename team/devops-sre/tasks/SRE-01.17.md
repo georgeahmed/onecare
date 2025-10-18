@@ -4,6 +4,7 @@ Task: SRE-01.17 — CI/CD pipeline (build→test→codegen:check→SBOM→scan�
 
 Context
 - Implement an end‑to‑end CI/CD that enforces quality gates (typecheck/tests/codegen), supply chain security (SBOM + vulnerability/license scans), and safe rollout (staging canary with quick rollback).
+- Current state: `.github/workflows/ci.yml` already runs codegen, typecheck, tests, perf smoke, and optional image builds, but lacks SBOM artefacts, signed images, or any CD workflow (`cd.yml` absent).
 
 Files
 - .github/workflows/ci.yml (update)
@@ -13,20 +14,17 @@ Files
 - docs/RELEASE_READINESS.md (update gates)
 
 Steps
-1) CI stages: checkout → cache deps → npm ci/pip install → npm run codegen:check → npm run typecheck && npm run test → build images.
-2) Generate SBOM (syft or equivalent) and run vulnerability/license scans with policy thresholds; fail on high/critical unless allowlisted.
-3) Push images to registry on main tags; sign images if supported; attach provenance.
-4) CD workflow: deploy to staging namespace; run smoke (synthetic) and contract tests; gate promotion on pass + SLO guardrails.
-5) Canary to production with small percentage; auto rollback on error budgets breach; provide manual approval step.
-6) Document pipeline commands, required secrets, and rollback process.
+1) Extend CI to emit SBOM artefacts (Node + Python), enforce scan thresholds, and store outputs for downstream provenance/signing steps.
+2) Integrate image signing + provenance attestations (cosign/SLSA) before pushing images, ensuring the signatures are verified during deploy.
+3) Author `cd.yml` that deploys to staging (canary + smoke tests), gates promotion on SLO guardrails + manual approval, and supports automated rollback.
+4) Update `docs/USAGE.md` and `docs/RELEASE_READINESS.md` with pipeline stages, required secrets, rollback guidance, and verification steps.
 
 Acceptance Criteria
-- CI fails on typecheck/test/codegen drift or policy violations; artifacts include SBOM.
-- CD performs staged rollout with observable smoke checks and rollback.
+- CI fails on drift/security violations; SBOMs + signatures stored as artefacts.
+- CD workflow promotes staging → production with canary + rollback automation and documented operator steps.
 
 Validate
-- Run CI on PR and observe gates; test CD in a sandbox cluster/namespace with dry‑run if needed.
+- Run CI on a PR to confirm SBOM + signing stages execute; dry-run CD to staging namespace and exercise rollback path.
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.17' && make team-status-write
-

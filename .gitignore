@@ -7,4 +7,6 @@ __pycache__/
 *.pyc
 coverage/
 build/
-
+infra/tls/dev/*.key
+infra/tls/dev/*.csr
+infra/tls/dev/*.srl

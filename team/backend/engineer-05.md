@@ -20,8 +20,8 @@ Contracts & Validation
 - Contract-first for pharmacy.referral/pharmacy.outcome; run codegen.
 - Ajv-based validators in tests for payloads and DLQ entries.
 
-Status: in-progress
-Progress: 0%
+Status: completed
+Progress: 100%
 
 Dependencies
 - integrations/engineer-03 (CPCS)
@@ -38,6 +38,4 @@ Platform Checklist (pre-flight)
   - See also: docs/CONVENTIONS.md (Service Platform Checklist), infra/runbooks/tls-credentials.md, infra/event-bus/subjects-acls.md, infra/runbooks/idempotency-store.md, infra/event-bus/dlq-runbook.md
 
 Tasks
-- Completed items archived in `team/backend/Completed Tasks/engineer-05.md`.
-- [ ] BE-05.11 — Documentation & ADRs (router rules, CPCS contracts, failure mapping)
-- [ ] BE-05.12 — Patient notification adapter (idempotent, backoff; consent checks; minimal payloads)
+- All tasks archived in `team/backend/Completed Tasks/engineer-05.md`.

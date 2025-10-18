@@ -2,6 +2,7 @@
 
 import { createServer, type InlineConfig } from 'vite';
 import pa11y from 'pa11y';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -83,6 +84,8 @@ const runAuditForRoute = async (baseUrl: string, route: RouteDefinition): Promis
 const run = async (): Promise<void> => {
   const port = Number.parseInt(process.env.PORT ?? '', 10) || DEFAULT_PORT;
   const rootDir = resolvePortalRoot();
+  const reportDir = resolve(rootDir, '..', '..', 'var', 'reports');
+  const reportPath = resolve(reportDir, 'portal-a11y-report.json');
   const server = await createServer(createViteConfig(rootDir, port));
 
   try {
@@ -99,6 +102,38 @@ const run = async (): Promise<void> => {
         failures.push({ route, issue });
       }
     }
+
+    const contrastIssues = failures.filter(({ issue }) =>
+      issue.code?.toLowerCase().includes('contrast') ?? false
+    );
+
+    await mkdir(reportDir, { recursive: true });
+    const reportPayload = {
+      generatedAt: new Date().toISOString(),
+      baseUrl,
+      routes: ROUTES,
+      totals: {
+        errors: failures.length,
+        contrast: contrastIssues.length
+      },
+      issues: failures.map(({ route, issue }) => ({
+        route: route.label,
+        path: route.path,
+        code: issue.code,
+        message: issue.message,
+        selector: issue.selector
+      })),
+      contrastIssues: contrastIssues.map(({ route, issue }) => ({
+        route: route.label,
+        path: route.path,
+        code: issue.code,
+        message: issue.message,
+        selector: issue.selector
+      }))
+    };
+
+    await writeFile(reportPath, JSON.stringify(reportPayload, null, 2), 'utf8');
+    console.log(`Accessibility report written to ${reportPath}`);
 
     if (failures.length > 0) {
       console.error('\nCritical accessibility issues detected:');

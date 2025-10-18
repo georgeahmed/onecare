@@ -4,15 +4,18 @@ Task: SRE-01.15 — Supply chain security (image signing/provenance, vuln/licens
 
 Context
 - Improve software supply chain security: sign container images, attach provenance, and scan for vulnerabilities and license issues in CI.
+- Current state: the CI workflow builds images but only runs best-effort scans (`npm audit`, `pip-audit`, `trivy fs`) with `continue-on-error`; there is no image signing, provenance, or verification step.
 
 Files
 - .github/workflows/ci.yml, cd.yml
 - docs/SECURITY.md (supply chain)
+- scripts/ci/*
+- docs/USAGE.md (pipeline section)
 
 Steps
-1) Integrate `cosign` to sign built images and generate SLSA provenance (where feasible); store signatures in registry.
-2) Run vulnerability scans on images and dependencies; include license compliance checks; fail on high‑severity (soft‑fail initially).
-3) Document verification steps for deploy (verify signature before promotion) and key management policies.
+1) Integrate `cosign` (sigstore) in the image build job, publish signatures + provenance (SLSA/SBOM references), and store signing keys in the chosen secrets manager.
+2) Run container image scans (Trivy/Grype) post-build with enforced severity & license policies; plumb allowlist/expiry handling and remove `continue-on-error`.
+3) Document verification workflow (pre-deploy signature verification, policy-controller integration) and key rotation/escrow in `docs/SECURITY.md` + `docs/USAGE.md`.
 
 Acceptance Criteria
 - Images signed; scan reports attached; docs for verification exist.
@@ -22,4 +25,3 @@ Validate
 
 Status Update
 - make engineer-done ENGINEER=devops-sre/engineer-01 TASK='SRE-01.15' && make team-status-write
-

@@ -49,6 +49,18 @@ Engineer: Frontend 03 — Completed Tasks
 - [x] FE-03.20 — Localization authoring guide (glossary, style, review process)  
   Evidence: `docs/CONVENTIONS.md:16` documents glossary, writing style, key conventions, and review workflow for new strings.
 
+- [x] FE-03.10 — Content/readability review (plain language; inclusive terms)  
+  Evidence: `docs/CONVENTIONS.md:29` codifies the content review lane and checklist; `docs/USAGE.md:58` links the lane into the release runbook.
+
+- [x] FE-03.11 — Advanced a11y: forms, errors, live regions, focus/skip links  
+  Evidence: `apps/portal/src/App.tsx:9` adds translated skip links and labelled navigation; `apps/portal/src/pages/Intake.tsx:4` and `apps/portal/src/pages/Booking.tsx:18` focus `main` on load; `apps/portal/src/styles/global.css:84` styles visible skip links; `apps/portal/test/appShell.test.tsx:5` guards the scaffolding.
+
+- [x] FE-03.12 — High-contrast theme tokens and contrast audits (≥4.5:1)  
+  Evidence: `apps/portal/src/styles/tokens.css:1` includes high-contrast tokens; `apps/portal/scripts/a11y-ci.ts:8` persists audit reports with contrast counters; `docs/USAGE.md:45` instructs reviewers to check the report before sign-off.
+
+- [x] FE-03.14 — Media/alt text guidelines (icons/illustrations; captions if added)  
+  Evidence: `docs/CONVENTIONS.md:43` outlines the media/alt text workflow; `apps/portal/README.md:1` links engineering changes to the shared guidance.
+
 
 Status: planned
 Progress: 0%

@@ -9,6 +9,7 @@ export const Topics = {
   },
   triage: {
     input: 'triage.input',
+    decision: 'triage.decision',
     tasks: 'triage.tasks',
     oohHandover: 'triage.ooh.handover',
   },

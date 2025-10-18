@@ -16,8 +16,8 @@ Start Here
  - Observability: packages/observability/src/logger.ts, src/otel.ts
  - Security: docs/CONVENTIONS.md (SSRF, redaction), docs/STABLE_BACKEND_CHECKLIST.md
 
-Status: in-progress
-Progress: 75%
+Status: stable
+Progress: 100%
 
 Dependencies
 - backend/engineer-05 (Pharmacy router)
@@ -37,18 +37,18 @@ Tasks
 - [x] IN-03.4 — Billing interface placeholder (Claim/Response; TLS/auth; timeouts)
 - [x] IN-03.5 — Observability for CPCS/ICS (structured logs, latency histograms, error counters, spans)
 - [x] IN-03.6 — ICS org→endpoint map and routing policy (allowlist; per-org limits)
-- [ ] IN-03.7 — Security & SSRF guardrails (CPCS guard done; ICS endpoint allowlist/private-IP checks still missing)
+- [x] IN-03.7 — Security & SSRF guardrails (CPCS/ICS) — HTTPS + private-IP blocks mirrored for ICS with tests (`apps/ics-hub/src/adapters/ics.client.ts:676`, `apps/ics-hub/test/ics.client.test.ts:128`).
 - [x] IN-03.8 — Contract-first ICS mapping (schemas/codegen; compiled validators; contract tests)
 - [x] IN-03.9 — Idempotency & dedupe (external call keys; suppress duplicate referrals/acks)
 - [x] IN-03.10 — DLQ and retry policy for ICS events (bounded retries; poison quarantine; minimal context)
 - [x] IN-03.11 — Health/readiness and graceful shutdown (client health; drain inflight)
 - [x] IN-03.12 — Fault injection tests (timeouts, partial failures, CB open, retries → DLQ)
-- [ ] IN-03.13 — Performance baselines (p50/p95 call latency; budgets; soak) — harness/tests not yet created
+- [x] IN-03.13 — Performance baselines (p50/p95 call latency; budgets; soak) — Perf harnesses pin ≤20 ms averages and histogram coverage (`apps/pharmacy-router/test/cpcs.perf.test.ts:18`, `apps/ics-hub/test/ics.perf.test.ts:24`).
 - [x] IN-03.14 — Privacy/PII minimization (no PHI in logs/events; redaction by default)
-- [ ] IN-03.15 — Credential management & rotation readiness (env/secret stores; no sensitive logs) — lacks refresh plan/tests
-- [ ] IN-03.16 — Documentation & ADRs (CPCS/ICS integration design, error mapping, ops) — ADR/README still missing
- - [ ] IN-03.17 — API version/content negotiation (CPCS/ICS headers; Accept/Content-Type) — Accept headers still unset/tests absent
- - [ ] IN-03.18 — Credential/cert rotation readiness (OAuth/mTLS refresh; hot-reload) — no rotation hooks implemented
- - [ ] IN-03.19 — Sandbox playback harness (ICS/CPCS deterministic fixtures; offline CI) — fixtures/tooling outstanding
+- [x] IN-03.15 — Credential management & rotation readiness — Runtime refresh hooks with coverage for rotated headers and TLS updates (`apps/pharmacy-router/src/adapters/cpcs.client.ts:340`, `apps/pharmacy-router/test/cpcs.client.test.ts:190`, `apps/ics-hub/src/adapters/ics.client.ts:327`, `apps/ics-hub/test/ics.client.test.ts:190`).
+- [x] IN-03.16 — Documentation & ADRs (CPCS/ICS integration design, error mapping, ops) — README updates + integration ADR capturing guardrails (`apps/pharmacy-router/README.md:65`, `apps/ics-hub/README.md:13`, `docs/adr/2025-10-13-cpcs-ics-integration.md:1`).
+ - [x] IN-03.17 — API version/content negotiation (CPCS/ICS headers; Accept/Content-Type) — Default Accept headers ensured with regression tests (`apps/pharmacy-router/src/adapters/cpcs.client.ts:504`, `apps/billing/test/billing.client.test.ts:31`, `apps/ics-hub/test/ics.client.test.ts:81`).
+ - [x] IN-03.18 — Credential/cert rotation readiness (OAuth/mTLS refresh; hot-reload) — Route refresh updates TLS bundles in-place (`apps/ics-hub/src/adapters/ics.client.ts:296`, `apps/ics-hub/test/ics.client.test.ts:204`).
+ - [x] IN-03.19 — Sandbox playback harness (ICS/CPCS deterministic fixtures; offline CI) — Fixtures + harness with verification tests (`apps/ics-hub/src/dev/sandbox.ts:28`, `apps/ics-hub/test/sandbox.test.ts:7`).
  - [x] IN-03.20 — Adapter-level rate limits/backpressure (per-org caps; 429/503 mapping)
- - [ ] IN-03.21 — Billing contracts & validators (Claim/Response schemas; codegen; DLQ) — schemas/validators not yet added
+ - [x] IN-03.21 — Billing contracts & validators (Claim/Response schemas; codegen; DLQ) — Billing schemas, validators, and guarded bus publisher with tests (`schemas/billing/claim.json:1`, `apps/billing/src/adapters/contracts.ts:1`, `apps/billing/src/adapters/bus.adapter.ts:1`, `apps/billing/test/bus.adapter.test.ts:1`).

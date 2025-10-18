@@ -106,6 +106,14 @@ triage:
     complexity: 0.2
     time: 0.5
     capacity: 0.2
+  score_calibration:
+    slope: 1.0
+    intercept: 0.0
+    min: 0.0
+    max: 1.0
+  priority_tiebreaker:
+    epsilon: 0.02
+    acuity_promotion: 0.8
   aging_interval: PT5M
   sim_threshold: 0.8
   dedup_window: PT72H

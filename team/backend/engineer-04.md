@@ -21,7 +21,7 @@ Contracts & Validation
 - Use Ajv to validate handler inputs/outputs; gate on contract tests.
 
 Status: in progress
-Progress: 45%
+Progress: 90%
 
 Dependencies
 - integrations/engineer-02 (GP Connect)
@@ -41,11 +41,4 @@ Tasks
 - Completed items: see `team/backend/Completed Tasks/backend-engineer-04.md`.
 
 Incomplete Tasks
-- [ ] BE-04.6 — Define booking DLQ topics, retry policy, and DLQ publishing (currently absent).
-- [ ] BE-04.7 — Finalize SSRF allowlists and TLS validation; guard wrappers for GP Connect/FHIR are live.
-- [ ] BE-04.8 — Extend observability to cover write-back spans/metrics and ensure full trace coverage end to end.
-- [ ] BE-04.9 — Extend concurrency telemetry/backpressure metrics; base HTTP caps/429s implemented in adapter.
-- [ ] BE-04.11 — Redact PHI from logs (e.g., patientId) and confirm payload minimisation policy.
-- [ ] BE-04.12 — Capture performance baselines (p50/p95, throughput) and budget alerts.
-- [ ] BE-04.13 — Add fault-injection tests for timeout/circuit-breaker paths alongside existing conflict/idempotency coverage.
-- [ ] BE-04.14 — Publish booking architecture docs/ADRs outlining conflict semantics and operational runbooks.
+- [ ] BE-04.15 — Additional documentation consolidations (ops runbook, future enhancements) — pending scoping.

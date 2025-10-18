@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: readiness-flap
+  labels:
+    team: devops-sre
+spec:
+  groups:
+    - name: readiness-flap
+      rules:
+        - alert: ReadinessFlapping
+          expr: sum(changes(kube_pod_container_status_ready{namespace=~"onecare.*"}[30m])) > 6
+          for: 5m
+          labels:
+            severity: warning
+            slo: readiness
+            team: devops-sre
+          annotations:
+            summary: "Readiness probes flapping in namespace onecare*"
+            description: "More than six readiness transitions detected across onecare namespaces in 30 minutes."
+            runbook: https://onecare/runbooks/oncall-protocol

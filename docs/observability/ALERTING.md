@@ -4,7 +4,7 @@ This playbook explains how alerts are grouped, deduplicated, and triaged across 
 
 ## Alert Dedupe & Grouping
 
-Alertmanager (or Grafana Alerting) must normalise labels so duplicate events collapse into a single incident:
+Alertmanager (or Grafana Alerting) must normalise labels so duplicate events collapse into a single incident. The canonical rule files live in `infra/monitoring/alerts/` and ship with the docker-compose Prometheus config:
 
 - **Group by**: `service`, `severity`, `slo`, `team`. Avoid high-cardinality labels such as `pod`, `instance`, or `correlationId`.
 - **Timing knobs**:
@@ -33,8 +33,15 @@ The alert templates in `docs/observability/alerts/*.yaml` include a `runbook` an
 - Triage latency: `https://onecare/runbooks/triage-latency`
 - Scribe backlog: `https://onecare/runbooks/scribe-backlog`
 - On-call response: `https://onecare/runbooks/oncall-protocol`
+- ICS routing/ack latency: `https://onecare/runbooks/ics-routing-latency`
 
 Use the same runbook slug in Grafana dashboards to allow one-click pivoting from panels to playbooks.
+
+### Grafana Wiring
+
+1. Open **Alerting → Contact points → Edit** and ensure the notification template renders the `commonAnnotations.runbook` field (e.g., include `Runbook: {{ template \"__text_value\" .CommonAnnotations.runbook }}`).
+2. For Grafana dashboards, add panel links pointing to the same `https://onecare/runbooks/...` URLs so responders can jump directly from metrics to the playbook.
+3. When creating alert rules in Grafana, set the **Runbook URL** field to match the alert template above; Grafana will surface it in incident view and Slack/Teams notifications.
 
 ## On-Call Expectations
 
@@ -73,3 +80,12 @@ When building or reviewing Grafana panels:
 - Surface Alertmanager silences and acknowledge status directly on the dashboard for situational awareness.
 
 By adhering to these guidelines, alerts stay actionable, fatigue is reduced, and on-call engineers can respond with confidence.
+
+## Feature View Monitoring
+
+- **Metrics**: the feature-view materialiser exports `feature.views.run` (counter) and `feature.views.duration_ms` (histogram). Scrape them via the same OTEL/metrics exporter wiring used for other CLIs.
+- **Dashboards**: add a panel showing `increase(feature_views_run_total{view="triage-core.sliding-windows"}[1h])` plus a duration heatmap (`histogram_quantile(0.95, rate(feature_views_duration_ms_bucket{view="triage-core.sliding-windows"}[15m]))`).
+- **Alerts**:
+  - *Stalled job*: fire if `increase(feature_views_run_total{view="triage-core.sliding-windows"}[30m]) == 0` for `for: 10m`.
+  - *Slow job*: compare the p95 duration against your SLA (e.g., `histogram_quantile(0.95, rate(feature_views_duration_ms_bucket{view="triage-core.sliding-windows"}[15m])) > 120000`).
+- **Runbooks**: link alerts to `docs/FEATURE_VIEWS.md` and the materialiser section of this guide so on-call engineers can replay the job (`npm run feature:views -- --online`) or inspect recent runs.

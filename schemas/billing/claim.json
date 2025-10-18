@@ -1,0 +1,33 @@
+{
+  "$id": "https://onecare/schemas/billing/claim.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claimId",
+    "encounterId",
+    "amount",
+    "currency"
+  ],
+  "properties": {
+    "claimId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "encounterId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

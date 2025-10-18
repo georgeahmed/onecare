@@ -256,7 +256,13 @@ describe('ReferredState', () => {
     });
     expect(logCall?.[1]).not.toHaveProperty('serviceRequestId');
     expect((ctx.notifier as PatientNotifier).notifyReferral).toHaveBeenCalledWith(
-      expect.objectContaining({ serviceRequestId: ctx.serviceRequest?.id, status: 'accepted' }),
+      expect.objectContaining({
+        serviceRequestId: ctx.serviceRequest?.id,
+        status: 'accepted',
+        idempotencyKey: expect.stringContaining('pharmacy:notify:ORG1'),
+        channel: 'unknown',
+        metadata: { template: 'pharmacy_referral_status' },
+      }),
     );
   });
 
@@ -298,6 +304,7 @@ describe('ReferredState', () => {
 
     await state.handle(ctx, baseEvent);
     expect(notifyReferral).toHaveBeenCalledTimes(1);
+    expect(notifyReferral.mock.calls[0]?.[0]?.idempotencyKey).toBe('pharmacy:notify:test');
 
     const duplicateCtx = buildContext({
       notifier: { notifyReferral } as PatientNotifier,
