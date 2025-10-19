@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { publishWithRetry } from '../../apps/orchestrator/src/adapters/busUtil';
-import type { MessageBus } from '../../packages/bus/src/types';
-import { createEnvelope } from '../../packages/events/src/envelope-util';
-import { Topics } from '../../packages/events/src/topics';
-import { createHttpFhirRepository, FhirRequestError, isFhirRequestError } from '../../apps/orchestrator/src/adapters/persistence/fhir.repository';
+import { publishWithRetry } from '../../../apps/orchestrator/src/adapters/busUtil';
+import type { MessageBus } from '../../../packages/bus/src/types';
+import { createEnvelope } from '../../../packages/events/src/envelope-util';
+import { Topics } from '../../../packages/events/src/topics';
+import { createHttpFhirRepository, FhirRequestError, isFhirRequestError } from '../../../apps/orchestrator/src/adapters/persistence/fhir.repository';
 
 const delayCalls: number[] = [];
 
@@ -17,9 +17,11 @@ vi.mock('node:timers/promises', () => ({
 class PoisonBus implements MessageBus {
   public attempts = 0;
 
-  async publish(): Promise<void> {
-    this.attempts += 1;
-    throw Object.assign(new Error('bus_down'), { code: 'econnrefused' });
+  async publish(topic: string): Promise<void> {
+    if (topic === Topics.triage.input) {
+      this.attempts += 1;
+      throw Object.assign(new Error('bus_down'), { code: 'bus_down' });
+    }
   }
 
   async subscribe(): Promise<{ unsubscribe(): Promise<void> }> {
@@ -34,19 +36,24 @@ describe('Chaos drills', () => {
 
   it('guardrails bus outage with bounded retries', async () => {
     const bus = new PoisonBus();
-    const envelope = createEnvelope('triage.input', { patientId: 'patient-chaos', narrative: 'load shedding' }, 'corr-chaos');
+    const envelope = createEnvelope(Topics.triage.input, { patientId: 'patient-chaos', narrative: 'load shedding' }, 'corr-chaos');
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
 
-    await expect(
-      publishWithRetry({
-        bus,
-        envelope,
-        correlationId: 'corr-chaos',
-        timeoutMs: 0,
-        maxAttempts: 3,
-        payloadRef: 'triage:submission:chaos',
-        baseDelayMs: 20,
-      }),
-    ).rejects.toMatchObject({ code: 'bus_down' });
+    try {
+      await expect(
+        publishWithRetry({
+          bus,
+          envelope,
+          correlationId: 'corr-chaos',
+          timeoutMs: 0,
+          maxAttempts: 3,
+          payloadRef: 'triage:submission:chaos',
+          baseDelayMs: 20,
+        }),
+      ).rejects.toMatchObject({ code: 'bus_down' });
+    } finally {
+      randomSpy.mockRestore();
+    }
 
     expect(bus.attempts).toBe(3);
     expect(delayCalls).toHaveLength(2);

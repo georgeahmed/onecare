@@ -13,6 +13,17 @@ const ar: Record<string, string> = {
    * Translator: Global offline banner. Tone should reassure and explain that progress is saved.
    */
   'app.offlineIndicator': 'أنت الآن دون اتصال. حفظنا تقدمك وسنرسل التحديثات فور عودة الاتصال.',
+  /**
+   * Translator: Warn users when we fall back to English because the locale bundle failed.
+   */
+  'app.localeFallback.notice': 'تعذّر تحميل حزمة اللغة {localeName}. نعرض الإنجليزية مؤقتًا.',
+  'app.localeFallback.retry': 'إعادة محاولة تحميل اللغة',
+  'app.localeFallback.refresh': 'تحديث الصفحة',
+  /**
+   * Translator: Inform users that a fresh locale bundle is available after serving a cached version.
+   */
+  'app.localeUpdated.notice': 'قمنا بتحديث حزمة اللغة. أعد تحميل الصفحة إذا بدا أي نص غير محدّث.',
+  'app.localeUpdated.refresh': 'تحديث الآن',
   'booking.section.title': 'المواعيد المتاحة',
   'booking.filter.legend': 'تصفية المواعيد',
   'booking.filter.modality': 'طريقة الزيارة',

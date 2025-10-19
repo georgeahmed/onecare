@@ -62,6 +62,7 @@ Portal Offline & PWA Workflow
 - In Chrome DevTools: Application → Service Workers → check “Update on reload” while testing changes; unregister once done to avoid stale caches in dev.
 - Simulate offline: Network tab → select “Offline”, confirm the shell still loads, submit a booking, and watch it queue. Bringing the network back online should flush the queue automatically (background sync) and clear the offline banner.
 - Clear IndexedDB/Cache Storage entries named `onecare.portal.*` if you need a clean slate between runs.
+- Locale bundles are cached in `localStorage`; the UI will show a locale banner if we fall back to English or if fresh translations are available (see `LocaleNotice`).
 
 Performance Monitoring & Data Client
 - Core Web Vitals collection (LCP, CLS, INP) is wired through `startPerformanceMonitoring()` in `apps/portal/src/lib/performance.ts`. Metrics are emitted via `recordRumEvent('performance.metric', …)` and compared against budgets (LCP ≤ 2500 ms, CLS ≤ 0.1, INP ≤ 200 ms). Customize thresholds there if budgets change.
@@ -80,13 +81,17 @@ Performance Checks
 - GP Connect mTLS reload: set `GP_CONNECT_MTLS_CERT_PATH` / `GP_CONNECT_MTLS_KEY_PATH` (optional `GP_CONNECT_MTLS_CA_PATH`) and trigger `SIGHUP` or touch the files (when `GP_CONNECT_MTLS_WATCH=true`) to reload without downtime; metrics `gp_connect_cert_reload_success_total` / `_error_total` record outcomes.
 
 QA Matrix (Accessibility + i18n)
-| Scenario | Assistive Tech | Browser / Device | Notes |
-|----------|----------------|------------------|-------|
-| Intake happy path (web, interpreter required) | NVDA | Chrome on Windows 11 | Verify focus order, form error recovery, interpreter fields, high-contrast toggle |
-| Intake diversion / error state | VoiceOver | Safari on macOS | Confirm error alerts announce via live regions, pseudo-locale coverage |
-| Booking flow (slot selection + conflict) | Keyboard only + high zoom (200 %) | Firefox on Windows | Check zoom fallback (`data-zoom="high"`), ensure layouts reflow without horizontal scroll |
-| Intake + booking locale switch | VoiceOver | iOS Safari | Switch between English ↔ Spanish ↔ Pseudo; ensure announcements respect locale and nav works |
-| Callback windows review | TalkBack | Chrome on Android | Validate ordered lists, language fallback offline, high-contrast theme |
+| Scenario | Assistive Tech | Browser / Device | Last run | Notes |
+|----------|----------------|------------------|----------|-------|
+| Intake happy path (web, interpreter required) | NVDA | Chrome on Windows 11 | 2025‑10‑19 | Focus order, interpreter toggle, and high-contrast verified. |
+| Intake diversion / error state | VoiceOver | Safari on macOS | 2025‑10‑19 | Error alerts announce via live region; pseudo locale fits layout. |
+| Booking flow (slot selection + conflict) | Keyboard only + high zoom (200 %) | Firefox on Windows | 2025‑10‑19 | Zoom fallback keeps layout, conflict banner actionable. |
+| Intake + booking locale switch | VoiceOver | iOS Safari | 2025‑10‑19 | Locale banner and offline cache notice announce once. |
+| Callback windows review | TalkBack | Chrome on Android | 2025‑10‑19 | Ordered lists and aria labels validated; high-contrast readable. |
+| Queue triage filters & actions | None (keyboard focus audit) | Edge on Windows 11 | 2025‑10‑20 | Clinic switcher, ownership radios, and live announcements verified. |
+
+- Revisit the matrix quarterly (next due January 2026) and capture follow-up tickets with the `a11y-qa` tag.
+- Current findings (2025‑10‑20): no outstanding blockers; continue to watch queue filter focus styling after design QA.
 
 Runbook
 - Before releasing new strings: run extraction, regenerate locales, and request translation review via shared glossary.

@@ -16,6 +16,17 @@ const es = {
    * Translator: Global banner when the browser is offline. Reassure the user that their progress is safe.
    */
   'app.offlineIndicator': 'Estás sin conexión. Guardamos tu avance y enviaremos todo automáticamente al reconectar.',
+  /**
+   * Translator: Warn users when the target locale bundle failed. Keep tone calm and offer next steps.
+   */
+  'app.localeFallback.notice': 'No pudimos cargar el paquete de idioma {localeName}. Mostramos inglés por ahora.',
+  'app.localeFallback.retry': 'Reintentar carga del idioma',
+  'app.localeFallback.refresh': 'Actualizar página',
+  /**
+   * Translator: Inform users that a fresh locale bundle was retrieved after serving cache.
+   */
+  'app.localeUpdated.notice': 'Actualizamos tu paquete de idioma. Actualiza la página si notas texto desactualizado.',
+  'app.localeUpdated.refresh': 'Actualizar ahora',
   'intake.practiceId.label': 'ID del centro',
   'intake.patientId.label': 'ID del paciente',
   'intake.patient.dob.label': 'Fecha de nacimiento',

@@ -1,6 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
-import type { ClinicianTaskDetail } from '@onecare/events';
+import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
 import { queueGateway } from '../adapters/gateway';
 import { useIntl } from 'react-intl';
 

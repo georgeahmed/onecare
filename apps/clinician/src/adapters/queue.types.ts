@@ -1,4 +1,5 @@
-import type { ClinicianTaskSummary, ClinicianTaskDetail } from '@onecare/events';
+import type { ClinicianTaskSummary } from '@onecare/events/src/contracts/clinician-task-summary';
+import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
 
 export type TaskPriority = ClinicianTaskSummary['priority'];
 export type TaskStatus = ClinicianTaskSummary['status'];
@@ -12,6 +13,20 @@ export interface QueueFilters {
   to?: string;
   limit?: number;
   cursor?: string;
+}
+
+export type QueueErrorCode = 'conflict' | 'not_found' | 'network';
+
+export class QueueGatewayError extends Error {
+  code: QueueErrorCode;
+  correlationId?: string;
+
+  constructor(code: QueueErrorCode, message: string, correlationId?: string) {
+    super(message);
+    this.name = 'QueueGatewayError';
+    this.code = code;
+    this.correlationId = correlationId;
+  }
 }
 
 export interface QueueGateway {

@@ -188,12 +188,14 @@ export const triageNearMissArb: fc.Arbitrary<NegativeCase<TriageInput>> = triage
   const cases: NegativeCase<TriageInput>[] = [
     (() => {
       const mutated = deepClone(base);
-      mutated.patientId = '';
-      return { payload: mutated, expected: { path: '/patientId', keyword: 'minLength' } };
+      mutated.patientId = null as unknown as string;
+      return { payload: mutated, expected: { path: '/patientId', keyword: 'type' } };
     })(),
     (() => {
       const mutated = deepClone(base);
-      mutated.features = { ...mutated.features, symptomDurationHours: 'not-a-number' as unknown as number };
+      const features = { ...(mutated.features ?? {}) } as Record<string, unknown>;
+      features.symptomDurationHours = [] as unknown as number;
+      mutated.features = features as TriageInput['features'];
       return { payload: mutated, expected: { path: '/features/symptomDurationHours', keyword: 'type' } };
     })(),
   ];

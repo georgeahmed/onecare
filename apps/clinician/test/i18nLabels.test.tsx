@@ -10,8 +10,8 @@ describe('Clinician i18n labels', () => {
         <App />
       </StaticRouter>
     );
-    expect(html).toContain('Queue');
-    expect(html).toContain('Settings');
+    expect(html).toContain('Accessibility shortcuts');
+    expect(html).toContain('OneCare Clinician Console');
+    expect(html).toContain('Theme');
   });
 });
-

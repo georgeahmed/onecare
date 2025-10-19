@@ -16,6 +16,17 @@ const en = {
    * Translator: Shown globally when the browser is offline. Keep the tone calm and reassuring.
    */
   'app.offlineIndicator': 'You\'re offline. We saved your progress and will send updates once you reconnect.',
+  /**
+   * Translator: Warn users when the selected locale bundle failed to load. Keep tone calm and offer recovery steps.
+   */
+  'app.localeFallback.notice': 'We could not load the {localeName} language pack. We are showing English for now.',
+  'app.localeFallback.retry': 'Retry language load',
+  'app.localeFallback.refresh': 'Refresh page',
+  /**
+   * Translator: Inform users that a fresh locale bundle was downloaded after serving cached copy.
+   */
+  'app.localeUpdated.notice': 'We refreshed your language pack. Reload the page if anything looks out of date.',
+  'app.localeUpdated.refresh': 'Refresh now',
   'intake.practiceId.label': 'Practice ID',
   'intake.patientId.label': 'Patient ID',
   'intake.patient.dob.label': 'Date of birth',
