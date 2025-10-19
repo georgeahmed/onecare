@@ -202,18 +202,22 @@ export async function publishAutomationTasks(
     const taskEnvelope = createEnvelope(Topics.tasks.created, creation.task, correlationId);
     await publishWithGuard(bus, taskEnvelope.topic, taskEnvelope, correlationId, options.taskPublish);
 
+    const triggeredAt = creation.triggeredAt ?? now();
     const audit: AuditEvent = {
       type: auditType,
-      timestamp: creation.triggeredAt ?? now(),
+      ts: triggeredAt,
       correlationId: correlationId ?? null,
+      actorRef: null,
+      subjectRef: creation.task.patientId ? `Patient/${creation.task.patientId}` : null,
+      outcome: 'allow',
+      reasonCode: creation.reason,
       details: {
         ruleName: creation.ruleName,
-        reason: creation.reason,
         category: creation.category,
         sourceTaskId: creation.sourceTaskId,
         taskId: creation.task.taskId,
         patientId: creation.task.patientId,
-        triggeredAt: creation.triggeredAt,
+        triggeredAt,
       },
     };
     const auditEnvelope = createEnvelope(Topics.audit.event, audit, correlationId);

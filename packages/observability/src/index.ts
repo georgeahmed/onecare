@@ -8,6 +8,7 @@ export {
   getCorrelationId,
   isTracingEnabled,
   withCorrelationContext,
+  shutdownTracing,
   type Span,
 } from './otel';
 export * from './dlq';

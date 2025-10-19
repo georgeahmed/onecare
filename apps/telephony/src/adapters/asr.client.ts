@@ -153,11 +153,6 @@ interface CircuitBreakerState {
   openedAt: number;
 }
 
-interface AsrServiceResult {
-  text: string;
-  lang?: string | null;
-}
-
 const breakerStates = new Map<string, CircuitBreakerState>();
 
 export function __resetAsrCircuitBreakers(): void {

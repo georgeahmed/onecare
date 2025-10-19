@@ -17,7 +17,7 @@ class RecordingBus implements MessageBus {
     this.publications.push({ topic, payload, headers });
   }
 
-  async subscribe<T>(): Promise<Subscription> {
+  async subscribe(): Promise<Subscription> {
     return {
       unsubscribe: async () => {},
     };

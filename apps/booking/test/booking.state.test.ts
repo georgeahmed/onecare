@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createHash } from 'node:crypto';
 import type { AppointmentRequest, Slot, GpConnectClient } from '../src/adapters/gpconnect.client';
 import { GpConnectHttpClient, GpConnectClientError } from '../src/adapters/gpconnect.client';
 import type { EnhancedAccessPolicy } from '../src/application/enhancedAccess';
@@ -14,6 +13,7 @@ import {
 import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import { Topics } from '@onecare/events';
+import { hashIdentifier } from '@onecare/security';
 
 function createBusMock() {
   const publish = vi.fn().mockResolvedValue(undefined);
@@ -38,10 +38,6 @@ function createIdempotencyStore(): IdempotencyStore {
       keys.delete(key);
     },
   };
-}
-
-function hash(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
 }
 
 describe('Booking state machine integration', () => {
@@ -156,7 +152,7 @@ describe('Booking state machine integration', () => {
     expect(executor).toHaveBeenCalledTimes(2);
     expect(createAppointment).toHaveBeenCalledTimes(1);
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }));
-    const expectedPatientHash = hash('patient-1');
+    const expectedPatientHash = hashIdentifier('patient-1');
     expect(queueNotify).toHaveBeenCalledWith(
       'booking.queue',
       expect.objectContaining({ appointmentId: 'appt-slot-123', patientHash: expectedPatientHash }),

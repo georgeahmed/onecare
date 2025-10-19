@@ -35,7 +35,7 @@ Localization Authoring Guide
   4. Use the “Pseudo (debug)” locale in dev to surface truncation, overflow, and placeholder mistakes.
   5. Document any reviewer context or glossary additions alongside the change set.
 - Content & Readability Review Lane
-  - Open a review ticket and assign the Content Reviewer rotation (see team/frontend/engineer-01.md for roster).
+  - Open a review ticket and assign the Content Reviewer rotation. When the optional `team/` backlog is mounted, consult `team/frontend/engineer-01.md` for the roster (context lives in `docs/TASK_INDEX.md`); otherwise follow the shared rotation tracker.
   - Reviewer checklist: verify plain-language tone, sentence length, glossary adherence, and inclusive alternatives.
   - Capture decisions in `docs/ADR/` when wording changes product behaviour or patient expectations.
   - Update the localization glossary and link the ticket in the PR description; add QA notes to `docs/USAGE.md` matrix when new flows ship.

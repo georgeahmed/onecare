@@ -60,9 +60,14 @@ class GuardedMessageBus implements MessageBus {
         return;
       }
       if (this.options.idempotencyStore) {
+        const key = buildIdempotencyKey(topic, normalized);
+        if (!key) {
+          await handler(normalized as Message<T>);
+          return;
+        }
         await executeWithIdempotency({
           store: this.options.idempotencyStore,
-          key: buildIdempotencyKey(topic, normalized, this.options),
+          key,
           ttlSeconds: this.options.idempotencyTtlSeconds,
           execute: async () => {
             await handler(normalized as Message<T>);
@@ -280,7 +285,7 @@ function normalizeTtlSeconds(candidate: number | undefined): number {
   return Math.min(86_400, Math.max(30, Math.floor(parsed)));
 }
 
-function buildIdempotencyKey(topic: string, message: Message, options: NormalizedGuardOptions): string {
+function buildIdempotencyKey(topic: string, message: Message): string | undefined {
   const headers = message.headers ?? {};
   const located = findHeader(headers, MESSAGE_ID_HEADER);
   const fromHeader = located?.value?.trim();
@@ -288,7 +293,7 @@ function buildIdempotencyKey(topic: string, message: Message, options: Normalize
   const fallback = typeof envelope?.id === 'string' ? envelope.id.trim() : undefined;
   const idCandidate = fromHeader && fromHeader.length > 0 ? fromHeader : fallback;
   if (!idCandidate || idCandidate.length === 0) {
-    return `bus:${topic}:unknown`;
+    return undefined;
   }
   return `bus:${topic}:${idCandidate}`;
 }

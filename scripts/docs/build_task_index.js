@@ -7,6 +7,7 @@ const OUT = path.join(process.cwd(), 'docs', 'TASK_INDEX.md');
 
 function findTaskFiles() {
   const out = [];
+  if (!fs.existsSync(TEAM_DIR)) return out;
   function walk(dir) {
     const entries = fs.readdirSync(dir);
     for (const e of entries) {
@@ -52,6 +53,14 @@ function build() {
   const lines = [];
   lines.push('Task Index');
   lines.push('');
+  if (files.length === 0) {
+    lines.push('Team backlog files are not present in this checkout; there are no tasks to index.');
+    lines.push('');
+    fs.mkdirSync(path.dirname(OUT), { recursive: true });
+    fs.writeFileSync(OUT, lines.join('\n'));
+    console.log('No team directory found; wrote placeholder TASK_INDEX.md');
+    return;
+  }
   lines.push('Run a task: `make engineer-loop ENGINEER=<team/path> TASK=\'<task-id>\'`');
   lines.push('');
   const order = [
@@ -74,4 +83,3 @@ function build() {
 }
 
 build();
-

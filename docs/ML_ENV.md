@@ -24,6 +24,7 @@ These values are shared between the Node orchestrator and the Python services. D
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PY_SAFETY_GATE_URL` | Base URL used by orchestrator to reach the safety gate container. | `http://safety-gate:8081` (compose) |
+| `PY_SAFETY_GATE_HOST_ALLOWLIST` | Comma-separated hosts that bypass SSRF private-host blocking (e.g., `safety-gate` in Compose or `localhost,127.0.0.1` for local runs). | unset |
 | `PY_SAFETY_GATE_API_KEY` | Bearer token attached to orchestrator → safety gate calls (prepends `Bearer ` when missing). | unset |
 | `PY_SAFETY_GATE_AUTH_HEADER_NAME` / `PY_SAFETY_GATE_AUTH_HEADER_VALUE` | Optional custom auth header pair for safety gate calls (wins over bearer token). | unset |
 | `PY_SAFETY_GATE_EXTRA_HEADERS` | JSON object of additional headers to apply to safety gate requests. | unset |

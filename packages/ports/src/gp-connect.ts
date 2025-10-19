@@ -1,7 +1,8 @@
 import * as https from 'node:https';
+import type { IncomingHttpHeaders } from 'node:http';
 import { URL } from 'node:url';
 import { createHash } from 'node:crypto';
-import type { PeerCertificate } from 'node:tls';
+import { TLSSocket, type PeerCertificate } from 'node:tls';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
@@ -117,7 +118,7 @@ export class GpConnectHttpClient {
     this.defaultHeaders = normalizeHeaders(options.defaultHeaders ?? {});
     this.onLog = options.onLog;
 
-    const agent = createHttpsAgent(this.pinnedFingerprints);
+    const agent = createHttpsAgent();
     this.transport = options.transport ?? createDefaultTransport(agent);
   }
 
@@ -320,7 +321,7 @@ function clampTimeout(value: number): number {
   return Math.min(Math.max(Math.floor(value), 100), 30_000);
 }
 
-function createHttpsAgent(pins: Set<string> | null): https.Agent {
+function createHttpsAgent(): https.Agent {
   const agentOptions: https.AgentOptions = {
     keepAlive: true,
     maxSockets: 25,
@@ -352,7 +353,9 @@ function createDefaultTransport(agent: https.Agent): GpConnectTransport {
         response.on('end', () => {
           const bodyBuffer = Buffer.concat(chunks);
           const headersObject = normalizeIncomingHeaders(response.headers);
-          const fingerprint = extractFingerprintFromSocket(response.socket?.getPeerCertificate?.(true));
+          const fingerprint = extractFingerprintFromSocket(
+            response.socket instanceof TLSSocket ? response.socket.getPeerCertificate(true) : undefined,
+          );
           resolve({
             statusCode: response.statusCode ?? 0,
             headers: headersObject,
@@ -375,7 +378,7 @@ function createDefaultTransport(agent: https.Agent): GpConnectTransport {
     });
 }
 
-function normalizeIncomingHeaders(headers: https.IncomingHttpHeaders): Record<string, string> {
+function normalizeIncomingHeaders(headers: IncomingHttpHeaders): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     if (Array.isArray(value)) {

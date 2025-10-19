@@ -102,6 +102,10 @@ function testsByStatus(status) {
 
 async function main() {
   const initial = await runSuite([], 1);
+  if (initial.exitCode !== 0 && initial.report.tests.length === 0) {
+    console.error('❌ Vitest exited with a non-zero status without producing test results. Check Vitest logs above.');
+    process.exit(initial.exitCode ?? 1);
+  }
   const failingSet = new Set();
   for (const test of initial.report.tests) {
     const key = testKey(test);
@@ -118,7 +122,12 @@ async function main() {
     }
     const files = uniqueFilesFor(Array.from(failingSet));
     if (files.length === 0) break;
-    const { report } = await runSuite(files, attempt);
+    const suite = await runSuite(files, attempt);
+    if (suite.exitCode !== 0 && suite.report.tests.length === 0) {
+      console.error('❌ Vitest retry exited with a non-zero status without producing test results. Aborting flake analysis.');
+      process.exit(suite.exitCode ?? 1);
+    }
+    const { report } = suite;
     const nextFailing = new Set();
     for (const test of report.tests) {
       const key = testKey(test);

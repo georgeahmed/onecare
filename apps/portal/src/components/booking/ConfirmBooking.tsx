@@ -26,7 +26,20 @@ const isNavigatorOnline = (): boolean => {
   return navigator.onLine;
 };
 
-type QueueStatus = 'idle' | 'queued' | 'processing';
+export type QueueStatus = 'idle' | 'queued' | 'processing';
+
+export const deriveQueueStatus = (
+  current: QueueStatus,
+  job: OfflineBookingJob | null
+): QueueStatus => {
+  if (!job) {
+    return 'idle';
+  }
+  if (current === 'processing') {
+    return current;
+  }
+  return 'queued';
+};
 
 export interface ConfirmBookingProps {
   slot: BookingSlot;
@@ -417,7 +430,7 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
     const unsubscribe = subscribeOfflineQueue((jobs) => {
       const job = jobs.find((entry) => entry.id === idempotencyKey) ?? null;
       setQueueJob(job);
-      setQueueStatus(job ? 'queued' : 'idle');
+      setQueueStatus((previous) => deriveQueueStatus(previous, job));
     });
     return unsubscribe;
   }, [idempotencyKey]);

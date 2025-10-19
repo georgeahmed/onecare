@@ -313,12 +313,34 @@ function normalizeRetryPolicy(policy?: RetryPolicyOptions): NormalizedRetryPolic
   if (!policy) {
     return DEFAULT_RETRY_POLICY;
   }
-  const maxAttempts = Math.max(1, Math.min(6, Math.floor(policy.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts)));
-  const baseDelayMs = Math.max(0, Math.floor(policy.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs));
-  const maxDelayMs = Math.max(baseDelayMs, Math.floor(policy.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs));
-  const jitterRatio = Math.max(0, Math.min(1, Number.isFinite(policy.jitterRatio ?? DEFAULT_RETRY_POLICY.jitterRatio)
-    ? (policy.jitterRatio as number)
-    : DEFAULT_RETRY_POLICY.jitterRatio));
+
+  const sanitizeFinite = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+  const attemptsCandidate = sanitizeFinite(policy.maxAttempts);
+  const maxAttempts = Math.max(
+    1,
+    Math.min(6, Math.floor(attemptsCandidate ?? DEFAULT_RETRY_POLICY.maxAttempts))
+  );
+
+  const baseDelayCandidate = sanitizeFinite(policy.baseDelayMs);
+  const baseDelayMs = Math.max(
+    0,
+    Math.floor(baseDelayCandidate ?? DEFAULT_RETRY_POLICY.baseDelayMs)
+  );
+
+  const maxDelayCandidate = sanitizeFinite(policy.maxDelayMs);
+  const maxDelayMs = Math.max(
+    baseDelayMs,
+    Math.floor(maxDelayCandidate ?? DEFAULT_RETRY_POLICY.maxDelayMs)
+  );
+
+  const jitterCandidate = sanitizeFinite(policy.jitterRatio);
+  const jitterRatio = Math.max(
+    0,
+    Math.min(1, jitterCandidate ?? DEFAULT_RETRY_POLICY.jitterRatio)
+  );
+
   return {
     maxAttempts,
     baseDelayMs,

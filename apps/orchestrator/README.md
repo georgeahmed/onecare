@@ -54,6 +54,8 @@ Configuration
   - Run `docker compose up nats` to start the dev broker exposed on `nats://localhost:4222`. Point the orchestrator at it with `BUS_IMPL=nats NATS_URL=nats://localhost:4222`.
   - Inspect JetStream state using the official CLI (e.g., `nats --creds var/secrets/orchestrator.creds stream info orchestrator`).
   - Replay DLQ entries after triage with `node scripts/dlq-requeue.js --source broker.dlq --match correlationId=<cid> --dry-run`.
+- Booking upstreams:
+  - `BOOKING_AVAILABILITY_URL` and `BOOKING_SERVICE_URL` must be HTTP(S) endpoints without embedded credentials; link-local/metadata hosts are blocked. Loopback hosts are only permitted when `NODE_ENV` is not `production` or when `ORCHESTRATOR_ALLOW_LOOPBACK_UPSTREAMS=1` is explicitly set for local overrides.
 - Bus readiness honours `BUS_READY_PENDING_LAG` (defaults to `200`) and mirrors `@onecare/bus` diagnostics; alerts fire when lag or `bus.nats.backpressure.events` climbs.
 
 Resilience & Backpressure

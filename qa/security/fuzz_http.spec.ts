@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { faker } from '@faker-js/faker';
-import { encode } from 'querystring';
 import http from 'node:http';
 
 /**
@@ -9,6 +8,7 @@ import http from 'node:http';
  * asserts that responses are handled safely (status code + JSON envelope without stack traces).
  *
  * Requires dev stack running (docker compose up) so endpoints respond locally.
+ * Opt-in via RUN_SECURITY_TESTS=1 to avoid failing on default unit test runs.
  */
 
 const TARGETS: Array<{ name: string; method: 'POST'; url: string; bodyFactory: () => Record<string, unknown> }> = [
@@ -62,7 +62,7 @@ function mutatePayload(base: Record<string, unknown>): fc.Arbitrary<Record<strin
         if (value && typeof value === 'object' && !Array.isArray(value)) {
           return [
             key,
-            fc.oneof(fc.constant(value), mutatePayload(value as Record<string, unknown>>)),
+            fc.oneof(fc.constant(value), mutatePayload(value as Record<string, unknown>)),
           ];
         }
         if (typeof value === 'string') {
@@ -78,7 +78,17 @@ function mutatePayload(base: Record<string, unknown>): fc.Arbitrary<Record<strin
   );
 }
 
-describe('HTTP fuzzing harness', () => {
+const SHOULD_RUN =
+  process.env.RUN_SECURITY_TESTS === '1' || process.env.RUN_SECURITY_TESTS?.toLowerCase() === 'true';
+
+if (!SHOULD_RUN) {
+  // eslint-disable-next-line no-console
+  console.warn('Skipping HTTP fuzzing harness (set RUN_SECURITY_TESTS=1 to enable).');
+}
+
+const describeFuzz = SHOULD_RUN ? describe : describe.skip;
+
+describeFuzz('HTTP fuzzing harness', () => {
   TARGETS.forEach((target) => {
     it.concurrent(
       `${target.name} handles mutated payloads safely`,

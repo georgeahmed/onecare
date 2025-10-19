@@ -443,7 +443,7 @@ async function initiateShutdown(signal: NodeJS.Signals, server: http.Server): Pr
       .drain({ timeoutMs: SHUTDOWN_TIMEOUT_MS })
       .then((result) => {
         if (result === 'completed') {
-          portalGuardHandle.cancel();
+          portalGuardHandle?.cancel();
         }
         return result;
       })

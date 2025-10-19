@@ -1,0 +1,18 @@
+groups:
+  - name: dlq-backlog
+    rules:
+      - alert: DlqBacklogGrowing
+        expr: |
+          (
+            sum(rate(bus_nats_pending_lag_sum[5m])) /
+            clamp_min(sum(rate(bus_nats_pending_lag_count[5m])), 1)
+          ) > 100
+        for: 10m
+        labels:
+          severity: warning
+          slo: backlog
+          team: devops-sre
+        annotations:
+          summary: "DLQ backlog averaging >100 messages"
+          description: "Average pending JetStream deliveries exceeded 100 over the last 10 minutes."
+          runbook: https://onecare/runbooks/dlq-backlog

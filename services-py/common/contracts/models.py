@@ -100,6 +100,7 @@ class Code(Enum):
     unauthorized = 'unauthorized'
     forbidden = 'forbidden'
     invalid_input = 'invalid_input'
+    not_found = 'not_found'
     unsupported_media_type = 'unsupported_media_type'
     payload_too_large = 'payload_too_large'
     conflict = 'conflict'
@@ -107,7 +108,9 @@ class Code(Enum):
     upstream_unavailable = 'upstream_unavailable'
     internal_error = 'internal_error'
     too_many_requests = 'too_many_requests'
+    rate_limited = 'rate_limited'
     busy = 'busy'
+    over_capacity = 'over_capacity'
     invalid_fhir = 'invalid_fhir'
 
 class Error(BaseModel):

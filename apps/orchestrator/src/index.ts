@@ -54,6 +54,7 @@ import {
   getDefaultTtlSeconds,
 } from '@onecare/ports';
 import { resolveServerPort } from './support/port';
+import { normalizeExternalServiceBase } from './support/externalTargets';
 import { createHttpFhirRepository, isFhirRequestError } from './adapters/persistence/fhir.repository';
 import { HttpObjectStore } from './adapters/persistence/object-store.client';
 import HttpError from './application/httpError';
@@ -76,7 +77,38 @@ const reconnectDelayHistogram = createHistogram('bus.reconnect.delay');
 const busHealthMaxAgeMs = parsePositiveInt(process.env.BUS_HEALTH_CACHE_MS, 2_000, 60_000);
 const busReadyLagThreshold = parsePositiveInt(process.env.BUS_READY_PENDING_LAG, 200, 100_000);
 const HEADER_TOKEN_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const HEADER_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+
+function containsHeaderControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if ((code >= 0 && code <= 31) || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseOptionalBoolean(raw: string | undefined): boolean | null {
+  if (raw === undefined || raw === null) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+  return null;
+}
+
+const allowLoopbackUpstreams = (() => {
+  const override = parseOptionalBoolean(process.env.ORCHESTRATOR_ALLOW_LOOPBACK_UPSTREAMS);
+  if (override !== null) {
+    return override;
+  }
+  return process.env.NODE_ENV !== 'production';
+})();
+
 function resolvePracticeId(): string {
   const envValue = process.env.PRACTICE_ID?.trim();
   if (envValue) return envValue;
@@ -240,15 +272,6 @@ function resolveFhirProfiles(config: ResolvedConfig): Record<string, string> | u
     .map(([key, value]) => [key, (value as string).trim()]);
   if (entries.length === 0) return undefined;
   return Object.fromEntries(entries);
-}
-
-function safeUrlForLog(raw: string): string {
-  try {
-    const url = new URL(raw);
-    return url.origin + url.pathname;
-  } catch {
-    return 'invalid-url';
-  }
 }
 
 function normaliseShadowSafetyGate(config?: SafetyGateShadowConfig): ShadowSafetyGateContext | undefined {
@@ -466,14 +489,14 @@ const bookingAvailabilityBase = (() => {
   const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
   if (!raw) return null;
   try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      logger.warn('booking availability upstream rejected - invalid protocol', { value: raw });
-      return null;
-    }
-    return parsed;
+    return normalizeExternalServiceBase(raw, {
+      envName: 'BOOKING_AVAILABILITY_URL',
+      allowHttp: true,
+      allowHttps: true,
+      allowLoopback: allowLoopbackUpstreams,
+    });
   } catch (error) {
-    logger.warn('booking availability upstream rejected - invalid URL', {
+    logger.warn('booking availability upstream rejected', {
       value: raw,
       reason: error instanceof Error ? error.message : String(error),
     });
@@ -482,17 +505,22 @@ const bookingAvailabilityBase = (() => {
 })();
 
 function resolveBookingServiceBase(): URL | null {
-    const raw = process.env.BOOKING_SERVICE_URL?.trim();
-    if (!raw) return null;
-    try {
-      return new URL(raw);
-    } catch (error) {
-      logger.warn('booking service upstream rejected - invalid URL', {
-        value: raw,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+  const raw = process.env.BOOKING_SERVICE_URL?.trim();
+  if (!raw) return null;
+  try {
+    return normalizeExternalServiceBase(raw, {
+      envName: 'BOOKING_SERVICE_URL',
+      allowHttp: true,
+      allowHttps: true,
+      allowLoopback: allowLoopbackUpstreams,
+    });
+  } catch (error) {
+    logger.warn('booking service upstream rejected', {
+      value: raw,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 function parseBooleanFlag(value: string | undefined): boolean {
@@ -729,7 +757,7 @@ function validateIncomingHeaders(
     for (const candidate of values) {
       if (candidate === undefined) continue;
       const value = String(candidate);
-      if (HEADER_CONTROL_CHARS.test(value)) {
+      if (containsHeaderControlChars(value)) {
         return { valid: false, reason: 'control_character', header: name };
       }
       if (value.length > 16_384) {
@@ -746,8 +774,6 @@ const shutdownDrainTimeoutMs = parseDurationMs(
   1_000,
   120_000,
 );
-
-let server: http.Server;
 
 async function drainInflightRequests(timeoutMs: number): Promise<void> {
   if (inflightRequests === 0) return;
@@ -955,6 +981,7 @@ async function probeFhir(): Promise<DependencyState> {
       method: 'GET',
       headers,
       signal: controller.signal,
+      redirect: 'manual',
     });
     clearTimeout(timeout);
     if (!response.ok) {
@@ -991,6 +1018,7 @@ async function probeObjectStore(): Promise<DependencyState> {
       method: 'GET',
       headers,
       signal: controller.signal,
+      redirect: 'manual',
     });
     clearTimeout(timeout);
     if (!response.ok) {
@@ -1426,6 +1454,19 @@ function respondError(
 ): void {
   const envelope = errorEnvelope(code, message, details, correlationId);
   respondJson(res, mapErrorToStatus(code), envelope, correlationId, setOutcome, code);
+}
+
+function ensureReadResource(
+  repository: FhirRepository,
+  res: http.ServerResponse,
+  correlationId: string | undefined,
+  setOutcome: (value: RequestOutcome) => void,
+): NonNullable<FhirRepository['readResource']> | null {
+  if (typeof repository.readResource === 'function') {
+    return repository.readResource.bind(repository) as NonNullable<FhirRepository['readResource']>;
+  }
+  respondError(res, 'upstream_unavailable', 'FHIR read capability unavailable', correlationId, setOutcome);
+  return null;
 }
 
 function recordHttpMetrics(route: string, outcome: RequestOutcome, durationMs: number, correlationId: string | undefined): void {
@@ -2017,7 +2058,7 @@ async function respondReady(res: http.ServerResponse): Promise<void> {
   }
 }
 
-server = http.createServer((req, res) => withCorrelationContext(() => {
+const server = http.createServer((req, res) => withCorrelationContext(() => {
   if (!req.url) {
     res.statusCode = 400;
     res.end('Bad Request');
@@ -2160,6 +2201,7 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
           method: 'GET',
           headers,
           signal: controller.signal,
+          redirect: 'manual',
         });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') {
@@ -2247,9 +2289,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         return;
       }
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(
+        taskResource = await readResource<Record<string, unknown>>(
           `Task/${encodeURIComponent(taskId)}`,
         );
       } catch (error) {
@@ -2293,7 +2340,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now,
       });
 
       logger.info('clinician.tasks.detail', {
@@ -2364,9 +2410,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         ? ((assignBody as { assignee?: string }).assignee ?? '').trim()
         : undefined;
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+        taskResource = await readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
       } catch (error) {
         const status = extractStatusCode(error);
         if (status === 404) {
@@ -2407,7 +2458,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
           repository: fhirRepository,
           patientId: summary.patientId,
           requestCorrelationId: corr ?? undefined,
-          now: nowEpoch,
         });
         respondJson(res, 200, detail, corr, setOutcome);
         return;
@@ -2431,7 +2481,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now: nowEpoch,
       });
 
       logger.info('clinician.tasks.assigned', {
@@ -2499,9 +2548,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         return;
       }
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+        taskResource = await readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
       } catch (error) {
         const status = extractStatusCode(error);
         if (status === 404) {
@@ -2541,7 +2595,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
           repository: fhirRepository,
           patientId: summary.patientId,
           requestCorrelationId: corr ?? undefined,
-          now: nowEpoch,
         });
         respondJson(res, 200, detail, corr, setOutcome);
         return;
@@ -2565,7 +2618,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now: nowEpoch,
       });
 
       logger.info('clinician.tasks.unassigned', {
@@ -2653,9 +2705,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
       const outcome = sanitizeResolutionOutcome(resolveRequest.outcome);
       const note = sanitizeResolutionNote(resolveRequest.note);
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+        taskResource = await readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
       } catch (error) {
         const status = extractStatusCode(error);
         if (status === 404) {
@@ -2694,7 +2751,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
           repository: fhirRepository,
           patientId: summary.patientId,
           requestCorrelationId: corr ?? undefined,
-          now: nowEpoch,
         });
         respondJson(res, 200, detail, corr, setOutcome);
         return;
@@ -2724,7 +2780,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now: nowEpoch,
       });
 
       logger.info('clinician.tasks.resolved', {
@@ -2817,9 +2872,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
       const callbackWindow = sanitizeCallbackWindow(request.window);
       const callbackNote = sanitizeCallbackUserNote(request.note);
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+        taskResource = await readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
       } catch (error) {
         const status = extractStatusCode(error);
         if (status === 404) {
@@ -2897,7 +2957,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now: nowEpoch,
       });
 
       logger.info('clinician.tasks.callback_scheduled', {
@@ -2994,9 +3053,14 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
       }
       const request = payload as BookSlotRequest;
 
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
       let taskResource: Record<string, unknown>;
       try {
-        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+        taskResource = await readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
       } catch (error) {
         const status = extractStatusCode(error);
         if (status === 404) {
@@ -3072,6 +3136,7 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
           headers: bookingHeaders,
           body: JSON.stringify(bookingPayload),
           signal: controller.signal,
+          redirect: 'manual',
         });
       } catch (error) {
         clearTimeout(timeoutId);
@@ -3163,7 +3228,6 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
         repository: fhirRepository,
         patientId: summary.patientId,
         requestCorrelationId: corr ?? undefined,
-        now: nowEpoch,
       });
 
       logger.info('clinician.tasks.slot_booked', {
@@ -3243,7 +3307,12 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
       }
 
       const searchPath = query.cursorPath ?? buildClinicianTaskSearchPath(query);
-      const bundle = await fhirRepository.readResource<FhirBundle>(searchPath);
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
+      const bundle = await readResource<FhirBundle>(searchPath);
       const now = Date.now();
       const summaries = mapBundleToClinicianSummaries(bundle, query.clinicId, now);
       const nextCursor = extractNextCursor(bundle);
@@ -3317,7 +3386,12 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
       }
 
       const searchPath = query.cursorPath ?? buildClinicianTaskSearchPath(query);
-      const bundle = await fhirRepository.readResource<FhirBundle>(searchPath);
+      const readResource = ensureReadResource(fhirRepository, res, corr, setOutcome);
+      if (!readResource) {
+        return;
+      }
+
+      const bundle = await readResource<FhirBundle>(searchPath);
       const now = Date.now();
       const summaries = mapBundleToClinicianSummaries(bundle, query.clinicId, now);
       const nextCursor = extractNextCursor(bundle);
@@ -3972,6 +4046,7 @@ function extractStatusCode(error: unknown): number | undefined {
 }
 
 const MAX_DETAIL_ATTACHMENTS = 8;
+const MAX_ACTIONS_ALLOWED = 16;
 const MAX_AUDIT_ENTRIES = 20;
 const CORRELATION_ID_MIN_LENGTH = 6;
 const CORRELATION_ID_MAX_LENGTH = 128;
@@ -3993,7 +4068,7 @@ async function buildClinicianTaskDetail(
   const correlationId = sanitizeCorrelationId(correlationCandidate) ?? `task-${summary.id}`;
   const audit = extractTaskAudit(resource);
   const attachments = await collectTaskAttachments(resource, options.repository, options.patientId);
-  const actionsAllowed = determineActionsAllowed(summary);
+  const actionsAllowed: ClinicianTaskDetail['actionsAllowed'] = determineActionsAllowed(summary);
   return {
     ...summary,
     narrative,
@@ -4008,8 +4083,11 @@ function extractTaskNarrative(resource: Record<string, unknown>, fallback: strin
   const notes = Array.isArray(resource.note) ? resource.note : [];
   for (const note of notes) {
     if (!note || typeof note !== 'object') continue;
-    const text = typeof (note as Record<string, unknown>).text === 'string' ? (note as Record<string, unknown>).text.trim() : '';
-    if (text) {
+    const entry = note as Record<string, unknown>;
+    const candidate = entry.text;
+    if (typeof candidate === 'string') {
+      const text = candidate.trim();
+      if (!text) continue;
       return safeTruncate(text, 500_000);
     }
   }
@@ -4096,26 +4174,31 @@ function extractNoteAuthor(note: Record<string, unknown>): string {
   return 'system';
 }
 
-function determineActionsAllowed(summary: ClinicianTaskSummary): string[] {
-  const actions = new Set<string>();
+function determineActionsAllowed(summary: ClinicianTaskSummary): ClinicianTaskDetail['actionsAllowed'] {
+  const actions: string[] = [];
+  const add = (action: string) => {
+    if (!actions.includes(action) && actions.length < MAX_ACTIONS_ALLOWED) {
+      actions.push(action);
+    }
+  };
   if (summary.status !== 'DONE') {
-    actions.add('CALL');
-    actions.add('SCHEDULE');
-    actions.add('RESOLVE');
+    add('CALL');
+    add('SCHEDULE');
+    add('RESOLVE');
     if (summary.priority === 'STAT' || summary.priority === 'URGENT') {
-      actions.add('ESCALATE');
+      add('ESCALATE');
     }
     if (summary.status === 'NEW') {
-      actions.add('ASSIGN');
+      add('ASSIGN');
     } else if (summary.status === 'IN_PROGRESS') {
       if (summary.assignee) {
-        actions.add('UNASSIGN');
+        add('UNASSIGN');
       } else {
-        actions.add('ASSIGN');
+        add('ASSIGN');
       }
     }
   }
-  return Array.from(actions).slice(0, 16);
+  return actions as ClinicianTaskDetail['actionsAllowed'];
 }
 
 interface AssigneeInfo {
@@ -4304,12 +4387,12 @@ function isTaskAlreadyResolved(resource: Record<string, unknown>, outcome: strin
   const expected = formatResolutionNote(outcome, note);
   for (const entry of notes) {
     if (!entry || typeof entry !== 'object') continue;
-    const text = typeof (entry as Record<string, unknown>).text === 'string'
-      ? (entry as Record<string, unknown>).text.trim()
-      : '';
-    if (text === expected) {
-      return true;
-    }
+    const record = entry as Record<string, unknown>;
+    const rawText = record.text;
+    if (typeof rawText !== 'string') continue;
+    const text = rawText.trim();
+    if (!text) continue;
+    if (text === expected) return true;
   }
   return false;
 }
@@ -4409,9 +4492,10 @@ function extractScheduledCallback(resource: Record<string, unknown>): ScheduledC
   const notes = Array.isArray(resource.note) ? (resource.note as Array<Record<string, unknown>>) : [];
   for (const entry of notes) {
     if (!entry || typeof entry !== 'object') continue;
-    const text = typeof (entry as Record<string, unknown>).text === 'string'
-      ? (entry as Record<string, unknown>).text.trim()
-      : '';
+    const record = entry as Record<string, unknown>;
+    const rawText = record.text;
+    if (typeof rawText !== 'string') continue;
+    const text = rawText.trim();
     if (!text) continue;
     const parsed = parseCallbackAnnotation(text);
     if (parsed) {
@@ -4580,6 +4664,9 @@ async function collectTaskAttachments(
   const seenUrls = new Set<string>();
   const containedDocs = collectContainedResources(resource, 'DocumentReference');
   const targets = extractDocumentReferenceTargets(resource);
+  const readResource = typeof repository.readResource === 'function'
+    ? (repository.readResource.bind(repository) as NonNullable<FhirRepository['readResource']>)
+    : null;
   for (const id of targets.containedIds) {
     if (attachments.length >= MAX_DETAIL_ATTACHMENTS) break;
     const doc = containedDocs.get(id);
@@ -4592,10 +4679,14 @@ async function collectTaskAttachments(
     );
     attachments.push(...mapped);
   }
+  if (!readResource) {
+    return attachments;
+  }
+
   for (const path of targets.externalRefs) {
     if (attachments.length >= MAX_DETAIL_ATTACHMENTS) break;
     try {
-      const doc = await repository.readResource<Record<string, unknown>>(path);
+      const doc = await readResource<Record<string, unknown>>(path);
       if (!doc || (doc.resourceType as string | undefined) !== 'DocumentReference') {
         continue;
       }

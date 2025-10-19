@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional, Set
 
@@ -31,7 +32,12 @@ def _parse_scopes(header: Optional[str]) -> Set[str]:
     return scopes
 
 
-@dataclass(slots=True)
+_dataclass_kwargs: dict[str, object] = {}
+if sys.version_info >= (3, 10):
+    _dataclass_kwargs['slots'] = True
+
+
+@dataclass(**_dataclass_kwargs)
 class AuthzContext:
     """Represents the authenticated caller metadata."""
 

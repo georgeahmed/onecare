@@ -1,5 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -16,6 +16,7 @@ import {
 import type { MessageBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
 import type { TelephonyRateLimitConfig, TokenBucketRateLimitConfig } from '@onecare/config';
+import { hashIdentifier } from '@onecare/security';
 
 import { applyTelephonyDependencies } from './application/bootstrap';
 import {
@@ -397,13 +398,28 @@ function normalizeMetadata(raw: unknown): CallMetadata | undefined {
           .map(([key, value]) => [key, String(value)]),
       )
     : undefined;
-  return {
-    ...(callerId ? { callerId } : {}),
-    ...(practiceId ? { practiceId } : {}),
-    ...(dialedNumber ? { dialedNumber } : {}),
-    ...(correlationId ? { correlationId } : {}),
-    ...(attributes ? { attributes } : {}),
+  if (!callerId) {
+    return undefined;
+  }
+
+  const result: CallMetadata = {
+    callerId,
   };
+
+  if (practiceId) {
+    result.practiceId = practiceId;
+  }
+  if (dialedNumber) {
+    result.dialedNumber = dialedNumber;
+  }
+  if (correlationId) {
+    result.correlationId = correlationId;
+  }
+  if (attributes) {
+    result.attributes = attributes;
+  }
+
+  return result;
 }
 
 function normaliseIdempotency(raw: unknown): NormalisedTelephonyRequest['idempotency'] {
@@ -446,10 +462,6 @@ function normaliseRequest(body: TelephonyRequestBody): NormalisedTelephonyReques
     correlationId,
     idempotency,
   };
-}
-
-function hashIdentifier(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
 }
 
 function createReadinessManager(options: TelephonyIngressOptions): ReadinessManager {

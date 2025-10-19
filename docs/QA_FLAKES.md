@@ -7,6 +7,7 @@ Reliable feedback loops require stable tests. This document outlines how we dete
   - Runs the full suite once, then re-runs failing files up to `CI_FLAKE_RETRIES` (default: 2).
   - Records every attempt under `artifacts/qa/test-matrix.json` and surfaces flaky tests in `artifacts/qa/flaky-tests.json`.
   - Persistent failures after retries break the build. Flakes that eventually pass mark the workflow yellow with a warning banner.
+  - If Vitest exits non-zero without producing a JSON report (for example, configuration/runtime errors), the wrapper now fails fast so the pipeline never silently passes.
 - Artifacts are uploaded as `qa-vitest-flakes` on every CI run (pass or fail). Download them to see which tests retried, durations, and failure messages.
 - For pull requests, tag the owning engineer/team when a flake appears. The matrix includes full test names to ease ownership lookup.
 

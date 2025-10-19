@@ -8,6 +8,7 @@ export interface ErrorObject {
     | "unauthorized"
     | "forbidden"
     | "invalid_input"
+    | "not_found"
     | "unsupported_media_type"
     | "payload_too_large"
     | "conflict"
@@ -15,7 +16,9 @@ export interface ErrorObject {
     | "upstream_unavailable"
     | "internal_error"
     | "too_many_requests"
+    | "rate_limited"
     | "busy"
+    | "over_capacity"
     | "invalid_fhir";
   message: string;
   details?: {

@@ -23,7 +23,7 @@ const instanceId =
 
 const listeners = new Set<Listener>();
 let queueCache: OfflineQueueSnapshot = [];
-let persistenceMode: 'indexedDB' | 'localStorage' | 'memory' = isOfflineQueuePersistenceAvailable()
+const persistenceMode: 'indexedDB' | 'localStorage' | 'memory' = isOfflineQueuePersistenceAvailable()
   ? 'indexedDB'
   : hasWindow()
     ? 'localStorage'

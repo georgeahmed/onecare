@@ -84,7 +84,7 @@ describe('Access Gate rate limiter', () => {
   });
 
   it('returns 429 with retry-after when tenant limit exceeded', () => {
-    let now = 0;
+    const now = 0;
     const config = buildConfig({
       rateLimit: {
         tenant: {
@@ -162,7 +162,7 @@ describe('Access Gate rate limiter', () => {
   });
 
   it('enforces account-level limit independently of tenant bucket', () => {
-    let now = 0;
+    const now = 0;
     const config = buildConfig({
       rateLimit: {
         tenant: {
@@ -187,7 +187,7 @@ describe('Access Gate rate limiter', () => {
       },
     );
 
-    let mock = createMockResponse();
+    const mock = createMockResponse();
     handler(
       createMockRequest({
         'x-practice-id': 'demo',
@@ -238,7 +238,7 @@ describe('Access Gate rate limiter', () => {
       },
     );
 
-    let mock = createMockResponse();
+    const mock = createMockResponse();
     handler(createMockRequest({ 'x-practice-id': 'demo' }), mock.res);
     expect(mock.state.statusCode).toBe(200);
 
@@ -254,7 +254,7 @@ describe('Access Gate rate limiter', () => {
   });
 
   it('wires middleware through access gate server', () => {
-    let now = 0;
+    const now = 0;
     const config = buildConfig({
       rateLimit: {
         tenant: {

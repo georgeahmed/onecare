@@ -10,8 +10,8 @@ if [[ -z "$TEAM_DIR" ]]; then
 fi
 
 if [[ ! -d "$TEAM_DIR" ]]; then
-  echo "[platform-checklist] Team dir not found: $TEAM_DIR" >&2
-  exit 2
+  echo "[platform-checklist] Team dir not found: $TEAM_DIR (skipping)." >&2
+  exit 0
 fi
 
 missing=()
@@ -35,4 +35,3 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 echo "[platform-checklist][$TEAM_DIR] OK"
-

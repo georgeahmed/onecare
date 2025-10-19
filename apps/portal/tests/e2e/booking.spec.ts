@@ -42,7 +42,7 @@ const interceptConfirm = async (page) => {
 
 const interceptConflictOnce = async (page) => {
   let servedConflict = false;
-  await page.route('**/booking/confirm**', (route, request) => {
+  await page.route('**/booking/confirm**', (route, _request) => {
     if (!servedConflict) {
       servedConflict = true;
       route.fulfill({

@@ -2,7 +2,7 @@ import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'node:net';
 import { createHmac } from 'node:crypto';
 import type { MessageBus } from '@onecare/bus';
-import { Topics, type PortalSubmission, type TriageInput } from '@onecare/events';
+import { Topics, type PortalSubmission } from '@onecare/events';
 import { setConsentFixtureEnv } from './consentFixture';
 import { resetSecurityServices, setSecurityServices } from '../src/adapters/security';
 import { safePatientReference } from '../src/support/privacy';
@@ -164,7 +164,7 @@ describe('orchestrator resilience guardrails', () => {
 
   it('routes failed publish attempts to the DLQ', async () => {
     const dlqMessages: Array<{ topic: string; payload: unknown }> = [];
-    const publishStub = vi.fn(async (topic: string, payload: unknown, headers?: Record<string, string>) => {
+    const publishStub = vi.fn(async (topic: string, payload: unknown, _headers?: Record<string, string>) => {
       if (topic === Topics.broker.deadLetter) {
         dlqMessages.push({ topic, payload });
         return;

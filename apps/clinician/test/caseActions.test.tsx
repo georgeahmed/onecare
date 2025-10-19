@@ -8,6 +8,7 @@ import type { QueueGateway, QueueFilters } from '../src/adapters/queue.types';
 import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
 import type { ClinicianTaskSummary } from '@onecare/events/src/contracts/clinician-task-summary';
 import { setQueueGateway } from '../src/adapters/gateway';
+import { AuthProvider, createDevSession } from '../src/lib/auth';
 
 const detail: ClinicianTaskDetail = {
   id: 'test-1', clinicId: 'demo', priority: 'URGENT', status: 'NEW', shortReason: 'Test', patientId: 'p', waitMs: 1000,
@@ -30,11 +31,13 @@ describe('Case actions basic render', () => {
     const html = renderToStaticMarkup(
       <ThemeProvider>
         <I18nProvider>
-          <MemoryRouter initialEntries={["/case/test-1"]}>
-            <Routes>
-              <Route path="/case/:id" element={<CasePage />} />
-            </Routes>
-          </MemoryRouter>
+          <AuthProvider initialSession={createDevSession()}>
+            <MemoryRouter initialEntries={["/case/test-1"]}>
+              <Routes>
+                <Route path="/case/:id" element={<CasePage />} />
+              </Routes>
+            </MemoryRouter>
+          </AuthProvider>
         </I18nProvider>
       </ThemeProvider>
     );

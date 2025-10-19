@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, createVerify, type KeyObject } from 'node:crypto';
+import { createHmac, createPublicKey, createVerify, type KeyObject } from 'node:crypto';
 
 export interface AuthContext {
   actor: { type: 'patient' | 'practitioner' | 'system'; id: string };
@@ -357,6 +357,70 @@ export class OidcClient {
   }
 }
 
+const HASH_SECRET_ENV = 'IDENTIFIER_HASH_SECRET';
+const LEGACY_HASH_SECRET_ENV = 'ONECARE_HASH_SECRET';
+const DEFAULT_DEV_SECRET = 'onecare-dev-default-secret';
+const DEFAULT_DEV_MARKER = '__onecare_dev_hash_secret__';
+
+let cachedHashKey: Buffer | null = null;
+let cachedHashMarker: string | null = null;
+let hashSecretOverride: Buffer | null = null;
+
+function decodeSecretSource(raw: string): Buffer {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('base64:')) {
+    const decoded = trimmed.slice('base64:'.length);
+    return Buffer.from(decoded, 'base64');
+  }
+  if (trimmed.startsWith('hex:')) {
+    const decoded = trimmed.slice('hex:'.length);
+    return Buffer.from(decoded, 'hex');
+  }
+  return Buffer.from(trimmed, 'utf8');
+}
+
+function resolveSecretFromEnv(): { marker: string; value: Buffer } {
+  const raw =
+    typeof process.env[HASH_SECRET_ENV] === 'string' && process.env[HASH_SECRET_ENV]?.trim()
+      ? (process.env[HASH_SECRET_ENV] as string).trim()
+      : typeof process.env[LEGACY_HASH_SECRET_ENV] === 'string' && process.env[LEGACY_HASH_SECRET_ENV]?.trim()
+        ? (process.env[LEGACY_HASH_SECRET_ENV] as string).trim()
+        : '';
+
+  if (raw) {
+    return { marker: raw, value: decodeSecretSource(raw) };
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(`${HASH_SECRET_ENV} must be configured in production environments`);
+  }
+
+  return { marker: DEFAULT_DEV_MARKER, value: Buffer.from(DEFAULT_DEV_SECRET, 'utf8') };
+}
+
+function resolveHashSecret(): Buffer {
+  if (hashSecretOverride) {
+    return hashSecretOverride;
+  }
+  const { marker, value } = resolveSecretFromEnv();
+  if (!cachedHashKey || cachedHashMarker !== marker) {
+    cachedHashKey = value;
+    cachedHashMarker = marker;
+  }
+  return cachedHashKey;
+}
+
+export function setHashIdentifierSecretForTest(secret: string | null): void {
+  if (secret === null) {
+    hashSecretOverride = null;
+    cachedHashKey = null;
+    cachedHashMarker = null;
+    return;
+  }
+  hashSecretOverride = decodeSecretSource(secret);
+}
+
 export function hashIdentifier(value: string): string {
-  return createHash('sha256').update(value).digest('base64url');
+  const secret = resolveHashSecret();
+  return createHmac('sha256', secret).update(value).digest('base64url');
 }

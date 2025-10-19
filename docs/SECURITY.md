@@ -114,7 +114,7 @@ Access to the above paths is gated by Vault policies and audited. Request access
 ### Log & Trace Retention
 
 - Retain application logs, request traces, and OTEL export buffers for **14 days** per environment. This window covers incident forensics while capping PHI/PII exposure.
-- Store logs in append-only buckets or volumes (`/var/log/onecare/*`, S3 `onecare-logs-<env>`). Redact PHI in the producer; hash identifiers using SHA-256 with environment-specific salts.
+- Store logs in append-only buckets or volumes (`/var/log/onecare/*`, S3 `onecare-logs-<env>`). Redact PHI in the producer; hash identifiers using the shared keyed HMAC secret (set `IDENTIFIER_HASH_SECRET`, legacy `ONECARE_HASH_SECRET`). Production deployments must provide a non-default secret; local dev/test fall back to the deterministic dev salt only.
 - Nightly housekeeping should gzip daily log partitions (e.g., `YYYY/MM/DD/service.log`) so that archives remain immutable.
 - The scheduled GitHub workflow `.github/workflows/backup-nightly.yml` backs up JetStream/config snapshots every six hours and appends JSONL audit records for continuity.
 - Purging:

@@ -15,7 +15,8 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "test": "node scripts/run-vitest.js",
-    "test:e2e": "vitest run qa/e2e",
+    "test:contracts": "node scripts/run-vitest.js qa/contracts",
+    "test:e2e": "node scripts/run-vitest.js qa/e2e",
     "test:stress": "node qa/tools/stress-test.mjs",
     "analytics:backfill": "node scripts/analytics_backfill.js",
     "analytics:retention": "node scripts/analytics_retention.js",
@@ -37,8 +38,8 @@
     "smoke:nats": "node scripts/smoke/nats-guard-smoke.js",
     "dev:all": "bash scripts/dev/dev-all.sh",
     "dev:all:stop": "bash scripts/dev/dev-all-stop.sh",
-    "test:fuzz": "vitest run qa/security/fuzz_http.spec.ts",
-    "test:security": "vitest run qa/security"
+    "test:fuzz": "node scripts/run-vitest.js qa/security/fuzz_http.spec.ts",
+    "test:security": "node scripts/run-vitest.js qa/security"
   },
   "devDependencies": {
     "@faker-js/faker": "^10.1.0",

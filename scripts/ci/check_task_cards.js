@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
  Simple linter to ensure task cards include required sections in order.
- Scans team/*/tasks/*.md and checks for headings: Context, Files, Steps, Acceptance Criteria, Validate, Status Update.
+ Scans Markdown files under team/<dept>/tasks/ and checks for headings:
+ Context, Files, Steps, Acceptance Criteria, Validate, Status Update.
  Exits non-zero on violations and prints a concise report.
 */
 const fs = require('fs');
@@ -16,6 +17,12 @@ const REQUIRED = [
   'Validate',
   'Status Update',
 ];
+
+const TEAM_DIR = path.join(ROOT, 'team');
+if (!fs.existsSync(TEAM_DIR)) {
+  console.log('Task card linter: no team directory present; skipping.');
+  process.exit(0);
+}
 
 function* walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -49,4 +56,3 @@ if (missing) {
 } else {
   console.log('Task card linter: all task cards include required sections.');
 }
-

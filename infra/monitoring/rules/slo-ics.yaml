@@ -1,0 +1,35 @@
+groups:
+  - name: ics-hub-slo
+    rules:
+      - alert: IcshubLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(ics_hub_outbound_duration_ms_bucket[15m])) by (partner, le)
+          ) > 2000
+        for: 15m
+        labels:
+          severity: warning
+          slo: ics-latency
+          team: devops-sre
+          service: ics-hub
+        annotations:
+          summary: "ICS Hub outbound latency >2s p95"
+          description: "ICS Hub outbound latency exceeded 2s for 15 minutes."
+          runbook: https://onecare/runbooks/ics-hub
+      - alert: IcshubErrorRate
+        expr: |
+          (
+            sum(rate(ics_hub_outbound_requests_total{status=~"5.."}[5m])) /
+            clamp_min(sum(rate(ics_hub_outbound_requests_total[5m])), 1)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          slo: ics-error
+          team: devops-sre
+          service: ics-hub
+        annotations:
+          summary: "ICS Hub error rate >5%"
+          description: "ICS Hub outbound error rate exceeded 5% over the last 10 minutes."
+          runbook: https://onecare/runbooks/ics-hub

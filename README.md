@@ -52,7 +52,7 @@ Quick Demo
 - Justfile: just demo-docker or just demo-local
 
 Full usage documentation: docs/USAGE.md
-Task index: docs/TASK_INDEX.md
+Task index: docs/TASK_INDEX.md (generated; explains status if team backlog is absent)
 
 Operator Runbooks
 - Runbooks index: docs/RUNBOOKS.md

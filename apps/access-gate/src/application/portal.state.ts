@@ -1,4 +1,4 @@
-import { createCounter, createHistogram, logger, setCorrelationId, startSpan } from '@onecare/observability';
+import { createCounter, createHistogram, logger, startSpan } from '@onecare/observability';
 import type { DeferralRecord, DeferralStore } from '@onecare/ports';
 import type { ResolvedConfig } from '@onecare/config';
 

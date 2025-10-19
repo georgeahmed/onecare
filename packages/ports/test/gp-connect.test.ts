@@ -115,7 +115,7 @@ describe('GpConnectHttpClient', () => {
   });
 
   it('merges default headers and serialises JSON bodies', async () => {
-    const transport = vi.fn(async (req) => ({
+    const transport = vi.fn(async () => ({
       statusCode: 201,
       headers: { location: '/resource/1' },
       body: Buffer.from(''),
@@ -149,7 +149,7 @@ describe('GpConnectHttpClient', () => {
   });
 
   it('passes timeout overrides to the transport layer', async () => {
-    const transport = vi.fn(async (req) => ({
+    const transport = vi.fn(async () => ({
       statusCode: 200,
       headers: {},
       body: Buffer.from(''),

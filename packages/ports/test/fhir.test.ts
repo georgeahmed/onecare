@@ -144,6 +144,37 @@ describe('resource helpers', () => {
     expect(created.content[0]?.attachment?.contentType).toBe('image/png');
     expect(created.contained).toBeUndefined();
   });
+
+  it('sanitises custom object store keys to avoid traversal', async () => {
+    const repo = buildRepository();
+    const put = vi.fn<Required<ObjectStore>['put']>().mockResolvedValue({
+      url: 'https://object.example/docs/safe/0',
+    });
+    const store: ObjectStore = {
+      put,
+      get: vi.fn<Required<ObjectStore>['get']>().mockResolvedValue(new Uint8Array()),
+    };
+    const payload = Buffer.from('safe', 'utf8').toString('base64');
+    const resource = {
+      resourceType: 'DocumentReference',
+      content: [
+        {
+          attachment: {
+            data: payload,
+          },
+        },
+      ],
+    };
+
+    await createDocumentReferenceResource(repo, resource, {
+      objectStore: store,
+      objectKeyFactory: () => '../../../../../secret\\path ',
+    });
+
+    expect(put).toHaveBeenCalledTimes(1);
+    const [key] = put.mock.calls[0]!;
+    expect(key).toBe('secret-path');
+  });
 });
 
 describe('withFhirValidation', () => {

@@ -339,7 +339,6 @@ export class IvrIngestAdapter implements IvrAdapter {
     }
 
     const practiceId = call.metadata.practiceId ?? 'unknown';
-    const chunkCount = call.chunks.length;
     const totalBytes = call.chunks.reduce((acc, chunk) => acc + chunk.data.byteLength, 0);
     const sortedChunks = [...call.chunks].sort((a, b) => a.sequence - b.sequence);
     const combined = Buffer.concat(sortedChunks.map((chunk) => chunk.data));

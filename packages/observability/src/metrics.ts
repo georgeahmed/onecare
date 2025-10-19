@@ -1,6 +1,50 @@
+export type MetricAttributeValue = string | number | boolean;
+
 export interface MetricRecord {
-  value: number;
-  attributes?: Record<string, unknown>;
+  readonly value: number;
+  readonly attributes?: Readonly<Record<string, MetricAttributeValue>>;
+}
+
+function ensureFinite(value: number, metricName: string, operation: string): void {
+  if (!Number.isFinite(value)) {
+    throw new TypeError(`${operation}(${metricName}) requires a finite number`);
+  }
+}
+
+function sanitizeAttributes(
+  metricName: string,
+  attributes?: Record<string, unknown>,
+): Readonly<Record<string, MetricAttributeValue>> | undefined {
+  if (!attributes) return undefined;
+  const result: Record<string, MetricAttributeValue> = {};
+  for (const [key, raw] of Object.entries(attributes)) {
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw === 'string' || typeof raw === 'boolean') {
+      result[key] = raw;
+      continue;
+    }
+    if (typeof raw === 'number') {
+      if (!Number.isFinite(raw)) {
+        throw new TypeError(`Attribute "${key}" on metric "${metricName}" must be finite`);
+      }
+      result[key] = raw;
+      continue;
+    }
+    if (raw instanceof Date) {
+      result[key] = raw.toISOString();
+      continue;
+    }
+    result[key] = String(raw);
+  }
+  if (Object.keys(result).length === 0) return undefined;
+  return Object.freeze({ ...result });
+}
+
+function storeRecord(records: MetricRecord[], record: MetricRecord): void {
+  records.push({
+    value: record.value,
+    attributes: record.attributes ? Object.freeze({ ...record.attributes }) : undefined,
+  });
 }
 
 class Histogram {
@@ -9,7 +53,9 @@ class Histogram {
   constructor(public readonly name: string) {}
 
   record(value: number, attributes?: Record<string, unknown>): void {
-    this.records.push({ value, attributes });
+    ensureFinite(value, this.name, 'record');
+    const attrs = sanitizeAttributes(this.name, attributes);
+    storeRecord(this.records, { value, attributes: attrs });
   }
 
   reset(): void {
@@ -24,8 +70,10 @@ class Counter {
   constructor(public readonly name: string) {}
 
   add(value: number, attributes?: Record<string, unknown>): void {
+    ensureFinite(value, this.name, 'add');
     this.total += value;
-    this.records.push({ value, attributes });
+    const attrs = sanitizeAttributes(this.name, attributes);
+    storeRecord(this.records, { value, attributes: attrs });
   }
 
   reset(): void {
@@ -41,8 +89,10 @@ class Gauge {
   constructor(public readonly name: string) {}
 
   set(value: number, attributes?: Record<string, unknown>): void {
+    ensureFinite(value, this.name, 'set');
     this.value = value;
-    this.records.push({ value, attributes });
+    const attrs = sanitizeAttributes(this.name, attributes);
+    storeRecord(this.records, { value, attributes: attrs });
   }
 
   reset(): void {
@@ -77,11 +127,19 @@ export function createGauge(name: string): Gauge {
 }
 
 export function getHistogramRecords(name: string): MetricRecord[] {
-  return histograms.get(name)?.records ?? [];
+  const records = histograms.get(name)?.records ?? [];
+  return records.map((record) => ({
+    value: record.value,
+    attributes: record.attributes ? { ...record.attributes } : undefined,
+  }));
 }
 
 export function getCounterRecords(name: string): MetricRecord[] {
-  return counters.get(name)?.records ?? [];
+  const records = counters.get(name)?.records ?? [];
+  return records.map((record) => ({
+    value: record.value,
+    attributes: record.attributes ? { ...record.attributes } : undefined,
+  }));
 }
 
 export function getCounterTotal(name: string): number {
@@ -89,7 +147,11 @@ export function getCounterTotal(name: string): number {
 }
 
 export function getGaugeRecords(name: string): MetricRecord[] {
-  return gauges.get(name)?.records ?? [];
+  const records = gauges.get(name)?.records ?? [];
+  return records.map((record) => ({
+    value: record.value,
+    attributes: record.attributes ? { ...record.attributes } : undefined,
+  }));
 }
 
 export function getGaugeValue(name: string): number {
@@ -102,6 +164,7 @@ export function resetMetrics(): void {
   gauges.forEach((gauge) => gauge.reset());
 }
 
+export type MetricAttributes = Readonly<Record<string, MetricAttributeValue>>;
 export type HistogramMetric = Histogram;
 export type CounterMetric = Counter;
 export type GaugeMetric = Gauge;

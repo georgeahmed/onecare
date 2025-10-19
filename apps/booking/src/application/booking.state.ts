@@ -21,7 +21,7 @@ import {
   type RejectedSlot as BookingRejectedSlot,
   type DlqEvent,
 } from '@onecare/events';
-import { createHash } from 'node:crypto';
+import { hashIdentifier } from '@onecare/security';
 import {
   validateAppointmentCreatedEvent,
   validateBookingSearchRequest,
@@ -579,10 +579,6 @@ function ensureCorrelationId(ctx: BookingContext): string | undefined {
   const normalized = normalizeCorrelationId(ctx.correlationId);
   ctx.correlationId = normalized;
   return normalized;
-}
-
-function hashIdentifier(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
 }
 
 function fingerprintIdempotencyKey(key: string): string {

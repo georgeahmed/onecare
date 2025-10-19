@@ -68,6 +68,31 @@ describe('HttpFhirRepository', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('forwards task create options into headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'Task/77', resourceType: 'Task' }, { status: 201 }));
+    const repo = new HttpFhirRepository({
+      baseUrl: BASE_URL,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const abortController = new AbortController();
+
+    await repo.createTask(
+      { resourceType: 'Task', status: 'requested' },
+      {
+        idempotencyKey: 'idem-123',
+        headers: { 'if-none-exist': 'identifier=123' },
+        signal: abortController.signal,
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.headers).toMatchObject({
+      'idempotency-key': 'idem-123',
+      'if-none-exist': 'identifier=123',
+    });
+  });
+
   it('throws FhirRequestError on non-retryable status', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ issue: [{ details: { text: 'bad payload' } }] }), { status: 400 }),
@@ -87,6 +112,24 @@ describe('HttpFhirRepository', () => {
       return true;
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('redacts identifiers from telemetry path attributes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ resourceType: 'Task', id: 'Task/123' }));
+    const repo = new HttpFhirRepository({
+      baseUrl: BASE_URL,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await repo.readResource('Task/Patient-999', {
+      searchParams: { _format: 'json', summary: true },
+    });
+
+    const latencyRecords = getHistogramRecords('fhir_request_latency_ms');
+    expect(latencyRecords[0]?.attributes?.path).toBe('Task/:id');
+
+    const counters = getCounterRecords('fhir_requests_total');
+    expect(counters[0]?.attributes?.path).toBe('Task/:id');
   });
 
   it('records metrics for requests', async () => {

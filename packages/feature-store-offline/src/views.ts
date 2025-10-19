@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import type { FeatureSnapshot } from './types';
 
 const TRIAGE_NUMERIC_FIELDS = ['acuity', 'risk', 'complexity', 'time', 'capacity', 'compositeScore'] as const;
-type TriageNumericField = (typeof TRIAGE_NUMERIC_FIELDS)[number];
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -68,6 +67,22 @@ function hashViewKey(featureSet: string, entityId: string, version: string): str
   return createHash('sha1').update(`${featureSet}::${entityId}::${version}`).digest('hex');
 }
 
+function findLatestSnapshot(snapshots: FeatureSnapshot[], asOfMs: number): FeatureSnapshot | null {
+  let latest: FeatureSnapshot | null = null;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  for (const snapshot of snapshots) {
+    const timestamp = toTimestamp(snapshot.generatedAt);
+    if (timestamp === null || timestamp > asOfMs) {
+      continue;
+    }
+    if (timestamp >= latestTs) {
+      latest = snapshot;
+      latestTs = timestamp;
+    }
+  }
+  return latest;
+}
+
 interface SlidingWindowAggregates {
   counts: Record<string, number>;
   averages: Record<string, Record<string, number | null>>;
@@ -88,8 +103,6 @@ function computeSlidingAggregates(
     averages[field] = {};
   }
 
-  const byWindow = new Map<string, FeatureSnapshot[]>();
-
   for (const spec of windows) {
     const cutoff = asOfMs - spec.durationMs;
     const inWindow = snapshots.filter((snapshot) => {
@@ -98,27 +111,25 @@ function computeSlidingAggregates(
       return generatedAt >= cutoff && generatedAt <= asOfMs;
     });
     counts[spec.name] = inWindow.length;
-    byWindow.set(spec.name, inWindow);
     for (const field of fields) {
       const numericValues = inWindow
         .map((snapshot) => snapshot.payload[field])
         .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
       const key = normaliseFieldKey(field);
       averages[field][spec.name] = computeMean(numericValues);
-      if (spec.name === windows[0]?.name) {
-        // Track the latest field value for reporting (across entire series).
-        const latestSnapshot = inWindow[inWindow.length - 1];
-        if (latestSnapshot && field in latestSnapshot.payload) {
-          latest[key] = latestSnapshot.payload[field];
-        }
-      }
     }
   }
 
-  const mostRecent = snapshots[snapshots.length - 1];
+  const mostRecent = findLatestSnapshot(snapshots, asOfMs);
   if (mostRecent) {
     latest.generatedAt = mostRecent.generatedAt;
     latest.featureSet = mostRecent.featureSet;
+    for (const field of fields) {
+      if (field in mostRecent.payload) {
+        const key = normaliseFieldKey(field);
+        latest[key] = mostRecent.payload[field];
+      }
+    }
   }
 
   return {

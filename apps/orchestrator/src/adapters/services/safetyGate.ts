@@ -63,13 +63,28 @@ function isIpV6LoopbackOrPrivate(host: string): boolean {
 async function enforceAllowlist(url: URL): Promise<void> {
   const hostname = url.hostname;
   if (!/^https?:$/.test(url.protocol)) throw new Error('blocked_protocol');
-  if (hostname === 'localhost' || hostname.endsWith('.local')) throw new Error('blocked_host');
+  const allowEntries = (process.env.PY_SAFETY_GATE_HOST_ALLOWLIST || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+  const allowlist = new Set(allowEntries);
+  const hostKey = hostname.toLowerCase();
+  const allowlisted = allowlist.has(hostKey);
+
+  if (allowlist.size > 0 && !allowlisted) {
+    throw new Error('blocked_not_allowlisted');
+  }
+
+  if (allowlisted) {
+    return;
+  }
+
+  if (hostKey === 'localhost' || hostKey.endsWith('.local')) throw new Error('blocked_host');
   const isV4 = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
   const isV6 = /^[0-9a-fA-F:]+$/.test(hostname);
   if (isV4 && isIpV4Private(hostname)) throw new Error('blocked_private_ip');
   if (isV6 && isIpV6LoopbackOrPrivate(hostname)) throw new Error('blocked_private_ip');
-  const allow = (process.env.PY_SAFETY_GATE_HOST_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (allow.length > 0 && !allow.includes(hostname)) throw new Error('blocked_not_allowlisted');
+
   if (!isV4 && !isV6) {
     let records;
     try {

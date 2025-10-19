@@ -311,14 +311,36 @@ class ConcurrencyLimiter:
         max_queue: int,
         wait_timeout_ms: int,
     ) -> None:
-        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        self._max_concurrency = max(1, max_concurrency)
         self._max_queue = max_queue
         self._wait_timeout = max(0, wait_timeout_ms) / 1000.0
         self._waiting = 0
-        self._lock = asyncio.Lock()
+        self._active = 0
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         update_queue_depth(0)
 
+    def _ensure_primitives(self) -> None:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._loop = loop
+            available = max(0, self._max_concurrency - self._active)
+            self._semaphore = asyncio.Semaphore(available)
+            self._lock = asyncio.Lock()
+            if self._waiting != 0:
+                self._waiting = 0
+                update_queue_depth(0)
+        elif self._semaphore is None:
+            available = max(0, self._max_concurrency - self._active)
+            self._semaphore = asyncio.Semaphore(available)
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
     async def acquire(self) -> Optional[str]:
+        self._ensure_primitives()
+        assert self._semaphore is not None
+        assert self._lock is not None
         acquired = False
         queued = False
         if self._semaphore.locked() and self._max_queue >= 0:
@@ -351,9 +373,16 @@ class ConcurrencyLimiter:
             async with self._lock:
                 self._waiting = max(0, self._waiting - 1)
                 update_queue_depth(self._waiting)
+        if acquired:
+            self._active = min(self._max_concurrency, self._active + 1)
         return None
 
     def release(self) -> None:
+        if self._semaphore is None:
+            raise RuntimeError('Limiter release called before acquire')
+        if self._active <= 0:
+            raise RuntimeError('Limiter release called with no active work')
+        self._active -= 1
         self._semaphore.release()
         update_queue_depth(self._waiting)
 
@@ -579,7 +608,16 @@ def _feature_log_sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _log_safety_features(
+async def _emit_feature_log_async(
+    payload: dict[str, Any],
+    consent_reference: Optional[str],
+) -> None:
+    """Dispatch feature logging without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    await asyncio.to_thread(_emit_feature_log, payload, consent_reference)
+
+
+async def _log_safety_features(
     *,
     submission: PortalSubmission,
     correlation_id: Optional[str],
@@ -637,7 +675,7 @@ def _log_safety_features(
         "metadata": sanitized_metadata,
     }
 
-    _emit_feature_log(payload, consent_reference)
+    await _emit_feature_log_async(payload, consent_reference)
 
 
 def _log_request_summary(
@@ -1205,7 +1243,7 @@ async def analyze(
             if _feature_logging_enabled() and sample_rate > 0:
                 feature_draw = sample_draw if sample_draw is not None else random.random()
                 if feature_draw <= sample_rate:
-                    _log_safety_features(
+                    await _log_safety_features(
                         submission=submission,
                         correlation_id=correlation_id,
                         classification=_sanitize_payload(classification),

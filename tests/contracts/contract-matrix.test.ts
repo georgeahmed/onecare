@@ -101,6 +101,7 @@ describe('Contract Matrix', () => {
       { error: { code: 'invalid_input', message: 'schema validation failed', correlationId: 'corr-1' } },
       { error: { code: 'forbidden', message: 'missing consent', correlationId: 'corr-2' } },
       { error: { code: 'upstream_timeout', message: 'safety gate timed out', correlationId: 'corr-3' } },
+      { error: { code: 'rate_limited', message: 'retry after backoff', correlationId: 'corr-4' } },
     ];
     for (const s of samples) {
       expect(validateErr(s)).toBe(true);

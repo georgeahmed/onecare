@@ -207,4 +207,71 @@ describe('FeatureIngestionWorker', () => {
     expect(getCounterTotal('features.ingest.error')).toBeGreaterThan(0);
     await worker.stop();
   });
+
+  it('releases idempotency keys when stores lack native delete support', async () => {
+    class MinimalIdempotency implements IdempotencyStore {
+      private readonly store = new Map<string, number | null>();
+
+      private prune(): void {
+        const now = Date.now();
+        for (const [key, expiresAt] of this.store.entries()) {
+          if (expiresAt !== null && expiresAt <= now) {
+            this.store.delete(key);
+          }
+        }
+      }
+
+      async exists(key: string): Promise<boolean> {
+        this.prune();
+        return this.store.has(key);
+      }
+
+      async put(key: string, ttlSeconds: number): Promise<void> {
+        this.prune();
+        const expiresAt = Number.isFinite(ttlSeconds) ? Date.now() + ttlSeconds * 1000 : null;
+        this.store.set(key, expiresAt);
+      }
+    }
+
+    const minimalIdempotency = new MinimalIdempotency();
+    const dlqMessages: unknown[] = [];
+    await bus.subscribe('features.ingest.dlq', (message) => {
+      dlqMessages.push(message.payload);
+    });
+
+    let shouldFail = true;
+    const worker = new FeatureIngestionWorker({
+      bus,
+      featureStore,
+      idempotency: minimalIdempotency,
+      mappings: [
+        {
+          topic: 'features.triage-core',
+          featureSet: 'triage-core',
+          deriveEntityId: (payload: typeof basePayload) => payload.patientId,
+          deriveAsOf: (payload: typeof basePayload) => payload.generatedAt,
+          mapPayload: (payload: typeof basePayload) => {
+            if (shouldFail) {
+              shouldFail = false;
+              throw new Error('transient failure');
+            }
+            return payload.features;
+          },
+        },
+      ],
+    }, { retries: 0, backoffMs: 1, jitterMs: 1 });
+
+    await worker.start();
+    await bus.publish('features.triage-core', basePayload, { 'x-correlation-id': 'corr-minimal' });
+
+    expect(dlqMessages).toHaveLength(1);
+    expect(worker.getMetrics().failed).toBe(1);
+
+    await bus.publish('features.triage-core', basePayload, { 'x-correlation-id': 'corr-minimal' });
+
+    const stored = await featureStore.get({ featureSet: 'triage-core', entityId: 'patient-123' });
+    expect(stored).not.toBeNull();
+
+    await worker.stop();
+  });
 });

@@ -157,7 +157,7 @@ export function assignProvider(
       return tieBreakers(a.provider, b.provider);
     });
 
-    const ranking = scored.map((item, index) => ({ id: item.provider.id, score: item.score, reasons: item.reasons }));
+    const ranking = scored.map((item) => ({ id: item.provider.id, score: item.score, reasons: item.reasons }));
     const selected = scored[0]?.provider;
 
     recordAssignmentMetrics(task, selected, ranking, rejected);

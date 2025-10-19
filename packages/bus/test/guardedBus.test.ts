@@ -13,6 +13,34 @@ function buildEnvelope<T>(topic: string, payload: T, correlationId?: string, id?
   };
 }
 
+class SimpleIdempotencyStore implements IdempotencyStore {
+  private readonly keys = new Set<string>();
+
+  async reserve(key: string, _ttlSeconds: number): Promise<'reserved' | 'exists'> {
+    if (this.keys.has(key)) {
+      return 'exists';
+    }
+    this.keys.add(key);
+    return 'reserved';
+  }
+
+  async exists(key: string): Promise<boolean> {
+    return this.keys.has(key);
+  }
+
+  async put(key: string, _ttlSeconds: number): Promise<void> {
+    this.keys.add(key);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.keys.delete(key);
+  }
+
+  readKeys(): string[] {
+    return Array.from(this.keys);
+  }
+}
+
 describe('withMessageGuards', () => {
   it('rejects publishes to disallowed topics', async () => {
     const bus = withMessageGuards(new MemoryBus(), { allowedTopics: ['allowed.topic'] });
@@ -63,26 +91,6 @@ describe('withMessageGuards', () => {
   });
 
   it('skips duplicate deliveries when idempotency store present', async () => {
-    class SimpleIdempotencyStore implements IdempotencyStore {
-      private readonly keys = new Set<string>();
-      async reserve(key: string, _ttlSeconds: number): Promise<'reserved' | 'exists'> {
-        if (this.keys.has(key)) {
-          return 'exists';
-        }
-        this.keys.add(key);
-        return 'reserved';
-      }
-      async exists(key: string): Promise<boolean> {
-        return this.keys.has(key);
-      }
-      async put(key: string, _ttlSeconds: number): Promise<void> {
-        this.keys.add(key);
-      }
-      async delete(key: string): Promise<void> {
-        this.keys.delete(key);
-      }
-    }
-
     const store = new SimpleIdempotencyStore();
     const bus = withMessageGuards(new MemoryBus(), { allowedTopics: ['demo.topic'], idempotencyStore: store });
     const handler = vi.fn();
@@ -96,5 +104,27 @@ describe('withMessageGuards', () => {
     await bus.publish('demo.topic', envelope);
 
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('processes all deliveries when no idempotency key can be derived', async () => {
+    const store = new SimpleIdempotencyStore();
+    const bus = withMessageGuards(new MemoryBus(), {
+      allowedTopics: ['demo.topic'],
+      enforceEnvelope: false,
+      requireCorrelationHeader: false,
+      idempotencyStore: store,
+    });
+    const handler = vi.fn();
+
+    await bus.subscribe('demo.topic', async (message) => {
+      handler(message);
+    });
+
+    const payload = { ok: true };
+    await bus.publish('demo.topic', payload);
+    await bus.publish('demo.topic', payload);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(store.readKeys().length).toBe(0);
   });
 });

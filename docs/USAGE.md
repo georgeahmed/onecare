@@ -96,7 +96,7 @@ QA Matrix (Accessibility + i18n)
 Runbook
 - Before releasing new strings: run extraction, regenerate locales, and request translation review via shared glossary.
 - Route new copy through the Content Reviewer lane (see docs/CONVENTIONS.md) and document sign-off in the PR checklist.
-- Record QA runs (matrix above) in the PR checklist; capture defects in `team/frontend/tasks/*`.
+- Record QA runs (matrix above) in the PR checklist; when the optional `team/` backlog is mounted, log defects under `team/frontend/tasks/*` (see `docs/TASK_INDEX.md` for context). Otherwise file issues directly in the tracker.
 - For zoom fallbacks verify `<html data-zoom="high">` is applied at ≥200 % and that header/nav stack vertically (see CSS in `apps/portal/src/styles/global.css`).
 
 Codegen (Contracts)
@@ -114,7 +114,7 @@ Makefile Shortcuts
 - make typecheck — TS project references typecheck
 - make lint / make format / make test
 - make codegen / make codegen-check
-- make check-task-cards — verify required sections in team/*/tasks/*.md
+- make check-task-cards — verify required sections in `team/*/tasks/*.md` (command is a no-op if the optional `team/` backlog is absent; see `docs/TASK_INDEX.md`)
 - make py-test — run Python tests via ./services-py/run-tests.sh (manages venv + PYTHONPATH)
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082
@@ -162,7 +162,7 @@ Ensure booking proxy vars are configured before running the portal:
 2) Build Orchestrator (TS)
    - npm -w @onecare/app-orchestrator run build
 3) Start Orchestrator
-   - PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 BUS_IMPL=memory node apps/orchestrator/dist/index.js
+   - PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js
 4) Optional: quick perf
    - make perf-orchestrator
 
@@ -194,7 +194,7 @@ Analytics Consumer
 - Docker: `docker compose up analytics` starts the worker alongside NATS and writes metrics under the `analytics-metrics` volume.
 - Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
 - Backfill & reprocessing: `npm run analytics:backfill -- --start <YYYY-MM-DD> --end <YYYY-MM-DD>` replays historical metric partitions, appends rollups idempotently, and records job metadata in `var/analytics/backfill-ledger.jsonl` (see `docs/ANALYTICS_BACKFILL.md`).
-- Retention sweep: `npm run analytics:retention -- --vacuum` enforces dataset TTLs (raw, rollup, lineage, ledger), tiers old partitions to cold storage, and vacuums empty directories (see `docs/adr/2025-10-xx-analytics-retention.md`).
+- Retention sweep: `npm run analytics:retention -- --vacuum` enforces dataset TTLs (raw, rollup, lineage, ledger), tiers old partitions to cold storage, and vacuums empty directories (see `docs/adr/2025-10-19-analytics-retention.md`).
 - Nightly automation: install the cron entries from `infra/automation/analytics-retention.cron` (dev/staging/prod variants) so retention runs at 03:00 UTC with `ANALYTICS_TIER_ROOT` pointing at the `s3://onecare-analytics-cold-<env>` buckets.
 - Playback harness: `node scripts/bench/analytics_playback.js --fixtures fixtures/analytics/metrics-happy.json,fixtures/analytics/metrics-edge.json` replays deterministic fixtures through the consumer (see `.github/workflows/analytics-playback.yml` for CI wiring).
 - Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
@@ -222,7 +222,7 @@ Operational Automation
 - Manual backup: `bash scripts/ops/backup.sh --output /secure/backups --tag manual` followed by `bash scripts/ops/verify-restore.sh <backup-dir>` before uploading to cold storage.
 
 Security Testing
-- HTTP fuzzing: `npm run test:fuzz` (requires local stack). Extensible harness under `qa/security/fuzz_http.spec.ts`.
+- HTTP fuzzing: `RUN_SECURITY_TESTS=1 npm run test:fuzz` (requires local stack). Extensible harness under `qa/security/fuzz_http.spec.ts`.
 - SSRF and authz checks: `npm run test:security` (Vitest suite under `qa/security`).
 - ZAP baseline scan: enable `DAST_TARGET_URL` secret to run CI `dast` job against staging.
 
@@ -252,12 +252,13 @@ Security References
 - WAF & rate limit policy: `docs/security/WAF_POLICY.md`
 
 Team & Status
-- Team status: make team-status
-- Update progress from checkboxes: make team-status-write
-- Export status JSON: make team-status-json
-- Generate GitHub issues from engineer tasks: make team-issues
+- Team tooling is optional. If a `team/` directory is present (see `docs/TASK_INDEX.md`), the following helpers activate; otherwise they print skip notices:
+  - Team status: make team-status
+  - Update progress from checkboxes: make team-status-write
+  - Export status JSON: make team-status-json
+  - Generate GitHub issues from engineer tasks: make team-issues
 - Per‑engineer loop helper: make engineer-loop ENGINEER=<path> TASK='<substring>' SCHEMAS=1 PY=1 RUNTIME=1 SMOKE=1
- - Agent close-out: make agent-closeout (after checking tasks)
+- Agent close-out: make agent-closeout (after checking tasks)
 - Local CI: make ci-local
 - Bring up stack and smoke test: make stack-up && make stack-smoke
 

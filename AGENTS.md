@@ -46,8 +46,8 @@ Documentation Practices
 - Prefer ADRs in `docs/adr/` for decisions that affect design/API; keep them short and dated.
 - Update `docs/USAGE.md` with any new commands, scripts, or run modes. PRs that add scripts must update USAGE.
 - Use `docs/RELEASE_READINESS.md` (service-level) and `docs/SYSTEM_READINESS.md` (system-level) to track go/no-go gates.
-- Keep team status consistent: update `team/*/engineer-*.md` (Status/Progress/Tasks). Use `make team-status-write` to sync Progress.
- - After marking a task done, run `make team-status-write` — it auto-commits status changes and pushes to the `dev` branch so progress stays in sync for agents.
+- Keep team status consistent: update `team/*/engineer-*.md` (Status/Progress/Tasks). When the optional `team/` backlog is not available, document progress in the shared tracker; `make team-status-write` will simply skip.
+ - After marking a task done, run `make team-status-write` — it auto-commits status changes and pushes to the `dev` branch so progress stays in sync for agents when the backlog is present.
 
 Testing Practices
 - Unit tests first: TS (Vitest under `packages/*/test` or `apps/*/test`), Python (Pytest under `services-py/tests`).
@@ -136,6 +136,6 @@ Agent Automation Checklist
 - Edit schemas first; run `npm run codegen` (or `codegen:check`).
 - Make minimal, typed changes in correct layers (application vs adapters).
 - Run `npm run typecheck && npm run test` locally; keep tests fast/deterministic.
-- Update team status checkboxes, and run `make team-status-write` to sync.
- - `make team-status-write` will auto-commit and push to `dev`.
+- Update team status checkboxes, and run `make team-status-write` to sync (command skips gracefully when no `team/` backlog is present).
+ - `make team-status-write` will auto-commit and push to `dev` whenever the backlog exists.
 - Review `docs/RELEASE_READINESS.md` before merging; ensure cross-team gates are tracked.

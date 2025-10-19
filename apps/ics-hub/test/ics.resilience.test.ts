@@ -3,7 +3,7 @@ import { RoutedState, type IcsContext, type IcsEvent } from '../src/application/
 import type { IcsClient } from '../src/adapters/ics.client';
 import type { MessageBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
-import { Topics, createEnvelope, type TypedEnvelope, type IcsReferralRequest } from '@onecare/events';
+import { Topics, type TypedEnvelope, type IcsReferralRequest } from '@onecare/events';
 import { resetMetrics, getCounterRecords } from '@onecare/observability';
 
 const baseEvent: IcsEvent = { type: 'ics.route' };

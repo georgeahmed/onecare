@@ -46,6 +46,7 @@ export NATS_URL=tls://onecare:onecare-secret@127.0.0.1:4222
 export NATS_USER=onecare
 export NATS_PASS=onecare-secret
 export PY_SAFETY_GATE_URL=http://127.0.0.1:5011
+export PY_SAFETY_GATE_HOST_ALLOWLIST=127.0.0.1
 export PY_SCRIBE_URL=http://127.0.0.1:5012
 # Do not set FHIR_BASE_URL; orchestrator resolves http://localhost:9500/fhir in test mode.
 ```
@@ -55,13 +56,15 @@ TLS for NATS uses the developer certificates in `infra/tls/dev`. When running te
 ## Test Execution
 - Contract tests:
   ```bash
-  NODE_ENV=test npm exec vitest run qa/contracts
+  NODE_ENV=test npm run test:contracts
   ```
 - E2E & chaos suites:
   ```bash
   NODE_ENV=test npm run test:e2e
   ```
 - Accessibility scans (axe) and DLQ/chaos drills automatically save artifacts under `artifacts/qa/`.
+
+> The helper scripts set `VITEST_SCOPE` for you so that `qa/**` suites bypass the default exclude list without changing `vitest.config.ts`.
 
 In CI the `build-and-test` workflow enables this profile by setting `COMPOSE_PROFILES=test` before invoking `./qa/env/seed.sh` and Vitest suites. See `.github/workflows/ci.yml` for the orchestration steps added alongside QA-01.15.
 

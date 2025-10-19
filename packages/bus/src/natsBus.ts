@@ -1788,13 +1788,19 @@ function buildDeadLetterHeaders(
 }
 
 export function getBus(opts?: NatsBusOptions): MessageBus {
+  const options = opts ?? {};
   const impl = (process.env.BUS_IMPL ?? '').trim().toLowerCase();
-  if (impl === 'memory' && !opts?.connection) {
+  const hasConnection = Boolean(options.connection);
+  if (impl === 'memory' && !hasConnection) {
     return new MemoryBus();
   }
-  const rawUrl = opts?.url ?? process.env.NATS_URL;
-  if (rawUrl && rawUrl.trim().length > 0) {
-    return new NatsBus({ ...opts, url: rawUrl.trim() });
+  if (hasConnection) {
+    return new NatsBus(options);
+  }
+  const rawUrl = options.url ?? process.env.NATS_URL;
+  const normalizedUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (normalizedUrl.length > 0) {
+    return new NatsBus({ ...options, url: normalizedUrl });
   }
   return new MemoryBus();
 }

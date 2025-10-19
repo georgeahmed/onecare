@@ -11,7 +11,7 @@ vi.mock('ajv/dist/2020', () => ({
 vi.mock('ajv-formats', () => ({
   default: () => undefined,
 }));
-import { NatsBus } from '../src/natsBus';
+import { NatsBus, getBus } from '../src/natsBus';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,6 +46,7 @@ const SECURITY_ENV_KEYS = [
   'NATS_TLS_REJECT_UNAUTHORIZED',
   'NATS_CREDS_PATH',
   'BUS_READY_PENDING_LAG',
+  'BUS_IMPL',
 ];
 
 function resetSecurityEnv(): void {
@@ -133,6 +134,25 @@ describe('NatsBus publish dedupe', () => {
 
     await expect(bus.publish('demo.topic', envelope)).rejects.toThrow(/message_size_limit_exceeded/);
     expect(publishMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('getBus', () => {
+  afterEach(() => {
+    resetSecurityEnv();
+  });
+
+  it('returns NatsBus when connection provided without url', () => {
+    const { connection } = createConnectionStub();
+    const bus = getBus({ connection: connection as any });
+    expect(bus).toBeInstanceOf(NatsBus);
+  });
+
+  it('prefers provided connection even when BUS_IMPL forces memory', () => {
+    process.env.BUS_IMPL = 'memory';
+    const { connection } = createConnectionStub();
+    const bus = getBus({ connection: connection as any });
+    expect(bus).toBeInstanceOf(NatsBus);
   });
 });
 

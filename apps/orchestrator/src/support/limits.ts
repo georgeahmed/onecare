@@ -1,5 +1,3 @@
-import { performance } from 'node:perf_hooks';
-
 export interface ConcurrencyLimits {
   globalLimit: number;
   defaultRouteLimit: number;
@@ -81,7 +79,7 @@ export class RateLimiter {
     private readonly perRoute: Record<string, RateLimitConfig> = {},
   ) {}
 
-  check(route: string, identity: string, now = performance.now()): RateLimitCheckResult {
+  check(route: string, identity: string): RateLimitCheckResult {
     const config = this.perRoute[route] ?? this.defaultConfig;
     if (!config || config.maxRequests <= 0 || config.windowMs <= 0) {
       return { allowed: true };

@@ -4,6 +4,8 @@ import {
   ValidatedState,
   InvalidState,
   RoutedState,
+  BlockedState,
+  RateLimitedState,
   type IcsContext,
   type IcsEvent,
   type RoutingOutcome,
@@ -481,5 +483,55 @@ describe('InvalidState', () => {
     });
     const next = await state.handle(ctx, baseEvent);
     expect(next).toBe('Invalid');
+  });
+});
+
+describe('BlockedState', () => {
+  it('releases processing lock and remains terminal', async () => {
+    const release = vi.fn();
+    const state = new BlockedState();
+    const ctx = createContext({
+      blocked: true,
+      routingOutcome: {
+        status: 'forbidden',
+        httpStatus: 403,
+        error: { error: { code: 'forbidden', message: 'blocked' } },
+      },
+      processingRelease: release,
+    });
+
+    const next = await state.handle(ctx, baseEvent);
+
+    expect(next).toBe('Blocked');
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(ctx.processingRelease).toBeNull();
+  });
+});
+
+describe('RateLimitedState', () => {
+  it('ensures retry headers are set and releases processing', async () => {
+    const release = vi.fn();
+    const state = new RateLimitedState();
+    const ctx = createContext({
+      rateLimited: true,
+      retryAfterSeconds: 7,
+      routingOutcome: {
+        status: 'rate_limited',
+        httpStatus: 429,
+        policy: { endpoint: 'https://ics.example/backpressure', rateLimit: 1 },
+        routeDecision: { destinationOrgId: 'org-backpressure', policy: 'fallback', rationale: 'backpressure' },
+        error: { error: { code: 'too_many_requests', message: 'rate limit' } },
+      } as RoutingOutcome,
+      processingRelease: release,
+      responseHeaders: {},
+    });
+
+    const next = await state.handle(ctx, baseEvent);
+
+    expect(next).toBe('RateLimited');
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(ctx.processingRelease).toBeNull();
+    expect(ctx.responseHeaders).toBeDefined();
+    expect(ctx.responseHeaders?.['Retry-After']).toBe('7');
   });
 });

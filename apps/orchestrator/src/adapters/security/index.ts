@@ -1,5 +1,6 @@
-import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { logger } from '@onecare/observability';
+import { hashIdentifier } from '@onecare/security';
 import type {
   SecurityServices,
   AuthContext,
@@ -86,10 +87,6 @@ function loadConsentCache(): ConsentCache {
 
 function normaliseResource(resource: string): string {
   return resource.trim().toLowerCase();
-}
-
-function hashIdentifier(value: string): string {
-  return createHash('sha256').update(value).digest('base64url');
 }
 
 export function getConsentEvidence(patientId: string, purpose: string): ConsentEvidence | null {

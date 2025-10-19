@@ -10,9 +10,9 @@ describe('Backpressure and rate limits', () => {
     );
     const identity = 'ip:192.0.2.10';
 
-    const first = limiter.check('/safety-check', identity, 0);
+    const first = limiter.check('/safety-check', identity);
     expect(first.allowed).toBe(true);
-    const second = limiter.check('/safety-check', identity, 100);
+    const second = limiter.check('/safety-check', identity);
     expect(second.allowed).toBe(false);
     expect(second.retryAfterSeconds).toBeGreaterThanOrEqual(1);
 

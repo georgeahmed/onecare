@@ -64,7 +64,7 @@ demo-local:
 	@bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
 	@bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
 	@echo "[demo] Starting orchestrator..."
-	@bash -c 'PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 BUS_IMPL=memory node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+	@bash -c 'PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
 	@bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
 	@echo "[demo] Calling orchestrator /safety-check"
 	@curl -s -X POST http://localhost:3001/safety-check \
@@ -88,7 +88,7 @@ dev-run:
 	@bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
 	@bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
 	@echo "[dev] Starting Orchestrator..."
-	@bash -c 'PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 BUS_IMPL=memory node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+	@bash -c 'PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
 	@bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
 	@echo "[dev] Up. Try: curl -s http://localhost:3001/health && echo" 
 	@echo "[dev] Stop with: make dev-stop"

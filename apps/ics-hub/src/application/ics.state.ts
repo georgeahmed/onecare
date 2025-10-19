@@ -163,7 +163,7 @@ export interface IcsEvent extends MachineEvent {
 
 type OrgPolicyMap = Record<string, IcsOrganisationPolicy>;
 
-interface InboundStateOptions {
+export interface InboundStateOptions {
   now?: () => number;
 }
 
@@ -578,6 +578,38 @@ export class InvalidState extends BaseState<IcsContext, IcsEvent> {
   }
 }
 
+export class BlockedState extends BaseState<IcsContext, IcsEvent> {
+  constructor() {
+    super('Blocked');
+  }
+
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(ctx);
+    return 'Blocked';
+  }
+}
+
+export class RateLimitedState extends BaseState<IcsContext, IcsEvent> {
+  constructor() {
+    super('RateLimited');
+  }
+
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (
+      typeof ctx.retryAfterSeconds === 'number' &&
+      Number.isFinite(ctx.retryAfterSeconds) &&
+      ctx.retryAfterSeconds > 0
+    ) {
+      ctx.responseHeaders ??= {};
+      if (!ctx.responseHeaders['Retry-After']) {
+        ctx.responseHeaders['Retry-After'] = String(Math.ceil(ctx.retryAfterSeconds));
+      }
+    }
+    releaseProcessing(ctx);
+    return 'RateLimited';
+  }
+}
+
 function buildRouteDecisionFromContext(ctx: IcsContext): RouteDecision {
   if (ctx.routeDecision) return ctx.routeDecision;
   if (ctx.referral) {
@@ -804,9 +836,12 @@ function pushAudit(
   const stamp = new Date(timestampProvider()).toISOString();
   const event: AuditEvent = {
     type,
-    timestamp: stamp,
+    ts: stamp,
     correlationId: correlationId ?? null,
-    actor: null,
+    actorRef: null,
+    subjectRef: null,
+    outcome: null,
+    reasonCode: null,
     details,
   };
   ctx.auditIntents?.push(event);

@@ -18,8 +18,13 @@ const { buildSafetyGateHeaders, mapStatusToError, parseRetryAfter, refreshAuthHe
   __safetyGateTesting;
 
 describe('safetyGate SSRF guard', () => {
+  beforeEach(() => {
+    delete process.env.PY_SAFETY_GATE_HOST_ALLOWLIST;
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.PY_SAFETY_GATE_HOST_ALLOWLIST;
   });
 
   it('blocks localhost/loopback endpoints', async () => {
@@ -44,6 +49,21 @@ describe('safetyGate SSRF guard', () => {
     await expect(
       analyzePortalSubmission(sample, 'https://unresolvable.example', { correlationId: 'corr' })
     ).rejects.toThrow(/blocked_host_resolution/);
+  });
+
+  it('allows explicitly allowlisted private hosts', async () => {
+    process.env.PY_SAFETY_GATE_HOST_ALLOWLIST = 'localhost,127.0.0.1';
+    const client = vi.fn().mockResolvedValue({ outcome: 'SAFE_TO_CONTINUE', reason: 'ALLOWLIST_TEST' });
+    await expect(
+      analyzePortalSubmission(sample, 'http://localhost:8081', {
+        correlationId: 'corr-allow',
+        requestId: 'req-allow',
+        client,
+      })
+    ).resolves.toEqual({ outcome: 'SAFE_TO_CONTINUE', reason: 'ALLOWLIST_TEST' });
+    expect(client).toHaveBeenCalledTimes(1);
+    const [url] = client.mock.calls[0] as [string];
+    expect(url).toBe('http://localhost:8081/analyze');
   });
 });
 

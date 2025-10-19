@@ -1,0 +1,35 @@
+groups:
+  - name: booking-slo
+    rules:
+      - alert: BookingLatencySLO
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(booking_http_duration_ms_bucket[10m])) by (route, le)
+          ) > 1200
+        for: 15m
+        labels:
+          severity: warning
+          slo: booking-latency
+          team: devops-sre
+          service: booking
+        annotations:
+          summary: "Booking latency exceeds 1.2s p95"
+          description: "Booking HTTP p95 latency exceeded 1.2s for 15 minutes."
+          runbook: https://onecare/runbooks/booking-latency
+      - alert: BookingErrorRateSLO
+        expr: |
+          (
+            sum(rate(booking_http_requests_total{status=~"5.."}[5m])) /
+            clamp_min(sum(rate(booking_http_requests_total[5m])), 1)
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          slo: booking-error-rate
+          team: devops-sre
+          service: booking
+        annotations:
+          summary: "Booking error rate >2%"
+          description: "Booking HTTP error rate exceeded 2% over the last 10 minutes."
+          runbook: https://onecare/runbooks/booking-errors

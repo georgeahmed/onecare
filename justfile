@@ -57,7 +57,7 @@ demo-local:
     npm -w @onecare/app-orchestrator run build --silent
     bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
     bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
-    bash -c 'PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+    bash -c 'PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
     bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
     curl -s -X POST http://localhost:3001/safety-check \
       -H 'content-type: application/json' \

@@ -2,7 +2,7 @@ import type { BookingModality, BookingQueryFilters, BookingSlot } from './bookin
 import type { ErrorEnvelope, PortalSubmission, SafetyDecision } from './types';
 import type { ErrorObject } from '@onecare/events/src/contracts/error-envelope';
 import { getJson, postJson, HttpError } from './dataClient';
-import { createCorrelationId, getSessionCorrelationId, safeLog } from './telemetry';
+import { createCorrelationId, getSessionCorrelationId } from './telemetry';
 
 export interface SubmitIntakeOptions {
   signal?: AbortSignal;

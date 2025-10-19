@@ -1,0 +1,30 @@
+groups:
+  - name: analytics-materialiser
+    rules:
+      - alert: AnalyticsMaterialiserLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(feature_views_duration_ms_bucket[15m])) by (view, le)
+          ) > 120000
+        for: 15m
+        labels:
+          severity: critical
+          slo: analytics-materialiser
+          team: analytics
+        annotations:
+          summary: "Feature materialiser latency above target"
+          description: "Materialiser p95 latency exceeded 120s for at least 15 minutes."
+          runbook: https://onecare/runbooks/oncall#analytics-materialiser
+      - alert: AnalyticsFreshnessLag
+        expr: |
+          max(time() - feature_views_last_success_timestamp_seconds{view!=""}) > 1800
+        for: 10m
+        labels:
+          severity: warning
+          slo: analytics-freshness
+          team: analytics
+        annotations:
+          summary: "Feature materialiser freshness lagging"
+          description: "No successful materialiser run recorded in the past 30 minutes."
+          runbook: https://onecare/runbooks/oncall#analytics-materialiser

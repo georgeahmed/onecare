@@ -20,6 +20,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
     titleId: 'error.title.invalid_input',
     descriptionId: 'error.description.invalid_input'
   },
+  not_found: {
+    titleId: 'error.title.not_found',
+    descriptionId: 'error.description.not_found'
+  },
   unsupported_media_type: {
     titleId: 'error.title.unsupported_media_type',
     descriptionId: 'error.description.unsupported_media_type'
@@ -36,6 +40,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
     titleId: 'error.title.too_many_requests',
     descriptionId: 'error.description.too_many_requests'
   },
+  rate_limited: {
+    titleId: 'error.title.rate_limited',
+    descriptionId: 'error.description.rate_limited'
+  },
   upstream_timeout: {
     titleId: 'error.title.upstream_timeout',
     descriptionId: 'error.description.upstream_timeout'
@@ -47,6 +55,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
   busy: {
     titleId: 'error.title.busy',
     descriptionId: 'error.description.busy'
+  },
+  over_capacity: {
+    titleId: 'error.title.over_capacity',
+    descriptionId: 'error.description.over_capacity'
   },
   invalid_fhir: {
     titleId: 'error.title.invalid_fhir',

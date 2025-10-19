@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Any
 
 import pytest
 from urllib import error as urllib_error
 
+from common.contracts.models import Channel, Patient as SubmissionPatient, PortalSubmission
 from safety_gate_service import main
+from safety_gate_service.decision import DecisionResult
 
 CONSENT_REFERENCE = "Consent/test"
 
@@ -77,3 +81,43 @@ def test_feature_log_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lowered.get("x-api-key") == "feature-key"
     assert lowered.get("x-auth-scope") == "analytics:feature:write"
     assert lowered.get("x-consent-reference") == CONSENT_REFERENCE
+
+
+def test_log_safety_features_runs_off_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop_thread = threading.get_ident()
+    observed_threads: set[int] = set()
+
+    def fake_emit(payload: dict[str, Any], consent: str | None) -> None:
+        observed_threads.add(threading.get_ident())
+
+    monkeypatch.setattr(main, "_emit_feature_log", fake_emit)
+
+    submission = PortalSubmission(
+        practiceId="practice-async",
+        patient=SubmissionPatient(id="patient-async"),
+        narrative="patient reports mild headache",
+        channel=Channel.web,
+    )
+    classification = {
+        "prob_emergency": 0.2,
+        "threshold": 0.7,
+        "model_version": "stub",
+        "is_emergency": False,
+    }
+    nlp_payload = {"symptom_mentions": [], "redFlagHits": []}
+    decision = DecisionResult(outcome="SAFE_TO_CONTINUE", rationale={"reason": "safe", "signals": {}})
+
+    asyncio.run(
+        main._log_safety_features(
+            submission=submission,
+            correlation_id="corr-async",
+            classification=classification,
+            nlp_payload=nlp_payload,
+            decision_result=decision,
+            lexical_hits=[],
+            consent_reference="Consent/async",
+        )
+    )
+
+    assert observed_threads, "feature log dispatch did not execute"
+    assert all(thread_id != loop_thread for thread_id in observed_threads)

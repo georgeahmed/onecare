@@ -21,7 +21,7 @@ beforeAll(async () => {
 });
 
 const loadSchema = (relativePath: string) => {
-  const fullPath = join(__dirname, '../../../../../', relativePath);
+  const fullPath = join(__dirname, '../../../../', relativePath);
   const raw = readFileSync(fullPath, 'utf-8');
   return JSON.parse(raw);
 };
@@ -38,10 +38,10 @@ describe('booking search contract', () => {
     const validate = ajv.compile(schema);
 
     const payload = {
-      modality: 'phone',
-      from: '2025-10-01',
-      to: '2025-10-07',
-      pageSize: 20,
+      serviceType: 'gp-consult',
+      windowStart: '2025-10-01T09:00:00Z',
+      windowEnd: '2025-10-07T17:00:00Z',
+      location: 'demo-clinic',
     };
 
     const ok = validate(payload);
@@ -59,8 +59,10 @@ describe('booking search contract', () => {
     const validate = ajv.compile(schema);
 
     const payload = {
-      modality: 'unsupported',
-      from: 'not-a-date',
+      serviceType: '',
+      windowStart: '2025-10-01',
+      windowEnd: '2025-09-30T09:00:00Z',
+      location: '??',
       extra: true,
     };
 

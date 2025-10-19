@@ -1,21 +1,31 @@
-const CONTROL_CHAR_PATTERN = /[\u0000-\u001F\u007F]/g;
-const NON_NEWLINE_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const COLLAPSE_WHITESPACE_PATTERN = /\s+/g;
 const HTML_TAG_PATTERN = /<\/?[^>]+>/g;
 const SENSITIVE_KEY_TOKENS = ['token', 'secret', 'password', 'authorization', 'auth', 'patient', 'idempotency'];
-const HIGH_ENTROPY_VALUE = /[A-Za-z0-9_\-]{24,}/;
+const HIGH_ENTROPY_VALUE = /[A-Za-z0-9_-]{24,}/;
+
+const isControlCharCode = (code: number): boolean => (code >= 0 && code <= 31) || code === 127;
+const isNonNewlineControlCharCode = (code: number): boolean =>
+  isControlCharCode(code) && code !== 9 && code !== 10 && code !== 13;
+
+const replaceControlCharacters = (value: string, predicate: (code: number) => boolean): string => {
+  let result = '';
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    result += predicate(code) ? ' ' : char;
+  }
+  return result;
+};
 
 const truncate = (value: string, maxLength: number): string =>
   value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 
 export const sanitizeText = (value: string, maxLength = 1_000): string => {
-  const cleaned = value.replace(CONTROL_CHAR_PATTERN, ' ').replace(COLLAPSE_WHITESPACE_PATTERN, ' ').trim();
+  const cleaned = replaceControlCharacters(value, isControlCharCode).replace(COLLAPSE_WHITESPACE_PATTERN, ' ').trim();
   return truncate(cleaned, maxLength);
 };
 
 export const sanitizeMultilineText = (value: string, maxLength = 2_000): string => {
-  const cleaned = value
-    .replace(NON_NEWLINE_CONTROL_PATTERN, ' ')
+  const cleaned = replaceControlCharacters(value, isNonNewlineControlCharCode)
     .replace(/\r\n|\r/g, '\n')
     .replace(/\t+/g, ' ')
     .replace(/[ \u00A0]+/g, ' ')

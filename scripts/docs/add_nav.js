@@ -5,6 +5,7 @@ const path = require('path');
 function listTaskFiles() {
   const root = path.join(process.cwd(), 'team');
   const results = [];
+  if (!fs.existsSync(root)) return results;
   function walk(dir) {
     for (const entry of fs.readdirSync(dir)) {
       const full = path.join(dir, entry);
@@ -30,8 +31,14 @@ function groupByDir(files) {
 
 function ensureNav(file, prev, next) {
   const repoRoot = process.cwd();
-  const relToIndex = path.relative(path.dirname(file), path.join(repoRoot, 'docs', 'TASK_INDEX.md')) || 'docs/TASK_INDEX.md';
-  const relToFlow = path.relative(path.dirname(file), path.join(repoRoot, 'team', 'all-tasks-flow.md')) || 'team/all-tasks-flow.md';
+  const taskIndexPath = path.join(repoRoot, 'docs', 'TASK_INDEX.md');
+  const relToIndex = fs.existsSync(taskIndexPath)
+    ? path.relative(path.dirname(file), taskIndexPath) || 'docs/TASK_INDEX.md'
+    : 'docs/TASK_INDEX.md';
+  const flowPath = path.join(repoRoot, 'team', 'all-tasks-flow.md');
+  const relToFlow = fs.existsSync(flowPath)
+    ? path.relative(path.dirname(file), flowPath) || 'team/all-tasks-flow.md'
+    : 'team/all-tasks-flow.md';
   const prevLink = prev ? `[Prev](${path.relative(path.dirname(file), prev)})` : 'Prev: —';
   const nextLink = next ? `[Next](${path.relative(path.dirname(file), next)})` : 'Next: —';
   const nav = `Navigation: [Task Index](${relToIndex}) | [All Tasks Flow](${relToFlow}) | ${prevLink} | ${nextLink}`;
@@ -57,4 +64,3 @@ function main() {
 }
 
 main();
-

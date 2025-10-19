@@ -143,7 +143,7 @@ describe('IntakeState', () => {
       0.1 * 0.8;
 
     expect(next).toBe('Scored');
-    expect(ctx.score).toBeCloseTo(1, 6);
+    expect(ctx.score).toBeCloseTo(expected, 6);
   });
 
   it('marks submissions as duplicate when similar within the dedup window', async () => {
@@ -808,13 +808,13 @@ describe('TaskCreatedState', () => {
     });
     let taskDurationRecords = getHistogramRecords('triage.task.create.duration_ms');
     expect(taskDurationRecords.at(-1)?.attributes?.correlationId).toBe('corr-dup');
-    let notifySuccessRecords = getCounterRecords('triage.notify.success');
+    const notifySuccessRecords = getCounterRecords('triage.notify.success');
     expect(notifySuccessRecords).toHaveLength(1);
     expect(notifySuccessRecords[0].attributes).toMatchObject({
       queue: 'triage.escalations',
       correlationId: 'corr-dup',
     });
-    let notifyDurationRecords = getHistogramRecords('triage.notify.duration_ms');
+    const notifyDurationRecords = getHistogramRecords('triage.notify.duration_ms');
     expect(notifyDurationRecords.at(-1)?.attributes?.correlationId).toBe('corr-dup');
 
     const duplicateCtx: TriageContext = {

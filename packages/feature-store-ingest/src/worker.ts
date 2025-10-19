@@ -7,6 +7,8 @@ import {
   getFeatureSchemaId,
   isFeatureSetRegistered,
   validateFeaturePayload,
+  reserveIdempotency,
+  releaseIdempotency,
 } from '@onecare/ports';
 import { createCounter, createHistogram } from '@onecare/observability';
 
@@ -144,8 +146,10 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
 
     const idempotencyKey = `${mapping.featureSet}::${entityId}::${asOf}`;
     const idempotencyTtl = mapping.ttlSeconds ?? this.options.idempotencyTtlSeconds ?? 60 * 60;
-    const reserved = await this.reserveIdempotency(idempotencyKey, idempotencyTtl);
-    if (!reserved) {
+    const reserveOutcome = await reserveIdempotency(this.idempotency, idempotencyKey, {
+      ttlSeconds: idempotencyTtl,
+    });
+    if (reserveOutcome === 'exists') {
       this.metrics.skipped += 1;
       return;
     }
@@ -169,8 +173,13 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
         topic: mapping.topic,
         err,
       });
-      if (this.idempotency.delete) {
-        await this.idempotency.delete(idempotencyKey);
+      try {
+        await releaseIdempotency(this.idempotency, idempotencyKey);
+      } catch (releaseError) {
+        this.logger.warn('[feature-ingest] idempotency release failed', {
+          topic: mapping.topic,
+          err: releaseError,
+        });
       }
       await this.publishDlq(mapping, message, err, {
         entityId,
@@ -231,18 +240,6 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
     }
   }
 
-  private async reserveIdempotency(key: string, ttlSeconds: number): Promise<boolean> {
-    if (typeof this.idempotency.reserve === 'function') {
-      const result = await this.idempotency.reserve(key, ttlSeconds);
-      return result === 'reserved';
-    }
-    if (await this.idempotency.exists(key)) {
-      return false;
-    }
-    await this.idempotency.put(key, ttlSeconds);
-    return true;
-  }
-
   private async publishDlq(
     mapping: FeatureIngestionMapping<TPayload>,
     message: Message<TPayload>,
@@ -269,9 +266,13 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
       timestamp: new Date().toISOString(),
     };
 
-    await this.bus.publish(dlqTopic, dlqPayload, {
-      'x-correlation-id': correlationId ?? undefined,
+    const headers: Record<string, string> = {
       'x-feature-set': mapping.featureSet,
-    });
+    };
+    if (correlationId) {
+      headers['x-correlation-id'] = correlationId;
+    }
+
+    await this.bus.publish(dlqTopic, dlqPayload, headers);
   }
 }

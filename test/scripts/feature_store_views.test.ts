@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, it, expect } from 'vitest';
 
 import { parseArgs, upsertOnline } from '../../scripts/feature_store/views.js';
@@ -36,9 +37,10 @@ describe('feature_store/views CLI helpers', () => {
 
     await upsertOnline(recordsByView, { moduleName: modulePath, ttlSeconds: 900 });
 
-    // eslint-disable-next-line global-require, import/no-dynamic-require
-    const module = require(modulePath);
-    const stored = module.__getRecords();
+    const moduleUrl = pathToFileURL(modulePath);
+    const loadedModule = await import(moduleUrl.href);
+    const exported = (loadedModule.default ?? loadedModule) as { __getRecords: () => unknown[] };
+    const stored = exported.__getRecords();
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({
       featureSet: 'triage-core-windowed',

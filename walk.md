@@ -15,7 +15,7 @@ What to start for local development, in what order, and why.
 ## 3) Start the orchestrator
 - Build: `npm -w @onecare/app-orchestrator run build`
 - Run: `PORT=3001 node apps/orchestrator/dist/index.js`
-  - Optional: override Safety Gate URL with `PY_SAFETY_GATE_URL=http://localhost:8081` (defaults to this).
+  - Optional: override Safety Gate URL with `PY_SAFETY_GATE_URL=http://localhost:8081` (defaults to this) and set `PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1` so the SSRF guard permits the local stub.
 - Verify:
   - Health: `curl -sf http://localhost:3001/health`
   - Ready: `curl -sf http://localhost:3001/ready`

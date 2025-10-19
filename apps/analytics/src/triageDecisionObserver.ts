@@ -1,4 +1,4 @@
-import type { Message, MessageBus, Subscription } from '@onecare/bus';
+import type { MessageBus, Subscription } from '@onecare/bus';
 import { getBus, withMessageGuards } from '@onecare/bus';
 import { Topics, type TypedEnvelope } from '@onecare/events';
 import type { TriageDecision } from '@onecare/events';
@@ -29,7 +29,7 @@ export class TriageDecisionObserver {
 
   async start(): Promise<void> {
     if (this.subscription) return;
-    this.subscription = await this.bus.subscribe<Message<TypedEnvelope<TriageDecision>>>(
+    this.subscription = await this.bus.subscribe<TypedEnvelope<TriageDecision>>(
       Topics.triage.decision ?? 'triage.decision',
       async (message) => {
         await this.handleEnvelope(message.payload);

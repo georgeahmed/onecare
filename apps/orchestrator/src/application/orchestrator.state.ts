@@ -52,7 +52,7 @@ export class ReceivedState extends BaseState<OrchestratorContext, OrchestratorEv
     super('Received');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     ctx.busHeaders = ctx.correlationId ? { 'x-correlation-id': ctx.correlationId } : undefined;
     return 'Authorized';
   }
@@ -63,7 +63,7 @@ export class AuthorizedState extends BaseState<OrchestratorContext, Orchestrator
     super('Authorized');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     const signatureOk = await ctx.security.verifySignatureAndReplayGuard(ctx.authHeader, ctx.replayFingerprint);
     if (!signatureOk) {
       deny(ctx, 'signature_invalid', { hasAuthHeader: Boolean(ctx.authHeader) });
@@ -82,7 +82,7 @@ export class ConsentCheckedState extends BaseState<OrchestratorContext, Orchestr
     super('ConsentChecked');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     const patientId = ctx.submission.patient?.id;
     if (!patientId) {
       ctx.setOutcome('invalid_input');
@@ -123,7 +123,7 @@ export class IdempotencyReservedState extends BaseState<OrchestratorContext, Orc
     super('IdempotencyReserved');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     const result = await reserveIdempotency(ctx.idempotencyStore, ctx.idempotencyKey, {
       ttlSeconds: ctx.idempotencyTtlSeconds,
     });
@@ -146,7 +146,7 @@ export class SafetyEvaluatedState extends BaseState<OrchestratorContext, Orchest
     super('SafetyEvaluated');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     try {
       const decision = await ctx.callGuard(
         'safety_gate',
@@ -209,7 +209,7 @@ export class NormalizedState extends BaseState<OrchestratorContext, Orchestrator
     super('Normalized');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     if (!ctx.decision || ctx.decision.outcome !== 'SAFE_TO_CONTINUE') {
       ctx.result = ctx.decision;
       ctx.idempotencyReserved = false;
@@ -232,7 +232,7 @@ export class ValidatedState extends BaseState<OrchestratorContext, OrchestratorE
     super('Validated');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     if (!ctx.fhirBundle) {
       ctx.setOutcome('internal_error');
       throw new HttpError('internal_error', 'FHIR bundle missing');
@@ -262,7 +262,7 @@ export class PersistedState extends BaseState<OrchestratorContext, OrchestratorE
     super('Persisted');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     if (!ctx.fhirBundle) {
       ctx.setOutcome('internal_error');
       throw new HttpError('internal_error', 'FHIR bundle missing');
@@ -308,7 +308,7 @@ export class RoutedState extends BaseState<OrchestratorContext, OrchestratorEven
     super('Routed');
   }
 
-  async handle(ctx: OrchestratorContext): Promise<string> {
+  async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     if (!ctx.decision) {
       ctx.setOutcome('internal_error');
       throw new HttpError('internal_error', 'Safety decision missing');
@@ -401,7 +401,7 @@ export class AuditedState extends BaseState<OrchestratorContext, OrchestratorEve
     super('Audited');
   }
 
-  async handle(): Promise<string> {
+  async handle(_ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     return 'Audited';
   }
 }

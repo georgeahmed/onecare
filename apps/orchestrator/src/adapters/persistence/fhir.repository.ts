@@ -12,7 +12,13 @@ import {
   type CounterMetric,
   type HistogramMetric,
 } from '@onecare/observability';
-import type { FhirBundle, FhirReadOptions, FhirRepository, FhirResourceRef } from '@onecare/ports';
+import type {
+  FhirBundle,
+  FhirReadOptions,
+  FhirRepository,
+  FhirResourceRef,
+  TaskCreateOptions,
+} from '@onecare/ports';
 
 type FetchImpl = typeof fetch;
 type CircuitState = 'closed' | 'open' | 'half_open';
@@ -183,6 +189,53 @@ function buildAuthHeader(token: string | undefined): string | undefined {
   return `Bearer ${trimmed}`;
 }
 
+function sanitizePathForTelemetry(rawPath: string): string {
+  if (!rawPath) return '/';
+  let candidate = rawPath;
+  try {
+    const maybeUrl = new URL(rawPath);
+    candidate = maybeUrl.pathname || '/';
+  } catch {
+    const queryIndex = candidate.indexOf('?');
+    candidate = queryIndex >= 0 ? candidate.slice(0, queryIndex) : candidate;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
+      try {
+        const parsed = new URL(candidate);
+        candidate = parsed.pathname || '/';
+      } catch {
+        candidate = '/';
+      }
+    }
+  }
+  candidate = candidate.replace(/\/\/+/g, '/');
+  if (!candidate || candidate === '/') {
+    return '/';
+  }
+  if (candidate.startsWith('/')) {
+    candidate = candidate.slice(1);
+  }
+  if (candidate.endsWith('/')) {
+    candidate = candidate.slice(0, -1);
+  }
+  if (!candidate) return '/';
+  const segments = candidate
+    .split('/')
+    .map((segment, index) => {
+      if (!segment) return '';
+      if (segment === '.' || segment === '..') return '';
+      if (segment.startsWith('_') || segment.startsWith('$')) return segment;
+      if (index === 0) {
+        return segment;
+      }
+      if (/^[A-Za-z]+$/.test(segment)) {
+        return segment;
+      }
+      return ':id';
+    })
+    .filter(Boolean);
+  return segments.length > 0 ? segments.join('/') : '/';
+}
+
 function isRetryableStatus(status: number): boolean {
   if (status === 408 || status === 429) return true;
   return status >= 500 && status < 600;
@@ -279,7 +332,11 @@ export class HttpFhirRepository implements FhirRepository {
     return result;
   }
 
-  async createTask(task: unknown): Promise<FhirResourceRef> {
+  async createTask(task: unknown, options?: TaskCreateOptions): Promise<FhirResourceRef> {
+    const headers: Record<string, string> = { ...(options?.headers ?? {}) };
+    if (options?.idempotencyKey) {
+      headers['idempotency-key'] = options.idempotencyKey;
+    }
     return this.request<FhirResourceRef>({
       method: 'POST',
       path: 'Task',
@@ -287,6 +344,8 @@ export class HttpFhirRepository implements FhirRepository {
       operation: 'Task.create',
       preferRepresentation: true,
       expectJsonBody: true,
+      headers,
+      signal: options?.signal,
     });
   }
 
@@ -365,6 +424,7 @@ export class HttpFhirRepository implements FhirRepository {
     signal?: AbortSignal;
   }): Promise<T> {
     const url = new URL(path, this.baseUrl).toString();
+    const telemetryPath = sanitizePathForTelemetry(path);
     const wantsJsonResponse = expectJsonBody ?? (preferRepresentation === true || method === 'GET');
     this.ensureCircuitAllowsRequest(operation);
     let attempt = 0;
@@ -392,7 +452,8 @@ export class HttpFhirRepository implements FhirRepository {
       const span = startSpan('fhir.request', {
         attributes: {
           'fhir.operation': operation,
-          'fhir.url': url,
+          'fhir.path': telemetryPath,
+          'http.route': telemetryPath === '/' ? '/' : `/${telemetryPath}`,
           'http.method': method,
           ...(this.practiceId ? { 'fhir.practice_id': this.practiceId } : {}),
         },
@@ -426,7 +487,7 @@ export class HttpFhirRepository implements FhirRepository {
         logger.debug('fhir.request.dispatch', {
           operation,
           method,
-          path,
+          path: telemetryPath,
           attempt,
         });
 
@@ -440,7 +501,7 @@ export class HttpFhirRepository implements FhirRepository {
         clearTimeout(timer);
         cleanupExternal();
         const elapsedMs = performance.now() - start;
-        this.recordMetrics(elapsedMs, method, path, response.status, attempt);
+        this.recordMetrics(elapsedMs, method, telemetryPath, response.status, attempt);
         span.setAttribute('http.status_code', response.status);
 
         if (!response.ok) {
@@ -473,7 +534,7 @@ export class HttpFhirRepository implements FhirRepository {
             responseBody,
             retryAfterMs ?? undefined,
           );
-          errorCounter.add(1, this.metricAttributes(method, path, response.status, attempt));
+          errorCounter.add(1, this.metricAttributes(method, telemetryPath, response.status, attempt));
 
           const shouldTripCircuit = !conflict;
           if (conflict && idempotent) {
@@ -497,12 +558,12 @@ export class HttpFhirRepository implements FhirRepository {
           span.setStatus({ code: SpanStatusCode.OK });
         }
         if (wantsJsonResponse && response.status !== 204) {
-          this.ensureJsonContentType(response, operation, path);
+          this.ensureJsonContentType(response, operation, telemetryPath);
         }
         logger.debug('fhir.request.succeeded', {
           operation,
           method,
-          path,
+          path: telemetryPath,
           attempt,
           durationMs: Number(elapsedMs.toFixed(2)),
         });
@@ -536,8 +597,8 @@ export class HttpFhirRepository implements FhirRepository {
         }
 
         if (!isFhirRequestError(err)) {
-          this.recordMetrics(durationMs, method, path, 0, attempt);
-          errorCounter.add(1, this.metricAttributes(method, path, 0, attempt));
+          this.recordMetrics(durationMs, method, telemetryPath, 0, attempt);
+          errorCounter.add(1, this.metricAttributes(method, telemetryPath, 0, attempt));
         }
 
         if (isAbortError(err) && span.isRecording()) {

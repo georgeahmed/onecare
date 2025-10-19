@@ -5,7 +5,8 @@ OUTPUT_DIR="${1:-artifacts/sbom}"
 NODE_TARGET="${SBOM_NODE_TARGET:-dir:.}"
 PY_TARGET="${SBOM_PY_TARGET:-dir:services-py}"
 IFS=' ' read -r -a EXCLUDES <<< "${SBOM_NODE_EXCLUDES:-services-py}"
-SYFT_IMAGE="${SYFT_IMAGE:-ghcr.io/anchore/syft:latest}"
+# Pin Syft image to a deterministic release; override via SYFT_IMAGE for upgrades.
+SYFT_IMAGE="${SYFT_IMAGE:-ghcr.io/anchore/syft:v1.15.0}"
 FORMAT="${SBOM_FORMAT:-cyclonedx-json}"
 EXTENSION="sbom.json"
 if [[ "$FORMAT" == "cyclonedx-json" ]]; then
@@ -46,23 +47,36 @@ write_checksum() {
   fi
 }
 
+normalize_exclude() {
+  local pattern="$1"
+  if [[ -z "$pattern" ]]; then
+    return 1
+  fi
+  if [[ "$pattern" == ./* || "$pattern" == */* || "$pattern" == **/* ]]; then
+    printf '%s\n' "$pattern"
+    return 0
+  fi
+  printf './%s\n' "$pattern"
+}
+
 mkdir -p "$OUTPUT_DIR"
 ensure_tools
 
 NODE_ARGS=("$NODE_TARGET")
 for exclude in "${EXCLUDES[@]}"; do
-  if [[ -n "$exclude" ]]; then
-    NODE_ARGS+=("--exclude" "$exclude")
+  normalized=$(normalize_exclude "$exclude" || true)
+  if [[ -n "${normalized:-}" ]]; then
+    NODE_ARGS+=("--exclude" "$normalized")
   fi
 done
 NODE_ARGS+=("-o" "${FORMAT}=${OUTPUT_DIR}/sbom-node.${EXTENSION}")
 
 echo "▶️ Generating Node.js SBOM → ${OUTPUT_DIR}/sbom-node.${EXTENSION}"
-syft_cmd packages "${NODE_ARGS[@]}"
+syft_cmd "${NODE_ARGS[@]}"
 write_checksum "${OUTPUT_DIR}/sbom-node.${EXTENSION}"
 
 echo "▶️ Generating Python SBOM → ${OUTPUT_DIR}/sbom-python.${EXTENSION}"
-syft_cmd packages "$PY_TARGET" -o "${FORMAT}=${OUTPUT_DIR}/sbom-python.${EXTENSION}"
+syft_cmd "$PY_TARGET" -o "${FORMAT}=${OUTPUT_DIR}/sbom-python.${EXTENSION}"
 write_checksum "${OUTPUT_DIR}/sbom-python.${EXTENSION}"
 
 echo "✅ SBOMs written to ${OUTPUT_DIR}"

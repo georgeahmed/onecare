@@ -41,7 +41,7 @@ describe('MessageBus parity with MemoryBus baseline', () => {
     { name: 'nats', factory: createNatsHarness },
   ];
 
-  describe.each(adapters)('%s adapter', ({ name, factory }) => {
+  describe.each(adapters)('%s adapter', ({ name: _name, factory }) => {
     let harness: TestHarness;
 
     beforeEach(() => {

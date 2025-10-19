@@ -5,11 +5,13 @@
 | --- | --- | --- |
 | Hermetic environment | `docker compose --profile test up qa-test-env` | Starts mocks + NATS |
 | Seed data | `./qa/env/seed.sh` | Sync anonymized fixtures with mocks |
-| Contract tests | `NODE_ENV=test npm exec vitest run qa/contracts` | Includes property + snapshot suites |
+| Contract tests | `NODE_ENV=test npm run test:contracts` | Includes property + snapshot suites |
 | Accessibility smoke | `NODE_ENV=test npm run test:e2e -- --run qa/e2e/a11y.spec.ts` | Writes reports to `artifacts/qa/a11y/` |
 | DLQ replay drill | `NODE_ENV=test npm run test:e2e -- --run qa/e2e/dlq-replay.spec.ts` | Validates idempotent replay path |
 | Chaos drills | `./scripts/chaos/inject.sh [all|bus|fhir]` | Exercises bus/FHIR circuit scenarios |
 | Stress a flaky test | `node qa/tools/stress-test.mjs <spec> --runs 50` | Reproduces suspected flakes locally |
+
+All QA npm scripts set `VITEST_SCOPE` automatically, so the `qa/**` suites run without editing the global Vitest configuration.
 
 ## Coverage Matrix
 | System | Contract Tests | E2E / Scenario | Fault & Chaos | Accessibility | Perf / Load |

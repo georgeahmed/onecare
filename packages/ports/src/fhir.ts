@@ -119,12 +119,27 @@ function randomKeySegment(): string {
 
 function normaliseKeySegment(segment: string | undefined): string {
   if (!segment) return '';
-  return segment
-    .trim()
-    .replace(/[^A-Za-z0-9._/-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/\/{2,}/g, '/')
-    .replace(/^-|-$/g, '');
+  const trimmed = segment.trim();
+  if (!trimmed) return '';
+  const parts = trimmed
+    .split('/')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) =>
+      part
+        .replace(/[^A-Za-z0-9._-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^[-.]+/, '')
+        .replace(/[-.]+$/, '')
+    )
+    .map((part) => {
+      if (!part || part === '.' || part === '..') {
+        return '';
+      }
+      return part;
+    })
+    .filter((part) => part.length > 0);
+  return parts.join('/');
 }
 
 function decodeAttachmentData(source: unknown): Uint8Array | null {

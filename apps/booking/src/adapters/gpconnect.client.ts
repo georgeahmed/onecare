@@ -1,8 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import { watch } from 'node:fs';
+import { promises as fs, watch, type FSWatcher } from 'node:fs';
 import https from 'node:https';
 import { createHistogram, createCounter, startSpan, getCorrelationId, logger } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -621,7 +620,7 @@ class AccessTokenManager {
 
 class MtlsAgentManager {
   private agent?: https.Agent;
-  private readonly watchers: fs.FSWatcher[] = [];
+  private readonly watchers: FSWatcher[] = [];
 
   constructor(private readonly config: MtlsConfig) {
     void this.reload().catch((error) => {

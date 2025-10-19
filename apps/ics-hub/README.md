@@ -7,7 +7,9 @@ Purpose
 
 State Flow
 ----------
-- Inbound → Validated → Routed → Acked (`apps/ics-hub/src/application/ics.state.ts`).
+- Core path: Inbound → Validated → Routed → Acked (`apps/ics-hub/src/application/ics.state.ts`).
+- Early exits: Invalid, Blocked, and RateLimited short-circuit the flow while releasing backpressure handles and preserving retry metadata.
+- `buildIcsMachine()` (`src/application/ics.machine.ts`) wires the state machine together; `runIcsMachine()` advances it until one of the terminal states is reached.
 
 - Key adapters and helpers:
   - `IcsHttpClient` — HTTPS client with endpoint allowlists, bounded retries, rate limiting, and runtime credential rotation via `refreshRouteCredentials()`.

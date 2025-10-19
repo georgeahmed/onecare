@@ -38,7 +38,7 @@ export class TelemetryState extends BaseState<CapacityContext, CapacityEvent> {
     super('Telemetry');
   }
 
-  async handle(ctx: CapacityContext): Promise<string> {
+  async handle(ctx: CapacityContext, _evt: CapacityEvent): Promise<string> {
     if (!ctx.telemetrySource) {
       throw new Error('telemetry_source_missing');
     }
@@ -121,7 +121,7 @@ export class ForecastState extends BaseState<CapacityContext, CapacityEvent> {
     super('Forecast');
   }
 
-  async handle(ctx: CapacityContext): Promise<string> {
+  async handle(ctx: CapacityContext, _evt: CapacityEvent): Promise<string> {
     if (!ctx.telemetry) {
       throw new Error('telemetry_missing');
     }
@@ -146,7 +146,7 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
     super('Shaped');
   }
 
-  async handle(ctx: CapacityContext): Promise<string> {
+  async handle(ctx: CapacityContext, _evt: CapacityEvent): Promise<string> {
     const span = startSpan('capacity.shape');
     span.setAttributes({
       'capacity.practice_id': ctx.practiceId,
@@ -306,7 +306,7 @@ export class AppliedState extends BaseState<CapacityContext, CapacityEvent> {
     super('Applied');
   }
 
-  async handle(ctx: CapacityContext): Promise<string> {
+  async handle(ctx: CapacityContext, _evt: CapacityEvent): Promise<string> {
     if (!ctx.decision) {
       throw new Error('release_decision_missing');
     }

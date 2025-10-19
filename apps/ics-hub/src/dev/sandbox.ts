@@ -1,7 +1,20 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TypedEnvelope, IcsReferralAck, IcsReferralRequest } from '@onecare/events';
-import type { CpcsServiceRequest, ReferralResult } from '../adapters/cpcs.client';
+
+interface CpcsServiceRequest {
+  id: string;
+  patientReference: string;
+  presentingComplaintCode: string;
+  consentTimestamp: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+interface ReferralResult {
+  status: string;
+  reference?: string;
+  reason?: string;
+}
 
 const FIXTURE_DIR = join(__dirname, 'fixtures');
 

@@ -43,6 +43,14 @@ This document describes the current SLO catalogue across OneCare services. A con
 | WebRTC Session Setup | p95 ≤ **4 s** (offer ➝ media established) | `histogram_quantile(0.95, sum(rate(telephony_session_setup_ms_bucket[5m])) by (le))` | 5 % budget. Breach triggers network diagnostics + STUN/TURN failover. |
 | Call Failure Rate | ≤ **2 %** failed sessions per 30 m | `rate(telephony_session_failed_total[5m]) / rate(telephony_session_started_total[5m])` | 2 % budget. Two adjacent burn windows page telephony / network SRE. |
 
+## Scribe Service
+
+| Dimension | Objective | Measurement | Error Budget & Response |
+|-----------|-----------|-------------|-------------------------|
+| Transcript Latency | p95 ≤ **5 s** from audio chunk receipt to transcript emission | `histogram_quantile(0.95, sum(rate(scribe_transcription_latency_ms_bucket[5m])) by (le))` | 5 % budget per 30 days. Breach ⇒ enable compression fallback and review ASR queue saturation. |
+| Transcript Accuracy | ≥ **98 %** word accuracy for clinical vocabulary evaluation set | `1 - (scribe_transcription_wer{dataset="clinical"} / 100)` sampled nightly | If accuracy <98 % for two consecutive runs, halt new scribe releases and restore previous ASR model snapshot. |
+| Uptime | Monthly availability ≥ **99.0 %** for `/scribe/transcribe` endpoint | `rate(http_server_success_total{service="scribe"}[5m]) / rate(http_server_requests_total{service="scribe"}[5m])` | 1 % budget (~7.3 h/mo). Sustained drop pages scribe & platform teams; require RCA before resuming deployments. |
+
 ## Global Reliability Indicators
 
 - **Readiness Flaps**: For every workload, enforce ≤3 readiness probe failures/hour. Shared alert rule monitors `increase(kube_pod_container_status_ready{condition="false"}[1h])`.

@@ -1,7 +1,7 @@
 /// <reference types="vitest/globals" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { persistTheme, resolveInitialTheme, THEME_STORAGE_KEY, type PortalTheme } from '../src/theme';
+import { persistTheme, resolveInitialTheme, THEME_STORAGE_KEY } from '../src/theme';
 
 const stubWindow = (options: { storage?: Storage; prefersContrast?: boolean; prefersDark?: boolean } = {}) => {
   const store = new Map<string, string>();

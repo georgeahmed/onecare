@@ -1,7 +1,7 @@
 # Documentation Index
 
 This index highlights the primary analytics and feature-store guides delivered as part of the DE-01/DE-02 workstream.
-See `docs/TASK_INDEX.md` for the broader repository catalogue.
+See `docs/TASK_INDEX.md` for the broader repository catalogue (the file notes when the team backlog is not present in this checkout).
 
 ## Analytics Pipeline
 

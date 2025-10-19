@@ -19,7 +19,10 @@ All services MUST emit structured JSON logs. The baseline schema is:
 - **Correlation IDs**: every log MUST include `correlationId`. The shared logger in `@onecare/observability` injects it automatically when the OTEL context includes one.
 - **Redaction**:
   - Avoid logging PHI/PII, secrets, or raw payloads.
-  - Objects/arrays passed to the logger are automatically redacted and rendered as `"[object redacted]"`.
+  - Objects/arrays are traversed recursively; high-risk keys (`*Id`, `token`, `apiKey`, `sessionToken`, `email`, `phone`, transcripts, NHS / NI numbers, etc.) are replaced with `"[REDACTED]"`.
+  - Header-like strings (`Authorization`, `Proxy-Authorization`, cookies) and embedded JSON fragments are scrubbed; Bearer/Basic tokens never reach the log sink.
+  - Binary-like values (`Buffer`, `ArrayBuffer`, typed arrays) are always emitted as `"[REDACTED]"`.
+  - The logger returns structured output with only safe primitives (string/number/boolean) so payloads stay machine-parsable.
   - Prefer explicit flags (`{ outcome: "SAFE_TO_CONTINUE" }`) over dumping request bodies.
 - **Levels**:
   - `debug`: verbose diagnostics (disabled in prod).

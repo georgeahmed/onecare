@@ -934,7 +934,7 @@ export class CallReceivedState extends BaseState<TelephonyContext, TelephonyEven
     super('CallReceived');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     const callId = ctx.callId?.trim();
     if (!callId) {
       throw new Error('call_id_missing');
@@ -1028,7 +1028,7 @@ export class LanguageSelectionState extends BaseState<TelephonyContext, Telephon
     super('LanguageSelection');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     const callId = ctx.callId?.trim();
     if (!callId) {
       throw new Error('call_id_missing');
@@ -1087,7 +1087,7 @@ export class TranscribedState extends BaseState<TelephonyContext, TelephonyEvent
     super('Transcribed');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     const callId = ctx.callId?.trim();
     if (!callId) {
       throw new Error('call_id_missing');
@@ -1262,7 +1262,7 @@ export class IntentClassifiedState extends BaseState<TelephonyContext, Telephony
     super('IntentClassified');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     const callId = ctx.callId?.trim() ?? ctx.intentClassificationInput?.callId ?? 'unknown-call';
     const correlationId = ensureCorrelationId(ctx);
 
@@ -1571,7 +1571,7 @@ export class EmergencyTransferState extends BaseState<TelephonyContext, Telephon
     super('EmergencyTransfer');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     const nowFn = ctx.now ?? Date.now;
     const triggeredAt = ctx.emergencyTransferAt ?? nowFn();
     ctx.emergencyTransferAt = triggeredAt;
@@ -1600,7 +1600,7 @@ export class RoutedState extends BaseState<TelephonyContext, TelephonyEvent> {
     super('Routed');
   }
 
-  async handle(ctx: TelephonyContext): Promise<string> {
+  async handle(ctx: TelephonyContext, _evt: TelephonyEvent): Promise<string> {
     if (!ctx.intentClassified) {
       if (ctx.pipelineDuplicate) {
         logger.info('telephony.idempotency.skip', {

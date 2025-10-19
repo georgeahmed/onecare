@@ -190,4 +190,26 @@ describe('AnalyticsConsumer', () => {
 
     await consumer.stop();
   });
+
+  it('normalizes retry policy values to sensible defaults', () => {
+    const consumer = new AnalyticsConsumer({
+      bus,
+      sink: { write },
+      retryPolicy: {
+        maxAttempts: 0,
+        baseDelayMs: Number.NaN,
+        maxDelayMs: 50,
+        jitterRatio: Number.NaN,
+      },
+    });
+
+    const policy = (consumer as unknown as {
+      retryPolicy: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; jitterRatio: number };
+    }).retryPolicy;
+
+    expect(policy.maxAttempts).toBe(1);
+    expect(policy.baseDelayMs).toBe(100);
+    expect(policy.maxDelayMs).toBe(100);
+    expect(policy.jitterRatio).toBeCloseTo(0.2, 5);
+  });
 });
