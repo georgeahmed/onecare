@@ -35,12 +35,8 @@ describe('feature_store/views CLI helpers', () => {
       ],
     };
 
-    await upsertOnline(recordsByView, { moduleName: modulePath, ttlSeconds: 900 });
+    const stored = await upsertOnline(recordsByView, { moduleName: modulePath, ttlSeconds: 900 });
 
-    const moduleUrl = pathToFileURL(modulePath);
-    const loadedModule = await import(moduleUrl.href);
-    const exported = (loadedModule.default ?? loadedModule) as { __getRecords: () => unknown[] };
-    const stored = exported.__getRecords();
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({
       featureSet: 'triage-core-windowed',

@@ -5,7 +5,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(feature_views_duration_ms_bucket[15m])) by (view, le)
+            sum(rate(analytics_ingest_lag_ms_bucket[15m])) by (metricName, le)
           ) > 120000
         for: 15m
         labels:
@@ -18,7 +18,9 @@ groups:
           runbook: https://onecare/runbooks/oncall#analytics-materialiser
       - alert: AnalyticsFreshnessLag
         expr: |
-          max(time() - feature_views_last_success_timestamp_seconds{view!=""}) > 1800
+          (
+            sum(increase(analytics_ingest_ok_total[30m])) by (metricName)
+          ) == bool 0
         for: 10m
         labels:
           severity: warning
@@ -26,5 +28,5 @@ groups:
           team: analytics
         annotations:
           summary: "Feature materialiser freshness lagging"
-          description: "No successful materialiser run recorded in the past 30 minutes."
+          description: "No successful analytics.metric ingests recorded in the past 30 minutes."
           runbook: https://onecare/runbooks/oncall#analytics-materialiser

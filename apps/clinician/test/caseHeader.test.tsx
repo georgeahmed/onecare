@@ -6,7 +6,7 @@ import { ThemeProvider } from '../src/theme';
 import { I18nProvider } from '../src/i18n';
 import { AuthProvider, createDevSession } from '../src/lib/auth';
 import CaseHeader from '../src/components/CaseHeader';
-import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
+import type { ClinicianTaskDetail } from '@onecare/events';
 
 const detail: ClinicianTaskDetail = {
   id: 't-123',

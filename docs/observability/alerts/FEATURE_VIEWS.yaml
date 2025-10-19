@@ -15,7 +15,7 @@ spec:
       rules:
         - alert: FeatureViewMaterialiserStalled
           expr: |
-            increase(feature_views_run_total{view="{{VIEW_LABEL}}", env="{{ENVIRONMENT_LABEL}}"}[{{STALL_WINDOW}}]) == 0
+            increase(analytics_ingest_ok_total{metricName="{{VIEW_LABEL}}", env="{{ENVIRONMENT_LABEL}}"}[{{STALL_WINDOW}}]) == 0
           for: {{STALL_FOR}}
           labels:
             severity: "{{STALL_SEVERITY}}"
@@ -34,7 +34,7 @@ spec:
             histogram_quantile(
               {{DURATION_QUANTILE}},
               sum(
-                rate(feature_views_duration_ms_bucket{view="{{VIEW_LABEL}}", env="{{ENVIRONMENT_LABEL}}"}[{{DURATION_WINDOW}}])
+                rate(analytics_ingest_lag_ms_bucket{metricName="{{VIEW_LABEL}}", env="{{ENVIRONMENT_LABEL}}"}[{{DURATION_WINDOW}}])
               ) by (le)
             ) > {{DURATION_THRESHOLD_MS}}
           for: {{DURATION_FOR}}

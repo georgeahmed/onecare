@@ -24,7 +24,7 @@ const LABEL_ALLOWLIST = new Set<string>(['service', 'topic', 'status', 'outcomeC
 const MAX_LABEL_VALUE_LENGTH = 120;
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const PHONE_PATTERN = /\b(?:\+?\d[\d\s-]){7,}\d\b/;
-const TOKEN_PATTERN = /\b[A-Za-z0-9-_]{20,}\b/;
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
 
 const ingestOkCounter = createCounter('analytics.ingest.ok');
 const ingestErrorCounter = createCounter('analytics.ingest.error');
@@ -318,28 +318,32 @@ function normalizeRetryPolicy(policy?: RetryPolicyOptions): NormalizedRetryPolic
     typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
   const attemptsCandidate = sanitizeFinite(policy.maxAttempts);
-  const maxAttempts = Math.max(
-    1,
-    Math.min(6, Math.floor(attemptsCandidate ?? DEFAULT_RETRY_POLICY.maxAttempts))
-  );
+  const attemptsSource =
+    attemptsCandidate !== undefined && attemptsCandidate > 0
+      ? attemptsCandidate
+      : DEFAULT_RETRY_POLICY.maxAttempts;
+  const maxAttempts = Math.max(1, Math.min(6, Math.floor(attemptsSource)));
 
   const baseDelayCandidate = sanitizeFinite(policy.baseDelayMs);
-  const baseDelayMs = Math.max(
-    0,
-    Math.floor(baseDelayCandidate ?? DEFAULT_RETRY_POLICY.baseDelayMs)
-  );
+  const baseDelaySource =
+    baseDelayCandidate !== undefined && baseDelayCandidate >= 0
+      ? baseDelayCandidate
+      : DEFAULT_RETRY_POLICY.baseDelayMs;
+  const baseDelayMs = Math.max(0, Math.floor(baseDelaySource));
 
   const maxDelayCandidate = sanitizeFinite(policy.maxDelayMs);
-  const maxDelayMs = Math.max(
-    baseDelayMs,
-    Math.floor(maxDelayCandidate ?? DEFAULT_RETRY_POLICY.maxDelayMs)
-  );
+  const maxDelaySource =
+    maxDelayCandidate !== undefined && maxDelayCandidate >= 0
+      ? maxDelayCandidate
+      : DEFAULT_RETRY_POLICY.maxDelayMs;
+  const maxDelayMs = Math.max(baseDelayMs, Math.floor(maxDelaySource));
 
   const jitterCandidate = sanitizeFinite(policy.jitterRatio);
-  const jitterRatio = Math.max(
-    0,
-    Math.min(1, jitterCandidate ?? DEFAULT_RETRY_POLICY.jitterRatio)
-  );
+  const jitterSource =
+    jitterCandidate !== undefined && jitterCandidate >= 0
+      ? jitterCandidate
+      : DEFAULT_RETRY_POLICY.jitterRatio;
+  const jitterRatio = Math.max(0, Math.min(1, jitterSource));
 
   return {
     maxAttempts,
@@ -374,7 +378,7 @@ function computeLagMs(timestamp?: string): number | null {
   if (!timestamp) return null;
   const parsed = Date.parse(timestamp);
   if (Number.isNaN(parsed)) return null;
-  return Date.now() - parsed;
+  return Math.max(0, Date.now() - parsed);
 }
 
 function sanitizeMetric(metric: Metric): Metric {

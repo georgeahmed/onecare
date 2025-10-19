@@ -76,8 +76,9 @@ function extractCalibration(config: ResolvedConfig): ScoreCalibration {
   const slope = hasSlope ? sanitizeNumber(raw.slope) : 1;
   const intercept = hasIntercept ? sanitizeNumber(raw.intercept) : 0;
   const min = hasMin && Number.isFinite(raw.min as number) ? Number(raw.min) : 0;
-  const maxCandidate = hasMax && Number.isFinite(raw.max as number) ? Number(raw.max) : 1;
-  const max = maxCandidate > min ? maxCandidate : Math.max(1, min);
+  const defaultMax = 1;
+  const maxCandidate = hasMax && Number.isFinite(raw.max as number) ? Number(raw.max) : defaultMax;
+  const max = maxCandidate > min ? maxCandidate : Math.max(min, defaultMax);
 
   return {
     slope,

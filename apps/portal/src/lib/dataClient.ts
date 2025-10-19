@@ -1,5 +1,4 @@
 import { createCorrelationId, getSessionCorrelationId, recordRumEvent, safeLog } from './telemetry';
-import { scrubHeaders } from './security';
 
 export interface RetryOptions {
   maxRetries?: number;
@@ -100,12 +99,23 @@ const parseRetryAfterSeconds = (headerValue: string | null): number | undefined 
 };
 
 const sanitizeHeaders = (headers: Record<string, string | undefined>): Record<string, string> => {
-  return Object.entries(scrubHeaders(headers)).reduce<Record<string, string>>((acc, [key, value]) => {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      acc[key] = value;
+  const reduced = new Map<string, { key: string; value: string }>();
+  for (const [rawKey, rawValue] of Object.entries(headers)) {
+    if (typeof rawValue !== 'string') {
+      continue;
     }
-    return acc;
-  }, {});
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const canonical = rawKey.toLowerCase();
+    reduced.set(canonical, { key: rawKey, value: trimmed });
+  }
+  const result: Record<string, string> = {};
+  for (const { key, value } of reduced.values()) {
+    result[key] = value;
+  }
+  return result;
 };
 
 const executeRequest = async (
@@ -160,7 +170,8 @@ const executeRequest = async (
 
     try {
       const isFormDataBody = typeof FormData !== 'undefined' && body instanceof FormData;
-      const isJsonBody = body && typeof body === 'object' && !isFormDataBody;
+      const isUrlEncodedBody = typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams;
+      const isJsonBody = body && typeof body === 'object' && !isFormDataBody && !isUrlEncodedBody;
 
       const finalHeaders = sanitizeHeaders({
         'content-type': isJsonBody ? 'application/json' : undefined,
@@ -175,7 +186,15 @@ const executeRequest = async (
         credentials,
         headers: finalHeaders,
         signal: controller.signal,
-        body: isFormDataBody ? (body as FormData) : isJsonBody ? JSON.stringify(body) : (typeof body === 'string' ? body : undefined)
+        body: isFormDataBody
+          ? (body as FormData)
+          : isUrlEncodedBody
+            ? (body as URLSearchParams)
+            : isJsonBody
+              ? JSON.stringify(body)
+              : typeof body === 'string'
+                ? body
+                : undefined
       });
 
       if (response.ok) {
@@ -231,6 +250,17 @@ const executeRequest = async (
         attempt += 1;
         continue;
       }
+
+      const message = error instanceof Error ? error.message : String(error ?? 'unknown');
+      recordRumEvent('network.request.failure', {
+        method,
+        path,
+        attemptCount: attempt + 1,
+        correlationId: resolvedCorrelationId,
+        requestId: resolvedRequestId,
+        error: message
+      });
+      safeLog('dataClient.request.failed', { method, path, error: message });
       throw error;
     } finally {
       if (timeoutHandle) {
@@ -241,14 +271,6 @@ const executeRequest = async (
       }
     }
   }
-
-  recordRumEvent('network.request.failure', {
-    method,
-    path,
-    attemptCount: retryConfig.maxRetries + 1,
-    error: lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown')
-  });
-  safeLog('dataClient.request.failed', { method, path, error: lastError });
 
   throw lastError ?? new Error('Request failed');
 };
@@ -266,7 +288,23 @@ export const getJson = async <T = unknown>(path: string, options: GetOptions): P
   }
 
   const response = await executeRequest('GET', path, options);
-  const data = (await response.json()) as T;
+  const status = response.status;
+  const noContentStatus = status === 204 || status === 205 || status === 304;
+  const contentLengthHeader = response.headers.get('content-length');
+  const declaredLength = contentLengthHeader !== null ? Number.parseInt(contentLengthHeader, 10) : undefined;
+  const hasDeclaredLength = declaredLength !== undefined && !Number.isNaN(declaredLength);
+  const hasBody = !noContentStatus && (!hasDeclaredLength || declaredLength > 0);
+
+  if (!hasBody) {
+    return undefined as T;
+  }
+
+  let data: T;
+  try {
+    data = (await response.json()) as T;
+  } catch {
+    data = undefined as unknown as T;
+  }
 
   if (cacheTtlMs > 0) {
     cacheStore.set(cacheKey, { value: data, expiresAt: now + cacheTtlMs });

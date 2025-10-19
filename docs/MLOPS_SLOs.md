@@ -7,7 +7,7 @@ This document defines the reliability targets for ML inference services and link
 | Metric | Target | Measurement | Notes |
 | --- | --- | --- | --- |
 | p95 latency | ≤ 800 ms over 5 min windows | Prometheus `histogram_quantile` | Measured per ingress service and shadow comparison. |
-| Error rate | < 1% 5xx over 10 min | `sum(rate(http_requests_total{code=~"5.."})) / sum(rate(http_requests_total))` | Includes circuit breaker drops. |
+| Error rate | < 1% over 10 min | `sum(rate(safety_gate_requests_total{endpoint="analyze",status=~"server_error|dropped"}[5m])) / sum(rate(safety_gate_requests_total{endpoint="analyze"}[5m]))` | Includes circuit breaker drops. |
 | Throttle rate | < 2% 503/`Retry-After` | Observed via structured log counter | Ensure backpressure yields 503 not 500. |
 | Shadow agreement | ≥ 0.985 during trials | `shadowEvaluator.metrics()` | Only evaluated when shadowing is enabled. |
 | OOM/restarts | 0 unexpected restarts per hour | `kube_pod_container_status_restarts_total` | Alert on consecutive restarts. |

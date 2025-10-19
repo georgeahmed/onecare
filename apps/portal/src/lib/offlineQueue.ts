@@ -299,22 +299,52 @@ export const updateOfflineJob = (id: string, updates: Partial<OfflineBookingJob>
   if (index === -1) return undefined;
 
   const current = queueCache[index];
+
+  const sanitizedAttempt =
+    typeof updates.attempt === 'number' && Number.isFinite(updates.attempt) && updates.attempt >= 0
+      ? Math.floor(updates.attempt)
+      : current.attempt;
+
+  const sanitizedNextAttemptAt =
+    typeof updates.nextAttemptAt === 'number' && Number.isFinite(updates.nextAttemptAt)
+      ? updates.nextAttemptAt
+      : current.nextAttemptAt;
+
+  const sanitizedPayload = updates.payload
+    ? {
+        ...current.payload,
+        ...updates.payload,
+        slotId: updates.payload.slotId?.trim() ?? current.payload.slotId,
+        patientId: updates.payload.patientId?.trim() ?? current.payload.patientId
+      }
+    : current.payload;
+
+  const sanitizedSlot = updates.slot
+    ? {
+        ...current.slot,
+        ...updates.slot,
+        start: updates.slot.start?.trim() ?? current.slot.start,
+        end: updates.slot.end?.trim() ?? current.slot.end,
+        modality: updates.slot.modality ?? current.slot.modality,
+        location: updates.slot.location?.trim() || current.slot.location
+      }
+    : current.slot;
+
+  const sanitizedLastError =
+    typeof updates.lastError === 'string'
+      ? updates.lastError.trim().slice(0, MAX_ERROR_LENGTH) || undefined
+      : updates.lastError === ''
+        ? undefined
+        : current.lastError;
+
   const next: OfflineBookingJob = {
     ...current,
     ...updates,
-    payload: updates.payload ? { ...current.payload, ...updates.payload } : current.payload,
-    slot: updates.slot
-      ? {
-          ...current.slot,
-          ...updates.slot,
-          location: updates.slot.location?.trim() || current.slot.location
-        }
-      : current.slot,
-    lastError: updates.lastError
-      ? updates.lastError.trim().slice(0, MAX_ERROR_LENGTH)
-      : updates.lastError === ''
-        ? undefined
-        : current.lastError
+    payload: sanitizedPayload,
+    slot: sanitizedSlot,
+    attempt: sanitizedAttempt,
+    nextAttemptAt: sanitizedNextAttemptAt,
+    lastError: sanitizedLastError
   };
 
   queueCache[index] = next;

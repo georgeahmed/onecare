@@ -133,3 +133,21 @@ def test_decide_respects_red_flag_threshold():
 
     assert result.outcome == "SAFE_TO_CONTINUE"
     assert result.rationale["reason"] == "safe"
+
+
+def test_decide_ignores_zero_confidence_mentions():
+    nlp_results = {
+        "symptom_mentions": [
+            {"name": "chest pain", "confidence": 0.0},
+        ]
+    }
+
+    result = decide(
+        nlp_results=nlp_results,
+        classifier_result={"prob_emergency": 0.2, "threshold": 0.9},
+        patient={},
+        config=_base_config(),
+    )
+
+    assert result.outcome == "SAFE_TO_CONTINUE"
+    assert result.rationale["reason"] == "safe"

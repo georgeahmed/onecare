@@ -7,7 +7,7 @@ import BookingErrorView from '../components/booking/BookingErrorView';
 import ConfettiBurst from '../components/ui/ConfettiBurst';
 import { fetchBookingSlots, type ConfirmBookingResult } from '../lib/api';
 import type { BookingFilterState, BookingSlot } from '../lib/booking';
-import { createBookingIdempotencyKey, filtersEqual } from '../lib/booking';
+import { createBookingIdempotencyKey, createDefaultBookingFilters, filtersEqual } from '../lib/booking';
 import type { BookingConfirmationError } from '../components/booking/ConfirmBooking';
 import { getEnhancedAccessConfig } from '../lib/enhancedAccess';
 import { getFairnessConfig } from '../lib/fairness';
@@ -42,7 +42,7 @@ const BookingScreen = () => {
   } = useBookingFlow();
 
   const [slots, setSlots] = useState<BookingSlot[]>([]);
-  const [filters, setFilters] = useState<BookingFilterState>({ modality: 'all' });
+  const [filters, setFilters] = useState<BookingFilterState>(() => createDefaultBookingFilters({ modality: 'all' }));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -112,6 +112,8 @@ const BookingScreen = () => {
       modality: filters.modality === 'all' ? undefined : filters.modality,
       from: filters.from,
       to: filters.to,
+      serviceType: filters.serviceType,
+      location: filters.location,
     };
 
     fetchBookingSlots(queryFilters, { signal: controller.signal, correlationId })

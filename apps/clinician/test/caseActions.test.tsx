@@ -5,8 +5,7 @@ import { I18nProvider } from '../src/i18n';
 import { ThemeProvider } from '../src/theme';
 import CasePage from '../src/pages/Case';
 import type { QueueGateway, QueueFilters } from '../src/adapters/queue.types';
-import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
-import type { ClinicianTaskSummary } from '@onecare/events/src/contracts/clinician-task-summary';
+import type { ClinicianTaskDetail, ClinicianTaskSummary } from '@onecare/events';
 import { setQueueGateway } from '../src/adapters/gateway';
 import { AuthProvider, createDevSession } from '../src/lib/auth';
 

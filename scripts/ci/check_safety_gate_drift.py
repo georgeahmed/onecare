@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 
 def main() -> None:
@@ -21,14 +22,31 @@ def main() -> None:
     current = json.loads(args.metrics.read_text())
     baseline = json.loads(args.baseline.read_text())
 
-    accuracy = current.get("decisions", {}).get("accuracy", 0.0)
-    baseline_accuracy = baseline.get("accuracy", 0.0)
+    def to_float(value: Any, *, default: float) -> float:
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return default
+            try:
+                return float(stripped)
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError(f"Unable to parse numeric metric from {value!r}") from exc
+        raise TypeError(f"Unsupported metric type: {type(value)!r}")
 
-    current_recall = current.get("decisions", {}).get("recall", {})
-    baseline_recall = baseline.get("recall", {})
+    accuracy = to_float(current.get("decisions", {}).get("accuracy"), default=0.0)
+    baseline_accuracy = to_float(baseline.get("accuracy"), default=0.0)
 
-    current_ece = current.get("ece", 1.0)
-    baseline_ece = baseline.get("ece", 1.0)
+    current_recall_raw = current.get("decisions", {}).get("recall", {}) or {}
+    baseline_recall_raw = baseline.get("recall", {}) or {}
+    current_recall = {k: to_float(v, default=0.0) for k, v in current_recall_raw.items()}
+    baseline_recall = {k: to_float(v, default=0.0) for k, v in baseline_recall_raw.items()}
+
+    current_ece = to_float(current.get("ece"), default=1.0)
+    baseline_ece = to_float(baseline.get("ece"), default=1.0)
 
     failures: list[str] = []
 

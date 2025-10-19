@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FeatureSnapshot, PartitionKeys, PartitionPlan } from './types';
 
 const ISO_DATE_LENGTH = 10;
+const HEX_RADIX = 16;
 
 function toEventDate(generatedAt: string): string {
   const parsed = new Date(generatedAt);
@@ -13,16 +14,28 @@ function toEventDate(generatedAt: string): string {
   return parsed.toISOString().slice(0, ISO_DATE_LENGTH);
 }
 
-function computeBucket(entityId: string, bucketPrefixLength: number): string {
-  const hash = createHash('sha1').update(entityId).digest('hex');
-  return hash.slice(0, bucketPrefixLength);
+function normalizeBucketCount(value: number | undefined): number {
+  const bucketCount = value ?? 256;
+  if (!Number.isInteger(bucketCount) || bucketCount <= 0) {
+    throw new Error(`bucketCount must be a positive integer. Received: ${value}`);
+  }
+  return bucketCount;
 }
 
 function bucketPrefixLength(bucketCount: number): number {
-  if (bucketCount <= 16) return 1;
-  if (bucketCount <= 256) return 2;
-  if (bucketCount <= 4096) return 3;
-  return 4;
+  const digits = Math.ceil(Math.log(bucketCount) / Math.log(HEX_RADIX));
+  if (!Number.isFinite(digits) || digits <= 0) {
+    return 1;
+  }
+  return Math.max(1, digits);
+}
+
+function computeBucket(entityId: string, bucketCount: number, prefixLength: number): string {
+  const hash = createHash('sha1').update(entityId).digest('hex');
+  const hashValue = BigInt(`0x${hash}`);
+  const bucketIndex = hashValue % BigInt(bucketCount);
+  const bucketHex = bucketIndex.toString(HEX_RADIX);
+  return bucketHex.padStart(prefixLength, '0');
 }
 
 export interface PartitionOptions {
@@ -35,12 +48,12 @@ export function derivePartitionKeys(
   snapshot: FeatureSnapshot,
   options: PartitionOptions = {}
 ): PartitionKeys {
-  const bucketCount = options.bucketCount ?? 256;
+  const bucketCount = normalizeBucketCount(options.bucketCount);
   const prefixLength = bucketPrefixLength(bucketCount);
   return {
     featureSet: snapshot.featureSet,
     eventDate: toEventDate(snapshot.generatedAt),
-    entityBucket: computeBucket(snapshot.entityId, prefixLength),
+    entityBucket: computeBucket(snapshot.entityId, bucketCount, prefixLength),
   };
 }
 

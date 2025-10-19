@@ -107,11 +107,26 @@ const isValidDate = (value: string): boolean => {
 
 const isValidUrl = (value: string): boolean => {
   try {
-    // eslint-disable-next-line no-new
-    new URL(value);
-    return true;
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
+  }
+};
+
+const patternCache = new Map<string, RegExp>();
+
+const getPattern = (pattern: string): RegExp | null => {
+  const cached = patternCache.get(pattern);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const compiled = new RegExp(pattern);
+    patternCache.set(pattern, compiled);
+    return compiled;
+  } catch {
+    return null;
   }
 };
 
@@ -214,14 +229,14 @@ const collectIssues = (schema: JsonSchema, value: unknown, path: PathSegment[], 
 
   if (isArraySchema(schema)) {
     if (!Array.isArray(value)) {
-      if (required && key) {
-        return [{ kind: 'required', path: key }];
-      }
-      return [{ kind: 'type', path: key, expected: 'array' }];
+      return key ? [{ kind: 'type', path: key, expected: 'array' }] : [];
     }
     const issues: ValidationIssue[] = [];
-    if (required && value.length === 0 && key) {
+    if (typeof schema.minItems === 'number' && key && value.length < schema.minItems) {
       issues.push({ kind: 'min-items', path: key });
+    }
+    if (typeof schema.maxItems === 'number' && key && value.length > schema.maxItems) {
+      issues.push({ kind: 'max-items', path: key });
     }
     if (schema.items) {
       const itemSchema = schema.items;
@@ -239,15 +254,29 @@ const collectIssues = (schema: JsonSchema, value: unknown, path: PathSegment[], 
     if (typeof value !== 'string') {
       return key ? [{ kind: 'type', path: key, expected: 'string' }] : [];
     }
-    if (schema.enum && !schema.enum.includes(value)) {
-      return key ? [{ kind: 'enum', path: key }] : [];
+    const issues: ValidationIssue[] = [];
+    if (schema.enum && key && !schema.enum.includes(value)) {
+      issues.push({ kind: 'enum', path: key });
     }
-    if (schema.format === 'date' && !isValidDate(value)) {
-      return key ? [{ kind: 'format-date', path: key }] : [];
+    if (schema.format === 'date' && key && !isValidDate(value)) {
+      issues.push({ kind: 'format-date', path: key });
     }
-    if (schema.format === 'uri' && !isValidUrl(value)) {
-      return key ? [{ kind: 'format-uri', path: key }] : [];
+    if (schema.format === 'uri' && key && !isValidUrl(value)) {
+      issues.push({ kind: 'format-uri', path: key });
     }
+    if (typeof schema.minLength === 'number' && key && value.length < schema.minLength) {
+      issues.push({ kind: 'min-length', path: key });
+    }
+    if (typeof schema.maxLength === 'number' && key && value.length > schema.maxLength) {
+      issues.push({ kind: 'max-length', path: key });
+    }
+    if (schema.pattern && key) {
+      const pattern = getPattern(schema.pattern);
+      if (pattern && !pattern.test(value)) {
+        issues.push({ kind: 'pattern', path: key });
+      }
+    }
+    return issues;
   }
 
   if (isNumberSchema(schema)) {
@@ -310,12 +339,20 @@ const buildErrorMap = (
         return [issuePath, formatMessage('schemaForm.error.invalidValue')];
       case 'min-items':
         return [issuePath, formatMessage('schemaForm.error.minItems')];
+      case 'max-items':
+        return [issuePath, formatMessage('schemaForm.error.maxItems')];
       case 'minimum':
         return [issuePath, formatMessage('schemaForm.error.minValue')];
       case 'maximum':
         return [issuePath, formatMessage('schemaForm.error.maxValue')];
       case 'multiple-of':
         return [issuePath, formatMessage('schemaForm.error.multipleOf')];
+      case 'min-length':
+        return [issuePath, formatMessage('schemaForm.error.minLength')];
+      case 'max-length':
+        return [issuePath, formatMessage('schemaForm.error.maxLength')];
+      case 'pattern':
+        return [issuePath, formatMessage('schemaForm.error.pattern')];
       default:
         return [issuePath, formatMessage('schemaForm.error.required')];
     }
@@ -349,6 +386,14 @@ const remapTouchedAfterRemoval = (touched: Set<string>, arrayKey: string, remove
     next.add(newKey);
   });
   return next;
+};
+
+export const coerceNumberInput = (raw: string, schemaType: NumberJsonSchema['type']): number | string => {
+  if (schemaType === 'integer') {
+    return /^-?\d+$/.test(raw) ? Number(raw) : raw;
+  }
+  const parsed = Number(raw);
+  return Number.isNaN(parsed) ? raw : parsed;
 };
 
 export const collectValidationIssues = (schema: JsonSchema, value: unknown): ValidationIssue[] =>
@@ -820,8 +865,8 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
                 updateValue(path, '');
                 return;
               }
-              const parsed = currentSchema.type === 'integer' ? Number.parseInt(raw, 10) : Number(raw);
-              updateValue(path, Number.isNaN(parsed) ? raw : parsed);
+              const coerced = coerceNumberInput(raw, currentSchema.type);
+              updateValue(path, coerced);
             }}
             onBlur={handleBlur}
             aria-invalid={showError ? 'true' : undefined}

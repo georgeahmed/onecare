@@ -49,6 +49,7 @@ const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'unauthorized',
   'forbidden',
   'invalid_input',
+  'not_found',
   'unsupported_media_type',
   'payload_too_large',
   'conflict',
@@ -56,7 +57,9 @@ const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'upstream_unavailable',
   'internal_error',
   'too_many_requests',
+  'rate_limited',
   'busy',
+  'over_capacity',
   'invalid_fhir',
 ] as const;
 

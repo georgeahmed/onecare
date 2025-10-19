@@ -59,6 +59,17 @@ const sleep = async (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return Math.max(0, Math.floor(fallback));
+  }
+  const normalized = Math.floor(value as number);
+  if (normalized < 0) {
+    return 0;
+  }
+  return normalized;
+}
+
 export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
   private readonly bus: MessageBus;
   private readonly featureStore: OnlineFeatureStore;
@@ -194,9 +205,9 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
     message: Message<TPayload>,
     context: { entityId: string; asOf: string; correlationId?: string }
   ): Promise<void> {
-    const retries = this.options.retries ?? DEFAULT_OPTIONS.retries;
-    const baseBackoff = this.options.backoffMs ?? DEFAULT_OPTIONS.backoffMs;
-    const jitter = this.options.jitterMs ?? DEFAULT_OPTIONS.jitterMs;
+    const retries = normalizeNonNegativeInteger(this.options.retries, DEFAULT_OPTIONS.retries);
+    const baseBackoff = normalizeNonNegativeInteger(this.options.backoffMs, DEFAULT_OPTIONS.backoffMs);
+    const jitter = normalizeNonNegativeInteger(this.options.jitterMs, DEFAULT_OPTIONS.jitterMs);
 
     let attempt = 0;
     // eslint-disable-next-line no-constant-condition

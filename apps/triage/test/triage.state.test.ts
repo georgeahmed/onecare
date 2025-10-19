@@ -141,9 +141,10 @@ describe('IntakeState', () => {
       0.25 * 0.3 +
       0.4 * 0.5 +
       0.1 * 0.8;
+    const clampedExpected = Math.min(expected, 1);
 
     expect(next).toBe('Scored');
-    expect(ctx.score).toBeCloseTo(expected, 6);
+    expect(ctx.score).toBeCloseTo(clampedExpected, 6);
   });
 
   it('marks submissions as duplicate when similar within the dedup window', async () => {

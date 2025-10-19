@@ -814,9 +814,10 @@ function buildTriageDecision(ctx: TriageContext, generatedAt: string): TriageDec
   }
   const score = typeof ctx.score === 'number' && Number.isFinite(ctx.score) ? ctx.score : 0;
   const priority = ctx.priority ?? determinePriority(ctx.config, score, ctx.features);
+  const normalizedScore = Math.min(Math.max(score, 0), 1);
   const decision: TriageDecision = {
     patientId: ctx.patientId,
-    score,
+    score: normalizedScore,
     priority,
     generatedAt,
   };

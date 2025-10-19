@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
 import { MemoryBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
@@ -71,6 +71,10 @@ describe('FeatureIngestionWorker', () => {
     bus = new MemoryBus();
     featureStore = new InMemoryOnlineFeatureStore();
     idempotency = new InMemoryIdempotency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('ingests feature events into the online store', async () => {
@@ -205,6 +209,51 @@ describe('FeatureIngestionWorker', () => {
     expect(metrics.dlq).toBe(1);
     expect(getCounterTotal('features.ingest.dlq')).toBe(1);
     expect(getCounterTotal('features.ingest.error')).toBeGreaterThan(0);
+    await worker.stop();
+  });
+
+  it('normalizes negative backoff and jitter configuration to zero', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    let attempts = 0;
+    const worker = new FeatureIngestionWorker({
+      bus,
+      featureStore,
+      idempotency,
+      mappings: [
+        {
+          topic: 'features.triage-core',
+          featureSet: 'triage-core',
+          deriveEntityId: (payload: typeof basePayload) => payload.patientId,
+          deriveAsOf: (payload: typeof basePayload) => payload.generatedAt,
+          mapPayload: (payload: typeof basePayload) => {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new Error('transient');
+            }
+            return payload.features;
+          },
+        },
+      ],
+    }, { retries: 1, backoffMs: -5, jitterMs: -10, logger });
+
+    await worker.start();
+    await bus.publish('features.triage-core', basePayload, {
+      'x-correlation-id': 'corr-negative-delay',
+    });
+
+    expect(logger.warn).toHaveBeenCalled();
+    const warnCall = logger.warn.mock.calls[0];
+    expect(warnCall?.[1]?.delay).toBe(0);
+    const stored = await featureStore.get({ featureSet: 'triage-core', entityId: 'patient-123' });
+    expect(stored).not.toBeNull();
+
     await worker.stop();
   });
 

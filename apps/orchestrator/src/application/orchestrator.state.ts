@@ -1,5 +1,5 @@
 import { BaseState } from '@onecare/statekit';
-import { logger } from '@onecare/observability';
+import { createCounter, logger } from '@onecare/observability';
 import { createEnvelope, Topics, type TriageInput } from '@onecare/events';
 import { reserveIdempotency } from './idempotency';
 import { normalizeToFhir, validateProfiles } from './normalize';
@@ -17,6 +17,10 @@ export type GateDenialReason =
 
 const AUDIT_DENIED_TYPE = 'orchestrator.access.denied';
 const AUDIT_SUCCESS_TYPE = 'orchestrator.access.success';
+
+const decisionAttemptCounter = createCounter('orchestrator.decision.attempts');
+const decisionFailureCounter = createCounter('orchestrator.decision.failures');
+const decisionOutcomeCounter = createCounter('orchestrator.decision.outcomes');
 
 function deny(ctx: OrchestratorContext, reason: GateDenialReason, extraDetails: Record<string, unknown> = {}): never {
   const auditDetails = {
@@ -148,6 +152,7 @@ export class SafetyEvaluatedState extends BaseState<OrchestratorContext, Orchest
 
   async handle(ctx: OrchestratorContext, _evt: OrchestratorEvent): Promise<string> {
     try {
+      decisionAttemptCounter.add(1);
       const decision = await ctx.callGuard(
         'safety_gate',
         (signal) =>
@@ -181,16 +186,25 @@ export class SafetyEvaluatedState extends BaseState<OrchestratorContext, Orchest
         await ctx.emitAudit('orchestrator.safety.fallback', auditOptions);
         ctx.decision = { outcome: 'SAFE_TO_CONTINUE', reason: 'FALLBACK_RULES' };
       } else {
+        decisionFailureCounter.add(1, { reason: code ?? 'unknown' });
         throw error;
       }
     }
 
     if (!ctx.decision) {
+      decisionFailureCounter.add(1, { reason: 'missing_decision' });
       ctx.setOutcome('internal_error');
       throw new HttpError('internal_error', 'Safety decision missing');
     }
 
     maybeRunShadowEvaluation(ctx);
+
+    const outcomeLabel = ctx.decision.outcome ?? 'unknown';
+    const reasonLabel =
+      typeof ctx.decision.reason === 'string' && ctx.decision.reason.trim().length > 0
+        ? ctx.decision.reason.trim()
+        : 'unspecified';
+    decisionOutcomeCounter.add(1, { outcome: outcomeLabel, reason: reasonLabel });
 
     if (ctx.decision.outcome !== 'SAFE_TO_CONTINUE') {
       ctx.result = ctx.decision;

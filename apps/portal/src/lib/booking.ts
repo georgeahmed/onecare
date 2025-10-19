@@ -1,3 +1,18 @@
+const resolveEnvValue = (key: string, fallback: string): string => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const raw = env[key];
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return fallback;
+};
+
+export const DEFAULT_BOOKING_SERVICE_TYPE = resolveEnvValue('VITE_BOOKING_SERVICE_TYPE', 'gp-consult');
+export const DEFAULT_BOOKING_LOCATION = resolveEnvValue('VITE_BOOKING_LOCATION', 'demo-clinic');
+
 export type BookingModality = 'phone' | 'in_person';
 
 export interface BookingSlot {
@@ -5,6 +20,7 @@ export interface BookingSlot {
   start: string; // ISO string
   end: string; // ISO string
   modality: BookingModality;
+  serviceType?: string;
   location?: string;
 }
 
@@ -12,18 +28,60 @@ export interface BookingFilterState {
   modality: BookingModality | 'all';
   from?: string;
   to?: string;
+  serviceType?: string;
+  location?: string;
 }
 
 export interface BookingQueryFilters {
   modality?: BookingModality;
   from?: string;
   to?: string;
+  serviceType?: string;
+  location?: string;
 }
 
 export const filtersEqual = (a: BookingFilterState | null, b: BookingFilterState | null): boolean => {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.modality === b.modality && a.from === b.from && a.to === b.to;
+  const normalize = (value?: string) => (value ? value.trim() : '');
+  return (
+    a.modality === b.modality &&
+    normalize(a.from) === normalize(b.from) &&
+    normalize(a.to) === normalize(b.to) &&
+    normalize(a.serviceType) === normalize(b.serviceType) &&
+    normalize(a.location) === normalize(b.location)
+  );
+};
+
+const normalizeFilterValue = (value?: string | null): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+export const createDefaultBookingFilters = (overrides: Partial<BookingFilterState> = {}): BookingFilterState => {
+  const filters: BookingFilterState = {
+    modality: overrides.modality ?? 'all'
+  };
+
+  if (overrides.from) {
+    filters.from = overrides.from;
+  }
+  if (overrides.to) {
+    filters.to = overrides.to;
+  }
+
+  const serviceType = normalizeFilterValue(overrides.serviceType ?? DEFAULT_BOOKING_SERVICE_TYPE);
+  if (serviceType) {
+    filters.serviceType = serviceType;
+  }
+
+  const location = normalizeFilterValue(overrides.location ?? DEFAULT_BOOKING_LOCATION);
+  if (location) {
+    filters.location = location;
+  }
+
+  return filters;
 };
 
 const FNV_OFFSET_BASIS = 0x811c9dc5;

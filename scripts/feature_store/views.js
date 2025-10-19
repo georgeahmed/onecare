@@ -197,12 +197,12 @@ function summarise(recordsByView, outputRoot, layoutModule) {
 async function upsertOnline(recordsByView, options) {
   const { moduleName, ttlSeconds } = options;
   const normalisedTtl = typeof ttlSeconds === 'number' && Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : undefined;
-  const onlineModule = loadOnlineModule(moduleName);
+  const onlineModule = await loadOnlineModule(moduleName);
   if (!onlineModule || typeof onlineModule.InMemoryOnlineFeatureStore !== 'function') {
     logger.error('feature-view materialiser online store missing InMemoryOnlineFeatureStore export', {
       moduleName: moduleName ?? '@onecare/feature-store-online',
     });
-    return;
+    return [];
   }
   const store = new onlineModule.InMemoryOnlineFeatureStore();
   const records = [];
@@ -233,6 +233,8 @@ async function upsertOnline(recordsByView, options) {
     count: records.length,
     ttlSeconds: normalisedTtl,
   });
+
+  return records;
 }
 
 async function run(argv = process.argv.slice(2)) {

@@ -88,4 +88,28 @@ describe('offlineQueue', () => {
     removeOfflineJob('job-3');
     expect(listOfflineJobs()).toHaveLength(0);
   });
+
+  it('ignores invalid updates and preserves sanitized fields', () => {
+    const original = enqueueOfflineJob({
+      id: 'job-4',
+      idempotencyKey: 'job-4',
+      correlationId: 'corr-4',
+      payload: { slotId: 'slot-4', patientId: 'patient-4' },
+      slot: SLOT_FIXTURE,
+    });
+
+    const updated = updateOfflineJob('job-4', {
+      attempt: -5,
+      nextAttemptAt: Number.NaN,
+      payload: { slotId: '  slot-4b  ' },
+      slot: { start: ' 2025-10-15T09:00:00Z  ' },
+      lastError: ' temporary failure ',
+    });
+
+    expect(updated?.attempt).toBe(original.attempt);
+    expect(updated?.nextAttemptAt).toBe(original.nextAttemptAt);
+    expect(updated?.payload.slotId).toBe('slot-4b');
+    expect(updated?.slot.start).toBe('2025-10-15T09:00:00Z');
+    expect(updated?.lastError).toBe('temporary failure');
+  });
 });

@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryBus } from '@onecare/bus';
 import type { Message } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { Metric } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
-import { getCounterRecords, resetMetrics } from '@onecare/observability';
+import { getCounterRecords, getHistogramRecords, resetMetrics } from '@onecare/observability';
 import {
   AnalyticsConsumer,
 } from '../src/consumer';
@@ -22,6 +22,10 @@ describe('AnalyticsConsumer', () => {
       dlqEvents.push(msg as Message<Record<string, unknown>>);
     });
     resetMetrics();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function createIdempotencyStore(): IdempotencyStore {
@@ -199,7 +203,6 @@ describe('AnalyticsConsumer', () => {
         maxAttempts: 0,
         baseDelayMs: Number.NaN,
         maxDelayMs: 50,
-        jitterRatio: Number.NaN,
       },
     });
 
@@ -207,9 +210,72 @@ describe('AnalyticsConsumer', () => {
       retryPolicy: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; jitterRatio: number };
     }).retryPolicy;
 
-    expect(policy.maxAttempts).toBe(1);
+    expect(policy.maxAttempts).toBe(3);
     expect(policy.baseDelayMs).toBe(100);
     expect(policy.maxDelayMs).toBe(100);
     expect(policy.jitterRatio).toBeCloseTo(0.2, 5);
+  });
+
+  it('clamps ingest lag to zero when metrics arrive from the future', async () => {
+    const fixedNow = Date.parse('2025-01-10T00:00:00.000Z');
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+
+    const consumer = new AnalyticsConsumer({ bus, sink: { write } });
+    await consumer.start();
+
+    const metric: Metric = {
+      name: 'requests_total',
+      value: 1,
+      timestamp: new Date(fixedNow + 60_000).toISOString(),
+    };
+    const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-future');
+
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+
+    const records = getHistogramRecords('analytics.ingest.lag_ms');
+    expect(records).toHaveLength(1);
+    expect(records[0]?.value).toBe(0);
+
+    await consumer.stop();
+  });
+
+  it('does not over-redact labels that contain punctuation', async () => {
+    const consumer = new AnalyticsConsumer({ bus, sink: { write } });
+    await consumer.start();
+
+    const metric: Metric = {
+      name: 'job_status',
+      value: 1,
+      labels: { status: 'job:12345678901234567890' },
+    };
+    const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-punct');
+
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const written = write.mock.calls[0][0] as Metric;
+    expect(written.labels?.status).toBe('job:12345678901234567890');
+
+    await consumer.stop();
+  });
+
+  it('redacts access tokens that match the expected pattern', async () => {
+    const consumer = new AnalyticsConsumer({ bus, sink: { write } });
+    await consumer.start();
+
+    const metric: Metric = {
+      name: 'token_usage',
+      value: 1,
+      labels: { result: 'abcdEFGHijklMNOPqrstUVWX' },
+    };
+    const envelope = createEnvelope(Topics.analytics.metric, metric, 'cid-token');
+
+    await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const written = write.mock.calls[0][0] as Metric;
+    expect(written.labels?.result).toBe('[redacted-token]');
+
+    await consumer.stop();
   });
 });

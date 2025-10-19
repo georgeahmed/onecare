@@ -1,5 +1,4 @@
-import type { ClinicianTaskSummary } from '@onecare/events/src/contracts/clinician-task-summary';
-import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
+import type { ClinicianTaskSummary, ClinicianTaskDetail } from '@onecare/events';
 
 export type TaskPriority = ClinicianTaskSummary['priority'];
 export type TaskStatus = ClinicianTaskSummary['status'];

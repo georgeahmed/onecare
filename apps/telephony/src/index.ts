@@ -10,6 +10,9 @@ import {
   createHistogram,
   createCounter,
   createGauge,
+  getCounterRecords,
+  getGaugeValue,
+  getHistogramRecords,
   withCorrelationContext,
   startSpan,
 } from '@onecare/observability';
@@ -44,10 +47,12 @@ const READINESS_CACHE_MIN_MS = 250;
 const DEFAULT_READINESS_CACHE_MS = 1_000;
 
 const httpDuration = createHistogram('telephony_http_duration_ms');
+const httpRequests = createCounter('telephony.http.requests');
 const queueGauge = createGauge('telephony.queue');
 const rejectCounter = createCounter('telephony.reject');
 const rateLimitHitCounter = createCounter('telephony.ratelimit.hit');
 const rateLimitMissCounter = createCounter('telephony.ratelimit.miss');
+const LATENCY_BUCKETS_MS = [100, 250, 500, 750, 1000, 2000, 5000, 10000];
 
 interface TelephonyIngressOptions {
   bus: MessageBus;
@@ -618,9 +623,22 @@ export function createTelephonyServer(options: TelephonyIngressOptions): Telepho
     const recordDuration = (status: number, outcome: string): void => {
       const duration = performance.now() - started;
       httpDuration.record(duration, { method, path, status, outcome });
+      httpRequests.add(1, {
+        method,
+        path,
+        status: String(status),
+        outcome,
+      });
     };
 
     try {
+      if (method === 'GET' && path === '/metrics') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/plain; version=0.0.4');
+        res.end(renderPrometheusMetrics());
+        return;
+      }
+
       if (method === 'GET' && path === '/healthz') {
         sendJson(res, 200, { ok: true });
         recordDuration(200, 'health');
@@ -780,6 +798,81 @@ export function createTelephonyServer(options: TelephonyIngressOptions): Telepho
 
   (server as TelephonyHttpServer).initiateShutdown = initiateShutdown;
   return server as TelephonyHttpServer;
+}
+
+function renderPrometheusMetrics(): string {
+  const lines: string[] = [];
+
+  const durationRecords = getHistogramRecords('telephony_http_duration_ms');
+  const durationBuckets = new Array(LATENCY_BUCKETS_MS.length + 1).fill(0);
+  let durationSum = 0;
+  for (const record of durationRecords) {
+    const value = Number(record.value ?? 0);
+    if (!Number.isFinite(value)) continue;
+    durationSum += value;
+    let bucketIndex = LATENCY_BUCKETS_MS.findIndex((boundary) => value <= boundary);
+    if (bucketIndex === -1) bucketIndex = LATENCY_BUCKETS_MS.length;
+    durationBuckets[bucketIndex] += 1;
+  }
+
+  lines.push('# HELP telephony_http_duration_ms Telephony ingress latency in milliseconds');
+  lines.push('# TYPE telephony_http_duration_ms histogram');
+  let cumulative = 0;
+  LATENCY_BUCKETS_MS.forEach((boundary, index) => {
+    cumulative += durationBuckets[index];
+    lines.push(`telephony_http_duration_ms_bucket{le="${boundary}"} ${cumulative}`);
+  });
+  cumulative += durationBuckets[durationBuckets.length - 1];
+  lines.push(`telephony_http_duration_ms_bucket{le="+Inf"} ${cumulative}`);
+  lines.push(`telephony_http_duration_ms_count ${durationRecords.length}`);
+  lines.push(`telephony_http_duration_ms_sum ${durationSum}`);
+
+  const requestBuckets = aggregateCounterByLabels(getCounterRecords('telephony.http.requests'), ['method', 'path', 'status', 'outcome']);
+  lines.push('# HELP telephony_http_requests_total Telephony HTTP requests by outcome');
+  lines.push('# TYPE telephony_http_requests_total counter');
+  for (const [labels, value] of requestBuckets) {
+    lines.push(`telephony_http_requests_total${labels} ${value}`);
+  }
+
+  const rejectBuckets = aggregateCounterByLabels(getCounterRecords('telephony.reject'), ['reason']);
+  lines.push('# HELP telephony_reject_total Telephony ingress rejections');
+  lines.push('# TYPE telephony_reject_total counter');
+  for (const [labels, value] of rejectBuckets) {
+    lines.push(`telephony_reject_total${labels} ${value}`);
+  }
+
+  lines.push('# HELP telephony_queue Telephony concurrency queue depth');
+  lines.push('# TYPE telephony_queue gauge');
+  lines.push(`telephony_queue ${getGaugeValue('telephony.queue')}`);
+
+  return `${lines.join('\n')}\n`;
+}
+
+function aggregateCounterByLabels(
+  records: ReturnType<typeof getCounterRecords>,
+  labelKeys: string[],
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const record of records) {
+    const labelKey = serializeLabels(record.attributes ?? {}, labelKeys);
+    const previous = map.get(labelKey) ?? 0;
+    map.set(labelKey, previous + (Number(record.value) || 0));
+  }
+  return map;
+}
+
+function serializeLabels(attributes: Record<string, unknown>, keys: string[]): string {
+  const parts: string[] = [];
+  for (const key of keys) {
+    const raw = attributes[key];
+    if (raw === undefined || raw === null) continue;
+    const escaped = String(raw).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    parts.push(`${key}="${escaped}"`);
+  }
+  if (parts.length === 0) {
+    return '';
+  }
+  return `{${parts.join(',')}}`;
 }
 
 export type { TelephonyIngressOptions };

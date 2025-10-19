@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
-import type { BookingFilterState, BookingSlot } from '../../lib/booking';
+import {
+  DEFAULT_BOOKING_LOCATION,
+  DEFAULT_BOOKING_SERVICE_TYPE,
+  type BookingFilterState,
+  type BookingSlot,
+} from '../../lib/booking';
 import {
   formatAccessibleDateTime,
   formatDate,
@@ -9,6 +14,7 @@ import {
   resolveLocalePreferences,
 } from '../../lib/format';
 import { useLocale } from '../../i18n';
+import { applyFromFilter, applyToFilter, filterSlots } from '../../lib/bookingFilters';
 
 export interface SearchSlotsProps {
   slots: BookingSlot[];
@@ -69,8 +75,18 @@ const SearchSlots = ({
     () => timezone ?? resolveLocalePreferences(locale).timeZone,
     [timezone, locale],
   );
-  const [filters, setFilters] = useState<BookingFilterState>({ modality: defaultModality });
-  const [debouncedFilters, setDebouncedFilters] = useState<BookingFilterState>({ modality: defaultModality });
+  const defaultFilters = useMemo<BookingFilterState>(
+    () => ({
+      modality: defaultModality,
+      from: undefined,
+      to: undefined,
+      serviceType: DEFAULT_BOOKING_SERVICE_TYPE,
+      location: DEFAULT_BOOKING_LOCATION,
+    }),
+    [defaultModality],
+  );
+  const [filters, setFilters] = useState<BookingFilterState>(defaultFilters);
+  const [debouncedFilters, setDebouncedFilters] = useState<BookingFilterState>(defaultFilters);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
@@ -105,65 +121,66 @@ const SearchSlots = ({
     optionRefs.current = [];
   }, [slots, debouncedFilters]);
 
-const filteredSlots = useMemo(() => {
-    return slots.filter((slot) => {
-      if (debouncedFilters.modality !== 'all' && slot.modality !== debouncedFilters.modality) {
-        return false;
-      }
-      if (debouncedFilters.from && new Date(slot.start) < new Date(debouncedFilters.from)) {
-        return false;
-      }
-      if (debouncedFilters.to && new Date(slot.start) > new Date(debouncedFilters.to)) {
-        return false;
-      }
-      return true;
-    });
-  }, [slots, debouncedFilters]);
-
-const virtualizationEnabled = filteredSlots.length > VIRTUALIZATION_THRESHOLD;
-
-useEffect(() => {
-  if (!virtualizationEnabled) {
-    setVirtualWindow({ start: 0, end: filteredSlots.length });
-    return;
-  }
-  const container = listContainerRef.current;
-  if (!container) {
-    setVirtualWindow({
-      start: 0,
-      end: Math.min(filteredSlots.length, VIRTUALIZATION_THRESHOLD + OVERSCAN),
-    });
-    return;
-  }
-
-  const calculateWindow = () => {
-    const scrollTop = container.scrollTop;
-    const viewportHeight = container.clientHeight || 1;
-    const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT_PX) - OVERSCAN);
-    const endIndex = Math.min(
-      filteredSlots.length,
-      Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT_PX) + OVERSCAN,
-    );
-    setVirtualWindow((prev) => (prev.start === startIndex && prev.end === endIndex ? prev : { start: startIndex, end: endIndex }));
-  };
-
-  calculateWindow();
-  container.addEventListener('scroll', calculateWindow, { passive: true });
-  return () => container.removeEventListener('scroll', calculateWindow);
-}, [filteredSlots.length, virtualizationEnabled]);
-
-useEffect(() => {
-  if (!virtualizationEnabled) return;
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(
-    new CustomEvent('onecare:rum', {
-      detail: {
-        feature: 'booking_slots_virtualization',
-        totalSlots: filteredSlots.length,
-      },
+  const effectiveFilters = useMemo<BookingFilterState>(
+    () => ({
+      ...debouncedFilters,
+      serviceType: undefined,
+      location: undefined,
     }),
+    [debouncedFilters],
   );
-}, [filteredSlots.length, virtualizationEnabled]);
+
+  const filteredSlots = useMemo(
+    () => filterSlots(slots, effectiveFilters),
+    [slots, effectiveFilters],
+  );
+
+  const virtualizationEnabled = filteredSlots.length > VIRTUALIZATION_THRESHOLD;
+
+  useEffect(() => {
+    if (!virtualizationEnabled) {
+      setVirtualWindow({ start: 0, end: filteredSlots.length });
+      return;
+    }
+    const container = listContainerRef.current;
+    if (!container) {
+      setVirtualWindow({
+        start: 0,
+        end: Math.min(filteredSlots.length, VIRTUALIZATION_THRESHOLD + OVERSCAN),
+      });
+      return;
+    }
+
+    const calculateWindow = () => {
+      const scrollTop = container.scrollTop;
+      const viewportHeight = container.clientHeight || 1;
+      const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT_PX) - OVERSCAN);
+      const endIndex = Math.min(
+        filteredSlots.length,
+        Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT_PX) + OVERSCAN,
+      );
+      setVirtualWindow((prev) =>
+        prev.start === startIndex && prev.end === endIndex ? prev : { start: startIndex, end: endIndex },
+      );
+    };
+
+    calculateWindow();
+    container.addEventListener('scroll', calculateWindow, { passive: true });
+    return () => container.removeEventListener('scroll', calculateWindow);
+  }, [filteredSlots.length, virtualizationEnabled]);
+
+  useEffect(() => {
+    if (!virtualizationEnabled) return;
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(
+      new CustomEvent('onecare:rum', {
+        detail: {
+          feature: 'booking_slots_virtualization',
+          totalSlots: filteredSlots.length,
+        },
+      }),
+    );
+  }, [filteredSlots.length, virtualizationEnabled]);
 
   useEffect(() => {
     if (!filteredSlots.length) {
@@ -410,8 +427,10 @@ useEffect(() => {
               id="filter-from"
               type="date"
               value={filters.from ?? ''}
-              onChange={(event) => setFilters((prev) => ({ ...prev, from: event.target.value || undefined }))}
-              max={filters.to}
+              onChange={(event) =>
+                setFilters((prev) => applyFromFilter(prev, event.target.value || undefined))
+              }
+              max={filters.to ?? undefined}
             />
           </div>
           <div className="filter-group">
@@ -420,8 +439,10 @@ useEffect(() => {
               id="filter-to"
               type="date"
               value={filters.to ?? ''}
-              onChange={(event) => setFilters((prev) => ({ ...prev, to: event.target.value || undefined }))}
-              min={filters.from}
+              onChange={(event) =>
+                setFilters((prev) => applyToFilter(prev, event.target.value || undefined))
+              }
+              min={filters.from ?? undefined}
             />
           </div>
         </fieldset>

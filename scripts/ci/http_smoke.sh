@@ -66,9 +66,13 @@ status=0
 for endpoint in "${ENDPOINTS[@]}"; do
   url="${BASE_URL%/}/${endpoint#/}"
   echo "→ Checking ${url}"
-  http_code=$(curl --fail --silent --show-error --max-time "$TIMEOUT" --write-out '%{http_code}' --output /tmp/http_smoke_body "${url}" || true)
-  body=$(cat /tmp/http_smoke_body)
-  rm -f /tmp/http_smoke_body
+  tmp_body=$(mktemp 2>/dev/null || printf '/tmp/http_smoke_%s' "$$")
+  http_code=$(curl --fail --silent --show-error --max-time "$TIMEOUT" --write-out '%{http_code}' --output "${tmp_body}" "${url}" || true)
+  body=""
+  if [[ -f "${tmp_body}" ]]; then
+    body=$(cat "${tmp_body}")
+    rm -f "${tmp_body}"
+  fi
   if [[ "$http_code" != "$EXPECT" ]]; then
     echo "ERROR: ${url} returned status ${http_code}, expected ${EXPECT}" >&2
     echo "Response body: ${body}" >&2

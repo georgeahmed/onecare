@@ -6,7 +6,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { ThemeProvider } from '../src/theme';
 import { I18nProvider } from '../src/i18n';
 import ActionBar from '../src/components/ActionBar';
-import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
+import type { ClinicianTaskDetail } from '@onecare/events';
 
 const detail: ClinicianTaskDetail = {
   id: 'task-1',

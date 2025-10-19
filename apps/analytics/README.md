@@ -7,7 +7,7 @@ Environment
 - `ANALYTICS_SINK_PATH`: Optional override for the sink path. Defaults to `var/analytics/metrics.jsonl` relative to the repo root.
 
 Consumer
-- `startAnalyticsConsumer()` subscribes to `Topics.analytics.metric`, validates payloads against the schema, writes to the configured sink, and ships validation/persistence failures to the DLQ via thrown errors (`AnalyticsMetricValidationError`, `AnalyticsMetricSinkError`).
+- `startAnalyticsConsumer()` subscribes to `Topics.analytics.metric`, validates payloads against the schema, sanitizes labels, writes to the configured sink, and publishes validation/persistence failures to the DLQ (using `AnalyticsMetricValidationError` and `AnalyticsMetricSinkError` internally for classification).
 
 Docker
 - Service name `analytics` is available in `docker-compose.yml`; metrics persist under the `analytics-metrics` volume at `/var/analytics/metrics.jsonl`.

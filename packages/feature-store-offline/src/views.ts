@@ -115,7 +115,6 @@ function computeSlidingAggregates(
       const numericValues = inWindow
         .map((snapshot) => snapshot.payload[field])
         .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-      const key = normaliseFieldKey(field);
       averages[field][spec.name] = computeMean(numericValues);
     }
   }
@@ -125,9 +124,10 @@ function computeSlidingAggregates(
     latest.generatedAt = mostRecent.generatedAt;
     latest.featureSet = mostRecent.featureSet;
     for (const field of fields) {
-      if (field in mostRecent.payload) {
+      const raw = mostRecent.payload[field];
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
         const key = normaliseFieldKey(field);
-        latest[key] = mostRecent.payload[field];
+        latest[key] = raw;
       }
     }
   }
@@ -165,6 +165,11 @@ function materializeTriageSlidingWindow(options: FeatureViewMaterializeOptions, 
 
     const asOfMs = asOfOverride ?? toTimestamp(sorted[sorted.length - 1]!.generatedAt)!;
     const aggregates = computeSlidingAggregates(sorted, windows, TRIAGE_NUMERIC_FIELDS, asOfMs);
+    const latestGeneratedAt =
+      typeof aggregates.latest.generatedAt === 'string' ? (aggregates.latest.generatedAt as string) : undefined;
+    if (!latestGeneratedAt) {
+      continue;
+    }
 
     const payload = {
       schemaVersion: 'v1',

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ClinicianTaskSummary } from '@onecare/events/src/contracts/clinician-task-summary';
+import type { ClinicianTaskSummary } from '@onecare/events';
 import { queueGateway } from '../adapters/gateway';
 import { Link } from 'react-router-dom';
 import { useIntl } from 'react-intl';

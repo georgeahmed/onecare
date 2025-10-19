@@ -198,7 +198,9 @@ def _collect_red_flag_hits(
             continue
         confidence = mention.get("confidence")
         if confidence is None:
-            confidence = mention.get("score") or mention.get("probability")
+            confidence = mention.get("score")
+        if confidence is None:
+            confidence = mention.get("probability")
         confidence_value = _coerce_probability(confidence)
         if confidence_value is None:
             confidence_value = 1.0

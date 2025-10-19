@@ -19,7 +19,25 @@ fi
 
 python3 - "$PSI" "$JS" "$FRESHNESS" "$SHADOW" <<'PY'
 import sys
-psi, js, freshness, shadow = map(float, sys.argv[1:])
+from typing import Any
+
+def to_float(value: Any) -> float:
+    if value is None:
+        raise ValueError("missing value")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        for suffix in ('ms', '%'):
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[: -len(suffix)]
+        cleaned = cleaned.strip()
+        if not cleaned:
+            raise ValueError(f"empty numeric value: {value!r}")
+        return float(cleaned)
+    raise TypeError(f"unsupported metric type {type(value)!r}")
+
+psi, js, freshness, shadow = (to_float(arg) for arg in sys.argv[1:])
 errors = []
 if psi > 0.3:
     errors.append(f"psi {psi:.3f} exceeds 0.3")

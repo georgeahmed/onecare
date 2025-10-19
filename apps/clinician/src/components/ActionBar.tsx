@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
-import type { ClinicianTaskDetail } from '@onecare/events/src/contracts/clinician-task-detail';
+import type { ClinicianTaskDetail } from '@onecare/events';
 
 type ActionKind = 'call' | 'schedule' | 'book' | 'escalate' | 'resolve';
 

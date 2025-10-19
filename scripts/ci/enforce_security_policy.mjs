@@ -46,12 +46,61 @@ function meetsThreshold(severity, threshold) {
   return toSeverityValue(severity) >= toSeverityValue(threshold);
 }
 
+function normaliseLicenseId(license) {
+  if (!license || typeof license !== 'string') return '';
+  return license
+    .trim()
+    .replace(/\s+WITH\s+.*$/i, '')
+    .replace(/[()]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .toUpperCase();
+}
+
+function collectLicenseTokens(raw) {
+  const queue = Array.isArray(raw) ? [...raw] : raw !== undefined && raw !== null ? [raw] : [];
+  const tokens = new Set();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (typeof current === 'string') {
+      const fragments = current
+        .split(/[,/]/)
+        .flatMap((fragment) => fragment.split(/\s+OR\s+|\s+AND\s+/i))
+        .map((fragment) => normaliseLicenseId(fragment));
+      for (const fragment of fragments) {
+        if (fragment) tokens.add(fragment);
+      }
+      continue;
+    }
+    if (typeof current === 'object') {
+      const candidates = ['license', 'type', 'name', 'id'];
+      for (const field of candidates) {
+        if (current[field]) queue.push(current[field]);
+      }
+      if (Array.isArray(current.licenses)) {
+        queue.push(...current.licenses);
+      }
+    }
+  }
+  if (tokens.size === 0) {
+    tokens.add('UNKNOWN');
+  }
+  return Array.from(tokens);
+}
+
 const policy = readJson(options.policy ?? 'config/security/vuln-policy.json');
 const licensePolicy = readJson(options['license-policy'] ?? 'config/security/license-policy.json');
 
 const allowlist = Array.isArray(policy.allowlist) ? policy.allowlist : [];
 const severityThreshold = policy.severityThreshold ?? 'high';
 const now = new Date();
+const allowedLicenses = new Set(
+  Array.isArray(licensePolicy.allowedLicenses)
+    ? licensePolicy.allowedLicenses.map((license) => normaliseLicenseId(license)).filter(Boolean)
+    : []
+);
+const licenseExceptions = Array.isArray(licensePolicy.exceptions) ? licensePolicy.exceptions : [];
 
 function isAllowed(source, pkg, id) {
   return allowlist.some((entry) => {
@@ -166,47 +215,49 @@ function collectTrivyFindings(path) {
 function collectLicenseFindings(path) {
   const report = readJson(path, true);
   if (!report) return;
-  const allowed = new Set(Array.isArray(licensePolicy.allowedLicenses) ? licensePolicy.allowedLicenses : []);
-  const exceptions = Array.isArray(licensePolicy.exceptions) ? licensePolicy.exceptions : [];
-  const exceptionMatches = (pkg, license) => {
-    return exceptions.some((entry) => {
+
+  const matchesException = (pkg, tokens) =>
+    licenseExceptions.some((entry) => {
       if (entry.package && entry.package !== pkg) return false;
-      if (entry.license && entry.license !== license) return false;
       if (entry.expires) {
         const expiry = new Date(entry.expires);
         if (Number.isNaN(expiry.valueOf()) || expiry < now) {
           return false;
         }
       }
+      if (entry.license) {
+        const normalized = normaliseLicenseId(entry.license);
+        return normalized ? tokens.includes(normalized) : false;
+      }
       return true;
     });
-  };
 
   for (const [pkg, meta] of Object.entries(report)) {
-    const license = meta.licenses ?? 'UNKNOWN';
-    const normalized = String(license)
-      .split(/[\s]*[|/&][\s]*/g)
-      .flatMap((fragment) => fragment.split(/\s+OR\s+|\s+AND\s+/i))
-      .map((fragment) => fragment.trim())
-      .filter(Boolean);
-    if (normalized.length === 0) {
-      normalized.push('UNKNOWN');
+    const rawLicense = meta.licenses ?? meta.license ?? meta ?? 'UNKNOWN';
+    const tokens = collectLicenseTokens(rawLicense);
+    if (matchesException(pkg, tokens)) {
+      continue;
     }
-    const disallowed = normalized.filter((name) => !allowed.has(name));
-    if (disallowed.length > 0 && !exceptionMatches(pkg, license)) {
+    const disallowed = tokens.filter((token) => !allowedLicenses.has(token));
+    if (disallowed.length > 0) {
       addViolation('license', {
         package: pkg,
-        license,
+        license: Array.isArray(rawLicense) ? JSON.stringify(rawLicense) : String(rawLicense ?? 'UNKNOWN'),
         disallowed,
       });
     }
   }
 }
 
-collectNpmFindings(options.npm ?? 'npm-audit.json');
-collectPipFindings(options.pip ?? 'pip-audit.json');
-collectTrivyFindings(options.trivy ?? 'trivy-results.json');
-collectLicenseFindings(options.license ?? 'license-report.json');
+const npmReportPath = options['npm-report'] ?? options.npm ?? 'npm-audit.json';
+const pipReportPath = options['pip-report'] ?? options.pip ?? 'pip-audit.json';
+const trivyReportPath = options['trivy-report'] ?? options.trivy ?? 'trivy-results.json';
+const licenseReportPath = options['license-report'] ?? options.license ?? 'license-report.json';
+
+collectNpmFindings(npmReportPath);
+collectPipFindings(pipReportPath);
+collectTrivyFindings(trivyReportPath);
+collectLicenseFindings(licenseReportPath);
 
 if (violations.length > 0) {
   console.error('❌ Security policy violations detected:\n');

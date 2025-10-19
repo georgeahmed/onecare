@@ -9,49 +9,49 @@ spec:
   groups:
     - name: telephony-slo
       rules:
-        - alert: TelephonySessionLatencyFast
+        - alert: TelephonyIngressLatency
           expr: |
             histogram_quantile(
               0.95,
-              sum(rate(telephony_session_setup_ms_bucket[5m])) by (le)
-            ) > 4000
-          for: 5m
-          labels:
-            severity: critical
-            slo: telephony-latency
-            team: telephony
-          annotations:
-            summary: "Telephony WebRTC setup latency above target"
-            description: "WebRTC session setup p95 exceeded 4s for 5 minutes."
-            runbook: https://onecare/runbooks/oncall#telephony-webrtc
-        - alert: TelephonySessionLatencySlow
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum(rate(telephony_session_setup_ms_bucket[30m])) by (le)
-            ) > 4000
-          for: 30m
+              sum(rate(telephony_http_duration_ms_bucket{path="/calls"}[10m])) by (le)
+            ) > 10000
+          for: 15m
           labels:
             severity: warning
-            slo: telephony-latency
+            slo: telephony-transcription
             team: telephony
+            service: telephony
           annotations:
-            summary: "Telephony WebRTC latency trending high"
-            description: "WebRTC session setup p95 exceeded 4s for 30 minutes."
-            runbook: https://onecare/runbooks/oncall#telephony-webrtc
-        - alert: TelephonyFailureRate
+            summary: "Telephony transcription p95 >10s"
+            description: "Call ingestion latency exceeded 10 seconds (p95) for 15 minutes."
+            runbook: https://onecare/runbooks/telephony
+        - alert: TelephonyErrorRate
           expr: |
-            (
-              rate(telephony_session_failed_total[5m])
-              /
-              rate(telephony_session_started_total[5m])
-            ) > 0.04
+            sum(rate(telephony_http_requests_total{path="/calls",status=~"server_error|fatal_error"}[5m])) /
+            clamp_min(sum(rate(telephony_http_requests_total{path="/calls"}[5m])), 1)
+            > 0.05
           for: 10m
           labels:
             severity: critical
             slo: telephony-error
             team: telephony
+            service: telephony
           annotations:
-            summary: "Telephony session failure rate above threshold"
-            description: "Telephony failure rate exceeded 4% for 10 minutes (double the 2% budget)."
-            runbook: https://onecare/runbooks/oncall#telephony-webrtc
+            summary: "Telephony server error rate >5%"
+            description: "Telephony ingress is returning server errors or fatal errors for more than 5% of requests over 10 minutes."
+            runbook: https://onecare/runbooks/telephony
+        - alert: TelephonyRateLimitSpike
+          expr: |
+            sum(rate(telephony_reject_total{reason=~"over_capacity|rate_limit"}[10m])) /
+            clamp_min(sum(rate(telephony_http_requests_total{path="/calls"}[10m])), 1)
+            > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            slo: telephony-backpressure
+            team: telephony
+            service: telephony
+          annotations:
+            summary: "Telephony ingress rejecting >10% of calls"
+            description: "Rejections due to over-capacity or rate limiting exceeded 10% of call attempts for 15 minutes."
+            runbook: https://onecare/runbooks/telephony

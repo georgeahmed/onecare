@@ -86,8 +86,8 @@ By adhering to these guidelines, alerts stay actionable, fatigue is reduced, and
 ## Feature View Monitoring
 
 - **Metrics**: the feature-view materialiser exports `feature.views.run` (counter) and `feature.views.duration_ms` (histogram). Scrape them via the same OTEL/metrics exporter wiring used for other CLIs.
-- **Dashboards**: add a panel showing `increase(feature_views_run_total{view="triage-core.sliding-windows"}[1h])` plus a duration heatmap (`histogram_quantile(0.95, rate(feature_views_duration_ms_bucket{view="triage-core.sliding-windows"}[15m]))`).
+- **Dashboards**: add a panel showing `increase(analytics_ingest_ok_total{metricName="triage-core"}[1h])` plus a duration heatmap (`histogram_quantile(0.95, rate(analytics_ingest_lag_ms_bucket{metricName="triage-core"}[15m]))`).
 - **Alerts**:
   - *Stalled job*: fire if `increase(feature_views_run_total{view="triage-core.sliding-windows"}[30m]) == 0` for `for: 10m`.
-  - *Slow job*: compare the p95 duration against your SLA (e.g., `histogram_quantile(0.95, rate(feature_views_duration_ms_bucket{view="triage-core.sliding-windows"}[15m])) > 120000`).
+  - *Slow job*: compare the p95 duration against your SLA (e.g., `histogram_quantile(0.95, rate(analytics_ingest_lag_ms_bucket{metricName="triage-core"}[15m])) > 120000`).
 - **Runbooks**: link alerts to `docs/FEATURE_VIEWS.md` and the materialiser section of this guide so on-call engineers can replay the job (`npm run feature:views -- --online`) or inspect recent runs.

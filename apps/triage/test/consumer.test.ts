@@ -5,6 +5,7 @@ import type { ResolvedConfig } from '@onecare/config';
 import type { IdempotencyStore, QueueNotifier, FhirRepository, FhirResourceRef } from '@onecare/ports';
 import { InMemoryQueueNotifier } from '@onecare/ports';
 import { TriageConsumer, type TriageConsumerOptions } from '../src/adapters/consumer';
+import { assertValidTriageInput } from '../src/application/contracts';
 import { resetMetrics, getCounterRecords } from '@onecare/observability';
 
 function buildConfig(): ResolvedConfig {
@@ -108,6 +109,7 @@ describe('TriageConsumer', () => {
         fhirRepository: createFhirRepository({ createTask: createTaskMock }),
       }),
     );
+    expect((consumer as unknown as { queueNotifier?: QueueNotifier }).queueNotifier).toBe(queueNotifier);
 
     const tasksPublished: Array<{ envelope: TypedEnvelope<unknown>; headers?: Record<string, string> }> = [];
     const tasksSubscription = await bus.subscribe(Topics.tasks.created, (msg) => {
@@ -124,6 +126,7 @@ describe('TriageConsumer', () => {
         risk: 0.7,
       },
     };
+    assertValidTriageInput(payload);
     const envelope = createEnvelope(Topics.triage.input, payload, 'corr-123');
     const headers = {
       'x-idempotency-key': 'triage-ingress-1',

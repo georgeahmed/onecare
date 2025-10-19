@@ -85,13 +85,17 @@ class LatencyMetrics:
 
     def observe(self, value_ms: float) -> dict[str, Optional[float]]:
         with self._lock:
+            if self._samples.maxlen is not None and len(self._samples) == self._samples.maxlen:
+                self._samples.popleft()
             self._samples.append(value_ms)
-            self._count += 1
-            self._sum += value_ms
-            for idx, upper in enumerate(self._buckets):
-                if value_ms <= upper:
-                    self._counts[idx] += 1
-                    break
+            self._sum = float(sum(self._samples))
+            self._count = len(self._samples)
+            self._counts = [0] * len(self._buckets)
+            for sample in self._samples:
+                for idx, upper in enumerate(self._buckets):
+                    if sample <= upper:
+                        self._counts[idx] += 1
+                        break
             p50 = _quantile(self._samples, 0.5)
             p95 = _quantile(self._samples, 0.95)
             return {"p50": p50, "p95": p95}

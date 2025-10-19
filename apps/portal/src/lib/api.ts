@@ -25,6 +25,7 @@ const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'unauthorized',
   'forbidden',
   'invalid_input',
+  'not_found',
   'unsupported_media_type',
   'payload_too_large',
   'conflict',
@@ -32,7 +33,9 @@ const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'upstream_unavailable',
   'internal_error',
   'too_many_requests',
+  'rate_limited',
   'busy',
+  'over_capacity',
   'invalid_fhir'
 ] as const;
 
@@ -52,6 +55,24 @@ export interface FetchBookingSlotsOptions {
   correlationId?: string;
 }
 
+const normalizeBookingModality = (value: unknown): BookingModality | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const canonical = normalized.replace(/[\s-]+/g, '_');
+  if (canonical === 'phone' || canonical === 'telephone') {
+    return 'phone';
+  }
+  if (canonical === 'in_person' || canonical === 'inperson' || canonical === 'in_person_visit') {
+    return 'in_person';
+  }
+  return null;
+};
+
 const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
   if (typeof value !== 'object' || value === null) {
     return null;
@@ -60,13 +81,10 @@ const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
   const id = typeof record.id === 'string' ? record.id : undefined;
   const start = typeof record.start === 'string' ? record.start : undefined;
   const end = typeof record.end === 'string' ? record.end : undefined;
-  const modality = record.modality;
+  const modality = normalizeBookingModality(record.modality);
+  const serviceType = typeof record.serviceType === 'string' ? record.serviceType.trim() : undefined;
 
-  if (!id || !start || !end) {
-    return null;
-  }
-
-  if (modality !== 'phone' && modality !== 'in_person') {
+  if (!id || !start || !end || !modality) {
     return null;
   }
 
@@ -78,7 +96,8 @@ const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
     id,
     start,
     end,
-    modality: modality as BookingModality,
+    modality,
+    serviceType: serviceType && serviceType.length > 0 ? serviceType : undefined,
     location
   };
 };
@@ -120,6 +139,12 @@ export const fetchBookingSlots = async (
   if (filters.to) {
     params.set('to', filters.to);
   }
+  if (filters.serviceType) {
+    params.set('serviceType', filters.serviceType);
+  }
+  if (filters.location) {
+    params.set('location', filters.location);
+  }
 
   const query = params.toString();
   const path = query ? `booking/slots?${query}` : 'booking/slots';
@@ -130,7 +155,7 @@ export const fetchBookingSlots = async (
       signal: options.signal,
       timeoutMs: options.timeoutMs ?? DEFAULT_BOOKING_TIMEOUT_MS,
       correlationId: options.correlationId,
-      cacheKey: `booking:${path}`,
+      cacheKey: `booking:${baseUrl.replace(/\/$/, '')}:${path}`,
       cacheTtlMs: 30_000,
       retry: { maxRetries: 1, baseDelayMs: 200, jitter: true }
     });
@@ -343,7 +368,7 @@ export const confirmBooking = async (
       correlationId,
       requestId,
       headers: {
-        'idempotency-key': options.idempotencyKey
+        'Idempotency-Key': options.idempotencyKey
       },
       retry: { maxRetries: 1, baseDelayMs: 300, jitter: true }
     });

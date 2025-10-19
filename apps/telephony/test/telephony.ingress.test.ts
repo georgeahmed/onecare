@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AddressInfo } from 'node:net';
 
-import { resetMetrics } from '@onecare/observability';
+import { getCounterRecords, resetMetrics } from '@onecare/observability';
 import type { MessageBus } from '@onecare/bus';
 
 import { createTelephonyServer, type TelephonyIngressOptions } from '../src/index';
@@ -21,7 +21,7 @@ function createTestBus(): MessageBus {
 
 function listen(server: ReturnType<typeof createTelephonyServer>): Promise<number> {
   return new Promise((resolve, reject) => {
-    server.listen(0, () => {
+    server.listen(0, '127.0.0.1', () => {
       const address = server.address() as AddressInfo | null;
       if (!address) {
         reject(new Error('server_address_unavailable'));
@@ -64,6 +64,43 @@ describe('telephony ingress server', () => {
       await server.initiateShutdown?.();
       server = null;
     }
+  });
+
+  it('records http request metrics with status labels', async () => {
+    const bus = createTestBus();
+    const transcribe = vi.fn(async () => ({ text: 'transcribed' }));
+    const classify = vi.fn(async () => ({ intent: 'telephony.callback' }));
+
+    server = createTelephonyServer({ bus, asrClient: { transcribe }, intentClassifier: { classify } });
+    const port = await listen(server);
+
+    const payload = {
+      callId: 'metrics-001',
+      audioRef: 'memory://metrics-001',
+      metadata: { callerId: '+15550000001', practiceId: 'demo-practice' },
+    };
+
+    const accepted = await postJson(port, '/calls', payload);
+    expect(accepted.status).toBe(202);
+
+    const notFoundResponse = await fetch(`http://127.0.0.1:${port}/missing`, { method: 'GET' });
+    expect(notFoundResponse.status).toBe(404);
+    await notFoundResponse.json();
+
+    const records = getCounterRecords('telephony.http.requests');
+    const outcomes = records.map((record) => record.attributes);
+    expect(outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: '202', path: '/calls', method: 'POST', outcome: 'accepted' }),
+        expect.objectContaining({ status: '404', path: '/missing', method: 'GET', outcome: 'not_found' }),
+      ]),
+    );
+
+    const metricsResponse = await fetch(`http://127.0.0.1:${port}/metrics`);
+    expect(metricsResponse.status).toBe(200);
+    const metricsText = await metricsResponse.text();
+    expect(metricsText).toMatch(/telephony_http_duration_ms_count \d+/);
+    expect(metricsText).toContain('telephony_http_requests_total{method="POST",path="/calls",status="202",outcome="accepted"} 1');
   });
 
   it('returns 503 over_capacity when concurrency limit is reached', async () => {

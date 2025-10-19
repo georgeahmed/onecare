@@ -21,6 +21,8 @@ const generateKey = (filters: BookingFilterState): string => {
     modality: filters.modality,
     from: filters.from ?? null,
     to: filters.to ?? null,
+    serviceType: filters.serviceType ? filters.serviceType.trim() : null,
+    location: filters.location ? filters.location.trim() : null,
   };
   return JSON.stringify(normalized);
 };

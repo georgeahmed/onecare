@@ -6,8 +6,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(safety_gate_request_latency_seconds_bucket{endpoint="analyze"}[5m]))
-            by (le)
+            sum(rate(safety_gate_request_latency_seconds_bucket{endpoint="analyze"}[5m])) by (le)
           ) > 0.9
         for: 10m
         labels:
@@ -32,7 +31,7 @@ groups:
         annotations:
           summary: "Safety Gate error rate above 3%"
           runbook: "https://onecare/internal/docs/MLOPS_ROLLOUTS"
-          description: "Error budget burnout detected. Trigger rollback."
+          description: "Server error or drop rate exceeded 3% over the last 5 minutes."
 
       - alert: SafetyGateThrottleHigh
         expr: |

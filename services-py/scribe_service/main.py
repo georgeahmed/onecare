@@ -71,6 +71,9 @@ def _sanitize_audio_request(audio: ScribeAudio) -> dict[str, Any]:
     elif parsed.scheme == "s3":
         if not parsed.netloc:
             raise _audio_validation_error("missing_bucket")
+        object_path = parsed.path or ""
+        if not object_path or object_path == "/":
+            raise _audio_validation_error("missing_object_key")
 
     normalized_url = parsed.geturl()
     if len(normalized_url) > 2048:

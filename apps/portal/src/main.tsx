@@ -3,8 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import AppErrorBoundary from './components/AppErrorBoundary';
+import { I18nProvider } from './i18n';
 import { startPerformanceMonitoring } from './lib/performance';
 import { safeLog } from './lib/telemetry';
+import { ThemeProvider } from './theme';
 import './styles/global.css';
 
 const rootElement = document.getElementById('root');
@@ -49,9 +51,13 @@ if (typeof window !== 'undefined') {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AppErrorBoundary>
-        <App />
-      </AppErrorBoundary>
+      <I18nProvider>
+        <ThemeProvider>
+          <AppErrorBoundary>
+            <App />
+          </AppErrorBoundary>
+        </ThemeProvider>
+      </I18nProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

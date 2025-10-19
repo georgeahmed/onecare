@@ -33,15 +33,15 @@ This document describes the current SLO catalogue across OneCare services. A con
 
 | Dimension | Objective | Measurement | Error Budget & Response |
 |-----------|-----------|-------------|-------------------------|
-| Feature Materialiser SLA | p95 ≤ **120 s** per run | `histogram_quantile(0.95, sum(rate(feature_views_duration_ms_bucket[15m])) by (view, le))` | 5 % budget. Breach ⇒ queue rerun + inspect upstream data freshness. |
+| Feature Materialiser SLA | p95 ≤ **120 s** per run | `histogram_quantile(0.95, sum(rate(analytics_ingest_lag_ms_bucket[15m])) by (metricName, le))` | 5 % budget. Breach ⇒ queue rerun + inspect upstream data freshness. |
 | Job Freshness | < **30 m** lag between scheduled run and completion | Compare `time() - last_success_timestamp` exported by materialiser | 30 m budget. Alert if `>1800 s` for 10 m. |
 
 ## Telephony & Portal
 
 | Dimension | Objective | Measurement | Error Budget & Response |
 |-----------|-----------|-------------|-------------------------|
-| WebRTC Session Setup | p95 ≤ **4 s** (offer ➝ media established) | `histogram_quantile(0.95, sum(rate(telephony_session_setup_ms_bucket[5m])) by (le))` | 5 % budget. Breach triggers network diagnostics + STUN/TURN failover. |
-| Call Failure Rate | ≤ **2 %** failed sessions per 30 m | `rate(telephony_session_failed_total[5m]) / rate(telephony_session_started_total[5m])` | 2 % budget. Two adjacent burn windows page telephony / network SRE. |
+| Call Ingest Latency | p95 ≤ **10 s** (`POST /calls`) | `histogram_quantile(0.95, sum(rate(telephony_http_duration_ms_bucket{path="/calls"}[10m])) by (le))` | Monitor ASR + routing latency; breach drives IVR fallback discussion. |
+| Ingress Error Rate | ≤ **5 %** `server_error` or `fatal_error` responses | `sum(rate(telephony_http_requests_total{path="/calls",status=~"server_error|fatal_error"}[5m])) / sum(rate(telephony_http_requests_total{path="/calls"}[5m]))` | Sustained overage pages telephony on-call to inspect dependencies and idempotency. |
 
 ## Scribe Service
 

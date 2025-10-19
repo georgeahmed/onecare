@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react';
 import { useIntl } from 'react-intl';
 import type { BookingSlot } from '../../lib/booking';
 import type { EnhancedAccessWindow } from '../../lib/enhancedAccess';
@@ -160,7 +160,22 @@ const BookingCalendar = ({
   const isoDayOrder = useMemo(() => dayOrderZeroBased.map((value) => toIsoDay(value)), [dayOrderZeroBased]);
 
   const dayDescriptors = useMemo<DayDescriptor[]>(() => {
-    const referenceIso = slots.length > 0 ? slots[0].start : new Date().toISOString();
+    const referenceSlot = slots.reduce<BookingSlot | null>((earliest, slot) => {
+      const slotTs = Date.parse(slot.start);
+      if (Number.isNaN(slotTs)) {
+        return earliest;
+      }
+      if (!earliest) {
+        return slot;
+      }
+      const earliestTs = Date.parse(earliest.start);
+      if (Number.isNaN(earliestTs) || slotTs < earliestTs) {
+        return slot;
+      }
+      return earliest;
+    }, null);
+
+    const referenceIso = referenceSlot?.start ?? new Date().toISOString();
     const referenceDate = new Date(referenceIso);
     const referenceIsoDay = getZonedDayAndMinutes(referenceIso, timezone)?.day ?? 1;
     const referenceZeroDay = fromIsoDay(referenceIsoDay);
@@ -378,7 +393,8 @@ const BookingCalendar = ({
     }
   };
 
-  const instructionsId = 'booking-calendar-instructions';
+  const titleId = useId();
+  const instructionsId = useId();
 
   if (!windows || windows.length === 0) {
     return (
@@ -394,8 +410,8 @@ const BookingCalendar = ({
   } as const;
 
   return (
-    <section className="booking-calendar" aria-labelledby="booking-calendar-title" dir={direction}>
-      <div id="booking-calendar-title" className="booking-calendar__title">
+    <section className="booking-calendar" aria-labelledby={titleId} dir={direction}>
+      <div id={titleId} className="booking-calendar__title">
         {intl.formatMessage({ id: 'booking.calendar.heading' })}
       </div>
       <p id={instructionsId} className="visually-hidden">

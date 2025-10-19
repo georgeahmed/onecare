@@ -117,4 +117,64 @@ describe('triage sliding window materialisation', () => {
     });
     expect(result['triage-core.sliding-windows']).toHaveLength(2);
   });
+
+  it('retains latest snapshot data even when short windows have no samples', () => {
+    const materialised = materializeFeatureView('triage-core.sliding-windows', {
+      snapshots: baseSnapshots,
+      asOf: '2025-01-09T20:00:00.000Z',
+    });
+
+    const patientOne = materialised.find((snapshot) => snapshot.entityId === 'patient-001');
+    expect(patientOne).toBeDefined();
+
+    const payload = (patientOne?.payload ?? {}) as Record<string, unknown>;
+    const latest = (payload.latest ?? {}) as Record<string, unknown>;
+    expect(latest.generatedAt).toBe('2025-01-09T12:00:00.000Z');
+    expect(latest.acuity).toBeCloseTo(0.9, 5);
+    expect(latest.compositeScore).toBeCloseTo(0.75, 5);
+  });
+
+  it('skips entities when no snapshots exist before the as-of timestamp', () => {
+    const materialised = materializeFeatureView('triage-core.sliding-windows', {
+      snapshots: baseSnapshots,
+      asOf: '2025-01-05T00:00:00.000Z',
+    });
+
+    expect(materialised).toHaveLength(0);
+  });
+
+  it('omits non-numeric fields from the latest payload view', () => {
+    const snapshots: FeatureSnapshot[] = [
+      ...baseSnapshots,
+      {
+        featureSet: 'triage-core',
+        entityId: 'patient-003',
+        generatedAt: '2025-01-09T09:00:00.000Z',
+        payload: {
+          schemaVersion: 'v1.0.0',
+          generatedAt: '2025-01-09T09:00:00.000Z',
+          acuity: '0.9',
+          risk: 0.4,
+          complexity: 0.1,
+          time: 0.2,
+          capacity: 0.1,
+          compositeScore: 0.5,
+        },
+      },
+    ];
+
+    const materialised = materializeFeatureView('triage-core.sliding-windows', {
+      snapshots,
+      asOf: '2025-01-09T12:00:00.000Z',
+    });
+
+    const patientThree = materialised.find((snapshot) => snapshot.entityId === 'patient-003');
+    expect(patientThree).toBeDefined();
+
+    const payload = (patientThree?.payload ?? {}) as Record<string, unknown>;
+    const latest = (payload.latest ?? {}) as Record<string, unknown>;
+    expect(latest.generatedAt).toBe('2025-01-09T09:00:00.000Z');
+    expect(latest.acuity).toBeUndefined();
+    expect(latest.risk).toBeCloseTo(0.4, 5);
+  });
 });

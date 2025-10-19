@@ -1,8 +1,18 @@
 /// <reference types="vitest/globals" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/lib/telemetry', async () => {
+  const actual = await vi.importActual<typeof import('../src/lib/telemetry')>('../src/lib/telemetry');
+  return {
+    ...actual,
+    recordRumEvent: vi.fn(),
+    safeLog: vi.fn()
+  };
+});
+
 import { clearDataClientCache, getJson, postJson } from '../src/lib/dataClient';
-import { getSessionCorrelationId } from '../src/lib/telemetry';
+import { getSessionCorrelationId, recordRumEvent, safeLog } from '../src/lib/telemetry';
 
 const createResponse = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
@@ -64,7 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
 
 describe('dataClient', () => {
@@ -95,5 +105,79 @@ describe('dataClient', () => {
       'x-session-correlation-id': correlation,
       'content-type': 'application/json'
     });
+  });
+
+  it('returns undefined for 204 responses', async () => {
+    const response = new Response(null, { status: 204 });
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValue(response);
+
+    const result = await getJson('empty', { baseUrl: 'https://api.demo/' });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('preserves sensitive header values while trimming whitespace', async () => {
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValue(createResponse({ ok: true }));
+
+    await postJson('secure', {
+      baseUrl: 'https://api.demo/',
+      headers: {
+        Authorization: '  Bearer super-secret-token  ',
+        'x-api-key': undefined
+      }
+    });
+
+    const [, init] = (globalThis.fetch as unknown as vi.Mock).mock.calls[0];
+    expect((init as RequestInit)?.headers).toMatchObject({
+      Authorization: 'Bearer super-secret-token'
+    });
+    expect(((init as RequestInit)?.headers as Record<string, string>)['x-api-key']).toBeUndefined();
+  });
+
+  it('keeps caller provided content-type and removes generated duplicates', async () => {
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValue(createResponse({ ok: true }));
+
+    await postJson('merge', {
+      baseUrl: 'https://api.demo/',
+      body: { foo: 'bar' },
+      headers: { 'Content-Type': 'application/merge-patch+json' }
+    });
+
+    const [, init] = (globalThis.fetch as unknown as vi.Mock).mock.calls[0];
+    const headers = (init as RequestInit)?.headers as Record<string, string>;
+    const contentTypeKeys = Object.keys(headers).filter((key) => key.toLowerCase() === 'content-type');
+    expect(contentTypeKeys).toEqual(['Content-Type']);
+    expect(headers['Content-Type']).toBe('application/merge-patch+json');
+  });
+
+  it('sends URLSearchParams bodies without forcing JSON serialization', async () => {
+    (globalThis.fetch as unknown as vi.Mock).mockResolvedValue(createResponse({ ok: true }));
+
+    const params = new URLSearchParams({ foo: 'bar' });
+    await postJson('form', {
+      baseUrl: 'https://api.demo/',
+      body: params
+    });
+
+    const [, init] = (globalThis.fetch as unknown as vi.Mock).mock.calls[0];
+    const headers = (init as RequestInit)?.headers as Record<string, string>;
+    expect(headers).not.toHaveProperty('content-type');
+    expect((init as RequestInit)?.body).toBe(params);
+  });
+
+  it('emits telemetry when requests ultimately fail', async () => {
+    (globalThis.fetch as unknown as vi.Mock).mockRejectedValue(new TypeError('network down'));
+
+    await expect(getJson('resource', { baseUrl: 'https://api.demo/' })).rejects.toThrow('network down');
+    expect(recordRumEvent).toHaveBeenCalledWith(
+      'network.request.failure',
+      expect.objectContaining({
+        method: 'GET',
+        path: 'resource',
+        attemptCount: 1,
+        error: 'network down'
+      })
+    );
+    expect(safeLog).toHaveBeenCalledWith('dataClient.request.failed', expect.objectContaining({ path: 'resource' }));
   });
 });

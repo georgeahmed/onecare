@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { MessageBus } from '@onecare/bus';
 import { Topics, type TypedEnvelope, createEnvelope } from '@onecare/events';
-import type { DlqEvent } from '@onecare/events/src/contracts/dlq-event';
+import type { DlqEvent } from '@onecare/events';
 import { validate } from '@onecare/domain';
 import { createCounter, createHistogram, logger } from '@onecare/observability';
 

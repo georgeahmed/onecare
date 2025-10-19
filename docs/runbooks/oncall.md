@@ -57,17 +57,17 @@ This runbook supports SRE and service teams responding to alerts generated from 
 
 ## Analytics Materialiser
 
-1. Check materialiser job dashboard for `feature_views_duration_ms` and recent failures.
+1. Check materialiser job dashboard for `analytics_ingest_lag_ms` (p95) and recent failures.
 2. Re-run job manually (`npm run feature:views -- --online`) in staging to confirm reproducibility.
 3. If upstream data missing, notify data engineering and pause dependent features.
 4. After recovery, update data freshness monitoring thresholds if needed.
 
-## Telephony WebRTC
+## Telephony Ingress
 
-1. Inspect WebRTC setup histogram along with TURN server metrics (`turn_session_active_total`).
-2. Validate network paths (ingress, firewall) and confirm certificate validity.
-3. Switch to backup TURN cluster or enable forced relay (`FORCE_TURN=1`) for rapid mitigation.
-4. Coordinate with network engineering if packet loss or ISP outages detected.
+1. Inspect `telephony_http_duration_ms_bucket{path="/calls"}` for p95 > 10 s and correlate with `telephony_http_requests_total` status labels.
+2. Review `telephony_reject_total` to determine whether rate limiting (`reason="rate_limit"`) or saturation (`reason="over_capacity"`) is driving errors.
+3. Scale workers or relax concurrency caps if over-capacity is sustained; otherwise tune rate-limit inputs with product.
+4. Engage network/IVR teams when latency is external (carrier or ASR fetch) and document mitigation in the incident log.
 
 ## Readiness Instability
 

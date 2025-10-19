@@ -6,7 +6,7 @@ This guide documents the conventions and safeguards that keep our metrics useful
 
 The compose stack now exposes Prometheus on `http://localhost:9090` via the `prometheus` service in `docker-compose.yml`. Configuration lives in `infra/monitoring/prometheus.yml` and includes:
 
-- **Selective scraping** of the OTEL collector (`otel-collector:8888`) and HTTP histogram endpoints (`:9464`) for orchestrator/analytics/booking.
+- **Selective scraping** of the OTEL collector exporters (`otel-collector:9464` for workload metrics, `otel-collector:8888` for collector health) and service endpoints (Safety Gate at `safety-gate:8081/metrics`, telephony ingress via `telephony_http_duration_ms_bucket` / `telephony_http_requests_total`).
 - **Label dropping** for sensitive or high-cardinality labels (`user`, `email`, `token`, `traceId`, etc.).
 - **Histogram focus**: keeps `http_server_duration_{bucket,sum,count}` along with `booking_http_*`, `gp_connect_*`, and `booking_event_*` metrics so dashboards surface booking latency, upstream reliability, and DLQ throughput without excess noise.
 - **15-day retention** via the Prometheus command-line flag for easy local comparisons.
