@@ -60,7 +60,7 @@
 2. Extend registry entry with ownership, freshness, and materialisation updates.
 3. Run `npm run codegen` to refresh generated contracts.
 4. Update ingestion/monitoring components that act on the changed feature set.
-5. Review governance implications (`docs/FEATURE_GOVERNANCE.md` once authored).
+5. Review governance implications (`docs/FEATURE_GOVERNANCE.md`) and update monitoring/backfill docs (`docs/FEATURE_BACKFILL.md`, `docs/FEATURE_MONITORING.md`).
 
 ## Validation
 - `npm run codegen:check` ensures schema + registry remain accessible.
@@ -68,4 +68,3 @@
   - `packages/ports/test/features.registry.test.ts`
   - `packages/feature-store-offline/test/*`
   - `packages/feature-store-ingest/test/*`
-

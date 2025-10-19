@@ -1,60 +1,70 @@
 # Feature Views
 
-## Purpose
-- Provide reusable, versioned transformations on top of base feature sets.
-- Support sliding-window aggregates needed for prioritisation models and operational monitors.
-- Expose consistent metadata for offline (data lake) and online (feature store) materialisation.
+Feature views provide curated projections of underlying feature sets for model training and
+serving. They aggregate or join one or more feature sets into a Point-in-Time (PIT) consistent
+structure consumable by downstream jobs.
 
-## Current Views
+## View Definition
 
-### triage-core.sliding-windows (v1)
-- **Source**: `triage-core`
-- **Target feature set**: `triage-core-windowed`
-- **Windows**: 1h, 6h, 1d, 7d, 30d
-- **Signals**:
-  - Rolling counts of triage submissions per patient (`counts` map)
-  - Rolling averages for numeric fields (`averages.{field}.{window}`)
-  - Latest observed scores (`latest` map)
-- **Freshness**: recompute at least hourly; retain 30 days historical snapshots offline.
-- **Metadata**: each snapshot carries `metadata.viewName`, `metadata.viewVersion`, and the original source feature set.
+Views are defined in `scripts/feature_store/views.js` (and the associated registry metadata). Each
+view specifies:
 
-## Materialisation
+- `viewId` — unique identifier (e.g., `triage-core.sliding-windows`).
+- Source feature sets and entity keys required for joins.
+- Aggregations and lookback windows.
+- Output schema (documented in `docs/FEATURE_SCHEMAS.md`).
 
-### Offline (Delta/Parquet)
-1. Build the package so `@onecare/feature-store-offline` artefacts are available:
-   ```bash
-   npx tsc -p packages/feature-store-offline/tsconfig.json
-   ```
-2. Run the materialiser (writes JSONL and, with `--online`, pushes to the configured online store):
-   ```bash
-   npm run feature:views -- \
-     --input data/triage-core.jsonl \
-     --output var/features/feature-views.jsonl \
-     --view triage-core.sliding-windows \
-     --as-of 2025-01-09T12:00:00Z \
-     --online
-   ```
-   - Set `FEATURE_VIEW_ONLINE_TTL_SECONDS` to override the default 3600s TTL.
-   - Use `--online-module path/to/custom-module` if you supply a bespoke online store implementation.
-3. Optionally emit partition plans by setting `FEATURE_VIEW_PARTITION_ROOT=/lake/features` (logs `planPartition` outputs).
+Example snippet:
 
-### Online (future work)
-- Feed the JSONL output into `@onecare/feature-store-online` using `batchUpsert`.
-- TTL defaults to the view freshness (1 hour). When wiring this into pipelines integrate with `FeatureIngestionWorker` for backfills.
+```js
+{
+  viewId: 'triage-core.sliding-windows',
+  featureSets: ['triage-core'],
+  windows: ['5m', '1h', '24h'],
+  aggregates: ['mean', 'max', 'min'],
+}
+```
 
-## Adding New Views
-1. Define a `FeatureViewDefinition` in `packages/feature-store-offline/src/views.ts` (or a dedicated module) and register it via `registerFeatureView`.
-2. Provide unit tests under `packages/feature-store-offline/test/*` covering aggregation behaviour.
-3. Document the view (source set, windows, freshness) in this file and link it from `docs/FEATURE_README.md` (future consolidation).
-4. Update operational tooling (`scripts/feature_store/views.js`) if additional runtime options are required.
+## CLI
 
-## Telemetry
-- Materialiser emits metrics:
-  - `feature.views.run` counter per view name
-  - `feature.views.duration_ms` histogram for job runtime
-- Sliding-window view compute emits metrics indirectly via the base CLI; add more if additional dashboards are needed.
+`npm run feature:views` wraps the view planner and materialises view outputs.
 
-## Operational Notes
-- Run the materialiser after ingesting base `triage-core` snapshots to keep windowed aggregates fresh.
-- Backfill by pointing `--as-of` at the desired horizon and running per day/week partitions.
-- The CLI is idempotent for a given `(featureSet, entityId, generatedAt)` tuple, so re-running is safe.
+```
+npm run feature:views -- \
+  --input data/triage-core.jsonl \
+  --view triage-core.sliding-windows \
+  --output var/features/views/triage-core-sliding.jsonl \
+  --online
+```
+
+Key flags:
+
+| Flag | Description |
+|------|-------------|
+| `--input` | Source JSONL of base feature snapshots |
+| `--view` | View identifier (see registry) |
+| `--output` | Target JSONL output |
+| `--online` | Push results into the online store in addition to writing JSONL |
+| `--dry-run` | Parse and validate without writing |
+
+## Best Practices
+
+- **PIT correctness** — Always supply snapshots that include `asOf` timestamps; the view planner filters out records newer than the requested evaluation time.
+- **Backfill workflow** — Run `scripts/feature_backfill.js` followed by the view materialisation to ensure upstream features are up to date.
+- **Validation** — After generating a view, run `scripts/feature_store/dq.js` against the view output if DQ rules are defined.
+- **Storage** — Persist view outputs to Delta Lake under `feature_views/<viewId>/eventDate=YYYY-MM-DD/` for reproducibility.
+
+## Onboarding a New View
+
+1. Update the registry entry with view metadata (ownership, aggregation config).
+2. Extend `scripts/feature_store/views.js` with the transformation logic.
+3. Add monitoring entries (SLOs + alerts) to cover the new view.
+4. Document the view (purpose, consumers) in this file.
+
+## Existing Views
+
+| View | Description |
+|------|-------------|
+| `triage-core.sliding-windows` | Rolling aggregates of triage-core features over 5m/1h/24h windows. |
+
+Keep this table in sync as new views are created.

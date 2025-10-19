@@ -36,6 +36,8 @@ export function mapErrorToStatus(code: ErrorCode): number {
       return 403;
     case 'invalid_input':
       return 400;
+    case 'not_found':
+      return 404;
     case 'unsupported_media_type':
       return 415;
     case 'payload_too_large':

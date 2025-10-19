@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ics-hub-ingress
+  namespace: ics-hub
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "15"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ics.onecare.health
+      secretName: ics-hub-ingress-tls
+  rules:
+    - host: ics.onecare.health
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ics-hub-http
+                port:
+                  name: https

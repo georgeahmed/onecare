@@ -106,4 +106,5 @@ export interface AuditRecordOptions {
   outcome?: AuditOutcome | null;
   reasonCode?: string | null;
   details?: Record<string, unknown> | null;
+  [key: string]: unknown;
 }

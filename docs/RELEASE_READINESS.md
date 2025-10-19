@@ -41,7 +41,8 @@ Operations
 - [x] Graceful shutdown drains in‑flight work and closes adapters within budget. (BE‑01.18)
 - [ ] Config validated against schema at startup; effective config logged once (redacted). (BE‑01.2H)
 - [ ] Rollout plan: image build, env/secrets, probes, resources/limits, and rollback steps documented.
-- [ ] CD workflow (`.github/workflows/cd.yml`) runs staging deploy + smoke checks, requires production approval, and verifies SLO guard after promotion.
+- [x] CD workflow (`.github/workflows/cd.yml`, SRE-01.17) verifies cosign signatures, runs staging deploy + smoke checks (`scripts/ci/http_smoke.sh`), requires production approval, and performs `helm rollback` on failures.
+- [ ] SAST/DAST gates (Semgrep, CodeQL, OWASP ZAP) reviewed; outstanding findings triaged per `docs/security/APPLICATION_SECURITY.md`.
 
 Dependencies (cross‑team gates)
 - [ ] Event Bus durability, consumer groups, and DLQ routing ready. (BE‑02)

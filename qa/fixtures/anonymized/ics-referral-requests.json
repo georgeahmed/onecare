@@ -1,0 +1,14 @@
+[
+  {
+    "referralId": "ics-ref-001",
+    "patientId": "patient-bravo",
+    "org": "ics-demo-001",
+    "reason": "Pediatric dermatology assessment requested after triage review"
+  },
+  {
+    "referralId": "ics-ref-002",
+    "patientId": "patient-charlie",
+    "org": "ics-demo-002",
+    "reason": "Follow-up for pharmacy outcome requiring community service"
+  }
+]

@@ -86,6 +86,18 @@ safety_gate:
   acuity_threshold_emergency: 1.2
 idempotency:
   ttl_seconds: 15
+access_gate:
+  rate_limit:
+    tenant:
+      capacity: 80
+      refill_per_second: 1.5
+      ttl_seconds: 480
+      max_entries: 1500
+    account:
+      capacity: 5
+      refill_per_second: 0.2
+      ttl_seconds: 300
+      max_entries: 800
 `);
 
   return root;
@@ -126,9 +138,44 @@ describe('loadConfig', () => {
     expect(cfg.safety_gate?.emergency_confidence).toBeGreaterThan(0);
     expect(cfg.safety_gate?.acuity_threshold_emergency).toBeGreaterThan(0);
     expect(cfg.idempotency?.ttlSeconds).toBe(900);
+    expect(cfg.triageFallback?.enabled).toBe(true);
+    expect(cfg.triageFallback?.timeBudgetMs).toBeGreaterThan(0);
+    expect(cfg.triageFallback?.scoreDeltaTolerance).toBeGreaterThan(0);
+    expect(cfg.triageFallback?.maxReasons).toBeGreaterThan(0);
     const lineage = cfg._lineage as Record<string, unknown> | undefined;
     expect(Array.isArray(lineage?.sources)).toBe(true);
     expect((lineage?.sources as unknown[] | undefined)?.length).toBeGreaterThan(0);
+    expect(cfg.access_gate).toBeDefined();
+    expect(cfg.access_gate?.rateLimit.tenant.capacity).toBe(120);
+    expect(cfg.access_gate?.rateLimit.tenant.refillPerSecond).toBeCloseTo(2);
+    expect(cfg.access_gate?.rateLimit.tenant.ttlSeconds).toBe(600);
+    expect(cfg.access_gate?.rateLimit.tenant.maxEntries).toBe(2000);
+    expect(cfg.access_gate?.rateLimit.account.capacity).toBe(12);
+    expect(cfg.access_gate?.rateLimit.account.refillPerSecond).toBeCloseTo(0.3, 5);
+    expect(cfg.access_gate?.rateLimit.account.ttlSeconds).toBe(600);
+    expect(cfg.access_gate?.rateLimit.account.maxEntries).toBe(10000);
+  });
+
+  it('allows overriding triage fallback configuration', () => {
+    const cfg = loadConfig('demo-fallback-override', {
+      overrides: {
+        triage: {
+          fallback: {
+            enabled: false,
+            time_budget_ms: 45,
+            score_delta_tolerance: 0.3,
+            max_reasons: 3,
+          },
+        },
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.triageFallback).toMatchObject({
+      enabled: false,
+      timeBudgetMs: 45,
+      scoreDeltaTolerance: 0.3,
+      maxReasons: 3,
+    });
   });
 
   it('merges layered YAML with additive arrays and lineage tracking', () => {
@@ -158,6 +205,15 @@ describe('loadConfig', () => {
       expect(cfg.safety_gate?.red_flag_threshold).toBe(0.9);
       expect(cfg.safety_gate?.emergency_confidence).toBe(0.9);
       expect(cfg.safety_gate?.acuity_threshold_emergency).toBeCloseTo(0.97, 5);
+      expect(cfg.access_gate).toBeDefined();
+      expect(cfg.access_gate?.rateLimit.tenant.capacity).toBe(80);
+      expect(cfg.access_gate?.rateLimit.tenant.refillPerSecond).toBeCloseTo(1.5);
+      expect(cfg.access_gate?.rateLimit.tenant.ttlSeconds).toBe(480);
+      expect(cfg.access_gate?.rateLimit.tenant.maxEntries).toBe(1500);
+      expect(cfg.access_gate?.rateLimit.account.capacity).toBe(5);
+      expect(cfg.access_gate?.rateLimit.account.refillPerSecond).toBeCloseTo(0.2);
+      expect(cfg.access_gate?.rateLimit.account.ttlSeconds).toBe(300);
+      expect(cfg.access_gate?.rateLimit.account.maxEntries).toBe(800);
 
       const lineage = cfg._lineage as Record<string, unknown> | undefined;
       expect(lineage?.pcn).toBe('west-1');

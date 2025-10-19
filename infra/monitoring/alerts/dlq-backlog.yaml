@@ -12,7 +12,7 @@ spec:
           expr: |
             (
               sum(rate(bus_nats_pending_lag_sum[5m])) /
-              max(sum(rate(bus_nats_pending_lag_count[5m])), 1)
+              clamp_min(sum(rate(bus_nats_pending_lag_count[5m])), 1)
             ) > 100
           for: 10m
           labels:

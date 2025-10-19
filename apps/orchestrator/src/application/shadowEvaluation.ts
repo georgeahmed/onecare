@@ -109,6 +109,7 @@ export async function runShadowEvaluation(
       outcome: 'allow' as const,
       reasonCode: 'shadow_evaluated',
       subjectRef: safePatientReference(ctx.submission.patient?.id),
+      ...auditDetails,
       details: auditDetails,
     };
     ctx.recordAudit(config.auditEvent, auditOptions);

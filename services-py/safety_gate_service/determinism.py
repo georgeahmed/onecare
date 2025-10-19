@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import os
+import random
+from typing import Optional
+
+try:  # pragma: no cover - optional dependency
+    import numpy as _np
+except ImportError:  # pragma: no cover - numpy optional
+    _np = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    import torch as _torch
+except ImportError:  # pragma: no cover - torch optional
+    _torch = None  # type: ignore[assignment]
+
+
+DEFAULT_SEED = 1337
+
+
+def set_seed(seed: Optional[int] = None) -> int:
+    """Configure deterministic behaviour across supported libraries."""
+
+    value = DEFAULT_SEED if seed is None else int(seed)
+    random.seed(value)
+    os.environ["PYTHONHASHSEED"] = str(value)
+
+    if _np is not None:
+        _np.random.seed(value)
+
+    if _torch is not None:
+        _torch.manual_seed(value)
+        _torch.cuda.manual_seed_all(value)  # type: ignore[attr-defined]
+        try:
+            _torch.use_deterministic_algorithms(True, warn_only=True)  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - torch version guard
+            pass
+
+    return value

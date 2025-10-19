@@ -8,6 +8,7 @@ const zlib = require('zlib');
 const { pipeline } = require('stream/promises');
 const crypto = require('node:crypto');
 const { logger, createCounter, createHistogram } = require('@onecare/observability');
+const { createLineageEmitter, resolveGitCommit } = require('./analytics/lineage.js');
 
 const DEFAULT_INPUT = process.env.ANALYTICS_QUALITY_QUARANTINE || 'var/analytics/quarantine.jsonl';
 const DEFAULT_ARCHIVE_ROOT = process.env.ANALYTICS_QUARANTINE_ARCHIVE_DIR || 'var/analytics/archive';
@@ -21,6 +22,7 @@ const exportDurationHistogram = createHistogram('analytics.quarantine_export.dur
 const exportFileCounter = createCounter('analytics.quarantine_export.files_archived');
 const exportErrorCounter = createCounter('analytics.quarantine_export.errors');
 const exportRetentionCounter = createCounter('analytics.quarantine_export.retention_deleted');
+const QUARANTINE_ARCHIVE_SCHEMA_ID = 'analytics_quarantine_archive_v1';
 
 function generateRunId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -116,7 +118,8 @@ async function pruneRetention(root, cutoffMs) {
 async function run(argv = process.argv.slice(2)) {
   const startedAt = Date.now();
   const runId = generateRunId();
-  const runContext = { runId };
+  const gitCommit = resolveGitCommit();
+  const runContext = { runId, gitCommit };
   exportRunCounter.add(1, runContext);
 
   const args = parseArgs(argv);
@@ -130,6 +133,40 @@ async function run(argv = process.argv.slice(2)) {
       ? DEFAULT_RETENTION_DAYS
       : undefined;
 
+  const lineage = createLineageEmitter({
+    jobName: 'analytics.quarantine_export',
+    runId,
+    inputs: [
+      {
+        name: 'analytics.quality.quarantine',
+        uri: inputPath,
+      },
+    ],
+    outputs: [
+      {
+        name: 'analytics.quarantine.archive',
+        uri: archiveRoot,
+      },
+    ],
+    dataset: {
+      name: 'analytics.quarantine.archive',
+      version: 'v1',
+      schema: {
+        id: QUARANTINE_ARCHIVE_SCHEMA_ID,
+        format: 'jsonl.gz',
+      },
+    },
+    lineagePath: path.join(archiveRoot, 'lineage', 'analytics_quarantine_export.jsonl'),
+    gitCommit,
+  });
+
+  await lineage.emitStart({
+    inputPath,
+    archiveRoot,
+    deleteSource,
+    retentionDays,
+  });
+
   const exists = await fileExists(inputPath);
   if (!exists) {
     logger.info('analytics-quarantine-export input file not found, skipping', {
@@ -138,6 +175,10 @@ async function run(argv = process.argv.slice(2)) {
     });
     exportErrorCounter.add(1, { reason: 'input_not_found', runId });
     exportDurationHistogram.record(Date.now() - startedAt, runContext);
+    await lineage.emitComplete('SKIPPED', {
+      reason: 'input_not_found',
+      inputPath,
+    });
     return;
   }
 
@@ -203,6 +244,14 @@ async function run(argv = process.argv.slice(2)) {
       }
     }
 
+    await lineage.emitComplete('COMPLETED', {
+      inputPath,
+      archiveRoot,
+      archivedPath: destinationPath,
+      deleteSource,
+      retentionDays,
+      retentionSummary,
+    });
     success = true;
   } catch (err) {
     logger.error('analytics-quarantine-export failed to archive quarantine file', {
@@ -212,6 +261,11 @@ async function run(argv = process.argv.slice(2)) {
       runId,
     });
     exportErrorCounter.add(1, { reason: 'archive_failed', runId });
+    await lineage.emitFailure(err, {
+      inputPath,
+      archiveRoot,
+      archivedPath,
+    });
     throw err;
   } finally {
     durationMs = Date.now() - startedAt;
@@ -228,6 +282,8 @@ async function run(argv = process.argv.slice(2)) {
       retentionDeletedFiles: retentionSummary?.deletedFiles ?? 0,
       retentionDeletedDirs: retentionSummary?.deletedDirs ?? 0,
       durationMs,
+      gitCommit,
+      lineagePath: lineage.lineagePath,
     });
   }
 }

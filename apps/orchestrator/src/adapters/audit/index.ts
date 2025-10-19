@@ -200,7 +200,7 @@ export function createAuditEvent(type: string, details: AuditDetails = {}): Ledg
     details.details && Object.keys(details.details).length > 0
       ? (redactFields(details.details) as Record<string, unknown>)
       : null;
-  return {
+  const base = {
     type,
     ts: new Date().toISOString(),
     correlationId: details.correlationId ?? null,
@@ -208,8 +208,20 @@ export function createAuditEvent(type: string, details: AuditDetails = {}): Ledg
     subjectRef: details.subjectRef ?? null,
     outcome: details.outcome ?? 'unknown',
     reasonCode: details.reasonCode ?? null,
-    ...(sanitizedDetails ? { details: sanitizedDetails } : {}),
   };
+  const payload: Record<string, unknown> = {
+    outcome: base.outcome,
+    reasonCode: base.reasonCode,
+    actorRef: base.actorRef,
+    subjectRef: base.subjectRef,
+    correlationId: base.correlationId,
+    ...(sanitizedDetails ?? {}),
+  };
+  return {
+    ...base,
+    ...(sanitizedDetails ? { details: sanitizedDetails } : {}),
+    payload,
+  } as LedgerEvent & { payload: Record<string, unknown> };
 }
 
 export function getAuditLedger(): AuditLedger {

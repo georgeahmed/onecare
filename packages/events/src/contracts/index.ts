@@ -18,6 +18,7 @@ export * from './dlq-event';
 export * from './call-transcribed';
 export * from './intent-classified';
 export * from './task-created';
+export * from './task-updated';
 export * from './metric';
 export * from './triage-core-features';
 export * from './acuity-signal-features';

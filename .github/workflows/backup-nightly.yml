@@ -1,0 +1,54 @@
+name: Nightly Backups
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup-and-verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run backup
+        id: backup
+        run: |
+          set -euo pipefail
+          bash scripts/ops/backup.sh --output nightly-backups --tag nightly --log-file nightly-backups/history.jsonl
+          latest=$(find nightly-backups -maxdepth 1 -mindepth 1 -type d -print | sort -r | head -n1)
+          if [ -z "$latest" ]; then
+            echo "No backup directory found" >&2
+            exit 1
+          fi
+          backup_dir="$latest"
+          echo "dir=${backup_dir}" >> "$GITHUB_OUTPUT"
+          du -sh "${backup_dir}"
+
+      - name: Verify restore
+        run: |
+          set -euo pipefail
+          bash scripts/ops/verify-restore.sh "${{ steps.backup.outputs.dir }}"
+
+      - name: Pack artefacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar -czf artifacts/backup.tar.gz -C "$(dirname "${{ steps.backup.outputs.dir }}")" "$(basename "${{ steps.backup.outputs.dir }}")"
+          cp nightly-backups/history.jsonl artifacts/backup-history.jsonl
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.run_id }}
+          path: artifacts
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          echo "### Backup Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backup directory: \`${{ steps.backup.outputs.dir }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Verification: ✅" >> "$GITHUB_STEP_SUMMARY"

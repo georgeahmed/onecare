@@ -1,3 +1,5 @@
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -9,13 +11,14 @@ import {
   type CounterMetric,
   type HistogramMetric,
 } from '@onecare/observability';
-import type { ObjectStore } from '@onecare/ports';
+import type { ObjectStore, ObjectStorePutOptions } from '@onecare/ports';
 
 type FetchImpl = typeof fetch;
 
 const REQUEST_LATENCY_METRIC = 'object_store_request_latency_ms';
 const REQUEST_TOTAL_METRIC = 'object_store_requests_total';
 const REQUEST_ERROR_METRIC = 'object_store_request_errors_total';
+const OBJECT_PUT_DURATION_METRIC = 'object.store.put.duration_ms';
 
 const DEFAULT_TIMEOUT_MS = 2_000;
 const MIN_TIMEOUT_MS = 200;
@@ -28,6 +31,89 @@ const RETRY_JITTER_MS = 50;
 const latencyHistogram: HistogramMetric = createHistogram(REQUEST_LATENCY_METRIC);
 const totalCounter: CounterMetric = createCounter(REQUEST_TOTAL_METRIC);
 const errorCounter: CounterMetric = createCounter(REQUEST_ERROR_METRIC);
+const objectPutDurationHistogram: HistogramMetric = createHistogram(OBJECT_PUT_DURATION_METRIC);
+
+function createKeepAliveFetch(baseUrl: string, timeoutMs: number): FetchImpl {
+  const parsed = new URL(baseUrl);
+  const isHttps = parsed.protocol === 'https:';
+  const httpModule = isHttps ? https : http;
+  const agent = new httpModule.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1_000,
+    maxSockets: 25,
+    timeout: 60_000,
+  });
+
+  return async (input, init = {}) =>
+    new Promise<Response>((resolve, reject) => {
+      const target = typeof input === 'string' ? new URL(input) : new URL(input.toString());
+      const headersInit: Record<string, string> = {};
+      if (init.headers instanceof Headers) {
+        for (const [key, value] of init.headers.entries()) {
+          headersInit[key] = value;
+        }
+      } else if (Array.isArray(init.headers)) {
+        for (const [key, value] of init.headers) {
+          headersInit[key] = value;
+        }
+      } else if (init.headers && typeof init.headers === 'object') {
+        Object.assign(headersInit, init.headers as Record<string, string>);
+      }
+      const requestOptions: http.RequestOptions = {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port ? Number(target.port) : target.protocol === 'https:' ? 443 : 80,
+        path: `${target.pathname}${target.search}`,
+        method: init.method ?? 'GET',
+        headers: headersInit,
+        agent,
+      };
+
+      const request = httpModule.request(requestOptions, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (Array.isArray(value)) {
+              headers.set(key, value.join(', '));
+            } else if (value !== undefined) {
+              headers.set(key, String(value));
+            }
+          }
+          resolve(new Response(body, { status: res.statusCode ?? 0, statusText: res.statusMessage ?? '', headers }));
+        });
+      });
+
+      request.setTimeout(timeoutMs, () => {
+        request.destroy(new Error('RequestTimeout'));
+      });
+
+      request.on('error', (error) => reject(error));
+
+      if (init.body instanceof Uint8Array || Buffer.isBuffer(init.body)) {
+        request.write(init.body);
+      } else if (typeof init.body === 'string') {
+        request.write(init.body);
+      } else if (init.body instanceof ArrayBuffer) {
+        request.write(Buffer.from(init.body));
+      }
+
+      const signal = init.signal;
+      const onAbort = () => request.destroy(new Error('AbortError'));
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+        request.on('close', () => signal.removeEventListener('abort', onAbort));
+      }
+
+      request.end();
+    });
+}
 
 export interface HttpObjectStoreOptions {
   baseUrl: string;
@@ -118,12 +204,18 @@ export class HttpObjectStore implements ObjectStore {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.timeoutMs = clampTimeout(options.timeoutMs);
     this.maxRetries = clampRetries(options.maxRetries);
-    this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? createKeepAliveFetch(this.baseUrl, this.timeoutMs);
     this.authHeader = buildAuthHeader(options.authToken);
   }
 
-  async put(key: string, data: ArrayBuffer | Uint8Array, contentType: string): Promise<{ url: string }> {
+  async put(
+    key: string,
+    data: ArrayBuffer | Uint8Array,
+    contentType: string,
+    options?: ObjectStorePutOptions,
+  ): Promise<{ url: string }> {
     const buffer = data instanceof Uint8Array ? data : new Uint8Array(data);
+    const start = performance.now();
     await this.request<void>({
       method: 'PUT',
       key,
@@ -131,9 +223,24 @@ export class HttpObjectStore implements ObjectStore {
       headers: {
         'content-type': contentType,
         'content-length': String(buffer.byteLength),
+        ...(options?.ttlSeconds !== undefined
+          ? { 'x-ttl-seconds': String(Math.max(0, Math.floor(options.ttlSeconds))) }
+          : {}),
+        ...(options?.metadata
+          ? Object.fromEntries(
+              Object.entries(options.metadata).map(([headerKey, value]) => [
+                `x-meta-${headerKey.toLowerCase()}`,
+                value,
+              ]),
+            )
+          : {}),
       },
       operation: 'ObjectStore.put',
       expectBinary: false,
+    });
+    const duration = performance.now() - start;
+    objectPutDurationHistogram.record(Number(duration.toFixed(2)), {
+      operation: 'ObjectStore.put',
     });
     return { url: this.resourceUrl(key) };
   }

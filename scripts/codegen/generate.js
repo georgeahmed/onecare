@@ -32,6 +32,7 @@ const mappings = [
   { in: 'features/acuity-signal.json', out: 'packages/events/src/contracts/acuity-signal-features.ts' },
   { in: 'features/registry.schema.json', out: 'packages/events/src/contracts/feature-registry.ts' },
   { in: 'tasks/task-created.json', out: 'packages/events/src/contracts/task-created.ts' },
+  { in: 'tasks/task-updated.json', out: 'packages/events/src/contracts/task-updated.ts' },
   { in: 'booking/appointment-created.json', out: 'packages/events/src/contracts/appointment-created.ts' },
   { in: 'audit/audit-event.json', out: 'packages/events/src/contracts/audit-event.ts' },
   { in: 'analytics/metric.json', out: 'packages/events/src/contracts/metric.ts' },

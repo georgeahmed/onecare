@@ -1141,9 +1141,10 @@ ModelLifecycle(model):
 
 - **ASR down:** route to receptionist/voicemail; store audio; later transcription; manual notes UI.  
 - **LLM unavailable:** show raw transcript; template summaries; rule‑based triage.  
+- **ML triage scoring unavailable:** fall back to config-driven rules (`triage.fallback`). Reuse `triage.score_weights` + `priority_thresholds`, scan narrative for `config.red_flag_set` to force `STAT/URGENT`, emit reason codes (`rule:red_flag:*`, `rule:fallback:*`), and return a decision within `time_budget_ms`.  
 - **Connector outage (e.g., GP Connect):** cache reads, queue writes, inform users; retry on recovery.  
-- **High‑risk with no capacity:** auto‑escalate to on‑call/PCN/OoH; advise patient to 111/A&E; management alert.  
-- **Portal down in hours:** auto‑restart, incident alert, contingency message; recorded in uptime KPI.  
+- **High-risk with no capacity:** auto-escalate to on-call/PCN/OoH; advise patient to 111/A&E; management alert.  
+- **Portal down in hours:** auto-restart, incident alert, contingency message; recorded in uptime KPI.  
 - **Infra/data incidents:** backups, failover; emergency mode for demand surges.
 - **Mass demand surge (e.g., winter pressures/pandemic):** broadcast delay messaging, expand callback windows per `CALLBACK_WINDOWS_BY_PRIORITY`, adjust templates while preserving urgent floors; notify PCN/ICS for mutual aid.
  - **OOH handover:** when outside core hours and high‑risk cases occur, perform warm handover to local out‑of‑hours provider (with consent or emergency basis) and inform patient with instructions (111/AE as appropriate).

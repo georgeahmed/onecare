@@ -1,0 +1,31 @@
+[
+  {
+    "practiceId": "demo",
+    "patient": {
+      "id": "patient-alpha",
+      "dob": "1989-04-02",
+      "locale": "en-GB"
+    },
+    "narrative": "Persistent cough for three days with mild fever. No travel outside the region.",
+    "interpreterPreferences": {
+      "requiresInterpreter": false,
+      "preferredLanguages": ["en"]
+    },
+    "channel": "web"
+  },
+  {
+    "practiceId": "demo",
+    "patient": {
+      "id": "patient-bravo",
+      "locale": "en-GB"
+    },
+    "narrative": "Parent reports child has light rash on both arms for one day, no breathing concerns.",
+    "interpreterPreferences": {
+      "requiresInterpreter": true,
+      "preferredLanguages": ["es", "en"],
+      "notes": "Parent comfortable switching between Spanish and English.",
+      "requiresInterpreterConfirmed": true
+    },
+    "channel": "ivr"
+  }
+]

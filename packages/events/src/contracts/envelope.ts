@@ -14,4 +14,9 @@ export interface EventEnvelope {
     | boolean
     | null;
   correlationId?: string;
+  metadata?: {
+    attempt?: number;
+    firstSeenAt?: string;
+    [k: string]: unknown;
+  };
 }

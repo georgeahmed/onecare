@@ -3,6 +3,7 @@ import type { ResolvedConfig } from '@onecare/config';
 import type { MessageBus } from '@onecare/bus';
 import type { FeatureStore, FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import { Topics } from '@onecare/events';
+import { resetMetrics, getCounterRecords, getHistogramRecords } from '@onecare/observability';
 import {
   IntakeState,
   ScoredState,
@@ -14,14 +15,45 @@ import {
   DEDUP_CACHE_LIMIT_FOR_TEST,
   type TriageContext,
   type DuplicateDetails,
+  type AssignmentConsentEvaluator,
 } from '../src/application/triage.state';
 import { assertValidTriageInput, TriageContractValidationError } from '../src/application/contracts';
+import { computeTriageScore } from '../src/application/scoring';
+
+const defaultFallbackConfig = () => ({
+  enabled: true,
+  timeBudgetMs: 120,
+  scoreDeltaTolerance: 0.2,
+  maxReasons: 5,
+});
+
+function ensureFallbackConfig(config: ResolvedConfig): void {
+  const fallback = config.triageFallback ? { ...config.triageFallback } : defaultFallbackConfig();
+  config.triageFallback = { ...fallback };
+  if (!config.priority_thresholds) {
+    config.priority_thresholds = {
+      stat: 0.9,
+      urgent: 0.7,
+      soon: 0.4,
+      routine: 0,
+    };
+  }
+  if (!Array.isArray(config.red_flag_set)) {
+    config.red_flag_set = [];
+  }
+  if (!config.triage || typeof config.triage !== 'object') {
+    config.triage = { fallback: { ...fallback } };
+  } else {
+    (config.triage as Record<string, unknown>).fallback = { ...fallback };
+  }
+}
 
 function buildContext(scoreWeights: Partial<Record<string, number>>, features: Record<string, number>): TriageContext {
   const config: ResolvedConfig = {
     practiceId: 'demo',
     triage: { score_weights: scoreWeights },
   };
+  ensureFallbackConfig(config);
 
   const baseFeatures = { ...features };
   const triageInput = {
@@ -49,6 +81,7 @@ function createTriageContext(options: {
   features: Record<string, number>;
   now?: number;
 }): TriageContext {
+  ensureFallbackConfig(options.config);
   const featureCopy = { ...options.features };
   const base: TriageContext = {
     id: options.id,
@@ -90,6 +123,7 @@ function createIdempotencyStore(): IdempotencyStore {
 describe('IntakeState', () => {
   beforeEach(() => {
     resetDedupCache();
+    resetMetrics();
   });
 
   it('computes and stores the triage score in context before moving to Scored', async () => {
@@ -289,11 +323,156 @@ describe('IntakeState', () => {
 
     expect(getDedupCacheEntryCountForTest(patientId)).toBeLessThanOrEqual(DEDUP_CACHE_LIMIT_FOR_TEST);
   });
+
+  it('applies rules fallback when an ML dependency is unavailable', async () => {
+    const state = new IntakeState();
+    const fallback = defaultFallbackConfig();
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        fallback: { ...fallback },
+        dedup_window: 'PT1H',
+        sim_threshold: 0.5,
+      },
+      triageFallback: { ...fallback },
+      priority_thresholds: {
+        stat: 0.9,
+        urgent: 0.7,
+        soon: 0.4,
+        routine: 0,
+      },
+      red_flag_set: ['chest pain'],
+    };
+
+    const ctx = createTriageContext({
+      id: 'ml-fallback',
+      config,
+      features: {},
+      patientId: 'patient-fallback',
+      narrative: 'Patient reports sudden chest pain and dizziness',
+      now: 0,
+    });
+    ctx.correlationId = 'corr-rules';
+    ctx.triageInput = {
+      patientId: 'patient-fallback',
+      narrative: ctx.narrative!,
+    };
+    ctx.mlDependencies = { acuity: 'circuit_open' };
+
+    const next = await state.handle(ctx, { type: 'triage.evaluate' });
+    expect(next).toBe('Scored');
+    expect(ctx.scoreSource).toBe('rules');
+    expect(ctx.fallbackApplied).toBe(true);
+    expect(ctx.decisionReasons).toContain('rule:fallback:ml_acuity_circuit_open');
+    expect(ctx.decisionReasons).toContain('rule:red_flag:chest_pain');
+    expect(ctx.score).toBeGreaterThanOrEqual(0.9);
+
+    const scored = new ScoredState();
+    const following = await scored.handle(ctx, { type: 'triage.evaluate' });
+    expect(following).toBe('TaskCreated');
+    expect(ctx.priority).toBe('STAT');
+
+    const decisionRecords = getCounterRecords('triage.score.decision');
+    const lastDecision = decisionRecords.at(-1);
+    expect(lastDecision?.attributes).toMatchObject({
+      priority: 'STAT',
+      source: 'rules',
+      fallback: 'yes',
+      correlationId: 'corr-rules',
+    });
+    const scoreDurations = getHistogramRecords('triage.score.duration_ms');
+    expect(scoreDurations.at(-1)?.attributes?.correlationId).toBe('corr-rules');
+    const dedupDurations = getHistogramRecords('triage.dedup.duration_ms');
+    expect(dedupDurations.at(-1)?.attributes?.correlationId).toBe('corr-rules');
+  });
+
+  it('keeps ML-derived score when dependencies are healthy', async () => {
+    const state = new IntakeState();
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: { score_weights: { acuity: 1, risk: 0.5, time: 0.3, complexity: 0.2, capacity: 0.1 } },
+    };
+    ensureFallbackConfig(config);
+
+    const ctx = createTriageContext({
+      id: 'ml-healthy',
+      config,
+      patientId: 'patient-healthy',
+      narrative: 'Mild sore throat for two days',
+      features: { acuity: 0.6, risk: 0.3, time: 0.4, complexity: 0.2, capacity: 0.5 },
+      now: 0,
+    });
+    ctx.mlDependencies = { acuity: 'ok', similarity: 'ok' };
+    ctx.correlationId = 'corr-ml';
+
+    const expectedScore = computeTriageScore(config, ctx.features);
+    const next = await state.handle(ctx, { type: 'triage.evaluate' });
+
+    expect(next).toBe('Scored');
+    expect(ctx.scoreSource).toBe('ml');
+    expect(ctx.fallbackApplied).toBe(false);
+    expect(ctx.decisionReasons).toBeUndefined();
+    expect(ctx.score).toBeCloseTo(expectedScore, 6);
+
+    const scored = new ScoredState();
+    await scored.handle(ctx, { type: 'triage.evaluate' });
+    const decisionRecords = getCounterRecords('triage.score.decision');
+    const lastDecision = decisionRecords.at(-1);
+    expect(lastDecision?.attributes).toMatchObject({
+      source: 'ml',
+      fallback: 'no',
+      correlationId: 'corr-ml',
+    });
+    const scoreDurations = getHistogramRecords('triage.score.duration_ms');
+    expect(scoreDurations.at(-1)?.attributes?.correlationId).toBe('corr-ml');
+  });
+
+  it('falls back to rules when features are missing', async () => {
+    const state = new IntakeState();
+    const fallback = defaultFallbackConfig();
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        fallback: { ...fallback },
+      },
+      triageFallback: { ...fallback },
+      priority_thresholds: {
+        stat: 0.9,
+        urgent: 0.7,
+        soon: 0.4,
+        routine: 0,
+      },
+      red_flag_set: [],
+    };
+
+    const ctx = createTriageContext({
+      id: 'features-missing',
+      config,
+      patientId: 'patient-missing',
+      narrative: 'General malaise',
+      features: {},
+      now: 0,
+    });
+    ctx.triageInput = {
+      patientId: 'patient-missing',
+      narrative: ctx.narrative!,
+    };
+
+    const next = await state.handle(ctx, { type: 'triage.evaluate' });
+
+    expect(next).toBe('Scored');
+    expect(ctx.scoreSource).toBe('rules');
+    expect(ctx.fallbackApplied).toBe(true);
+    expect(ctx.decisionReasons).toContain('rule:fallback:ml_features_missing');
+  });
 });
 
 describe('DuplicateState', () => {
   beforeEach(() => {
     resetDedupCache();
+    resetMetrics();
   });
 
   it('invokes provided duplicate handler with full details', async () => {
@@ -353,6 +532,9 @@ describe('DuplicateState', () => {
 });
 
 describe('ScoredState', () => {
+  beforeEach(() => {
+    resetMetrics();
+  });
   class FakeFeatureStore implements FeatureStore {
     public readonly records = new Map<string, Record<string, unknown>>();
     async putFeatures(key: string, features: Record<string, unknown>): Promise<void> {
@@ -442,6 +624,7 @@ describe('ScoredState', () => {
 describe('TaskCreatedState', () => {
   beforeEach(() => {
     resetDedupCache();
+    resetMetrics();
   });
 
   it('creates a FHIR Task and publishes tasks.created event', async () => {
@@ -533,7 +716,6 @@ describe('TaskCreatedState', () => {
         taskId: 'task-123',
         patientId: 'patient-001',
         priority: 'URGENT',
-        owner: 'Organization/demo-triage',
       },
     });
     expect(taskCall[2]).toMatchObject({ 'x-correlation-id': 'corr-abc' });
@@ -545,7 +727,8 @@ describe('TaskCreatedState', () => {
       patientId: 'patient-001',
       priority: 'URGENT',
     });
-    expect(ctx.decision?.assignment?.owner).toBe('Organization/demo-triage');
+    expect(ctx.decision?.assignment).toBeUndefined();
+    expect(ctx.decision?.features).toBeUndefined();
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(
       'triage.escalations',
@@ -617,6 +800,23 @@ describe('TaskCreatedState', () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(ctx.decision).toBeDefined();
 
+    let taskSuccessRecords = getCounterRecords('triage.task.create.success');
+    expect(taskSuccessRecords).toHaveLength(1);
+    expect(taskSuccessRecords[0].attributes).toMatchObject({
+      owner: 'Organization/demo-triage',
+      correlationId: 'corr-dup',
+    });
+    let taskDurationRecords = getHistogramRecords('triage.task.create.duration_ms');
+    expect(taskDurationRecords.at(-1)?.attributes?.correlationId).toBe('corr-dup');
+    let notifySuccessRecords = getCounterRecords('triage.notify.success');
+    expect(notifySuccessRecords).toHaveLength(1);
+    expect(notifySuccessRecords[0].attributes).toMatchObject({
+      queue: 'triage.escalations',
+      correlationId: 'corr-dup',
+    });
+    let notifyDurationRecords = getHistogramRecords('triage.notify.duration_ms');
+    expect(notifyDurationRecords.at(-1)?.attributes?.correlationId).toBe('corr-dup');
+
     const duplicateCtx: TriageContext = {
       ...ctx,
       taskReference: undefined,
@@ -629,6 +829,71 @@ describe('TaskCreatedState', () => {
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenCalledTimes(1);
+    taskSuccessRecords = getCounterRecords('triage.task.create.success');
+    expect(taskSuccessRecords).toHaveLength(1);
+    taskDurationRecords = getHistogramRecords('triage.task.create.duration_ms');
+    expect(taskDurationRecords).toHaveLength(1);
+  });
+
+  it('aborts task creation when consent is denied', async () => {
+    const createTask = vi.fn();
+    const fhirRepository: FhirRepository = {
+      upsertBundle: vi.fn(),
+      createTask,
+      createAppointment: vi.fn(),
+      createDocumentReference: vi.fn(),
+    };
+
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const bus: MessageBus = {
+      publish,
+      subscribe: vi.fn().mockResolvedValue({ unsubscribe: vi.fn() }),
+    };
+
+    const consentEvaluator: AssignmentConsentEvaluator = {
+      check: vi.fn().mockResolvedValue({ allowed: false, reason: 'no_consent' }),
+    };
+
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      triage: { score_weights: { acuity: 1 } },
+      priority_thresholds: { stat: 0.9, urgent: 0.7, soon: 0.4, routine: 0 },
+    };
+
+    const ctx: TriageContext = {
+      id: 'task-consent-denied',
+      config,
+      features: { acuity: 0.75 },
+      rawFeatures: { acuity: 0.75 },
+      patientId: 'patient-consent',
+      correlationId: 'corr-consent',
+      fhirRepository,
+      bus,
+      consentEvaluator,
+      triageInput: {
+        patientId: 'patient-consent',
+        narrative: 'Denied by consent policy',
+        features: { acuity: 0.75 },
+      },
+    };
+
+    const intake = new IntakeState();
+    await intake.handle(ctx, { type: 'triage.evaluate' });
+    const scored = new ScoredState();
+    await scored.handle(ctx, { type: 'triage.evaluate' });
+
+    const state = new TaskCreatedState();
+    await expect(state.handle(ctx, { type: 'triage.evaluate' })).rejects.toMatchObject({ code: 'consent_denied' });
+    expect(createTask).not.toHaveBeenCalled();
+    expect(consentEvaluator.check).toHaveBeenCalledWith({
+      patientId: 'patient-consent',
+      correlationId: 'corr-consent',
+      purpose: 'triage.assignment',
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    const [topic, envelope] = publish.mock.calls[0] as [string, { payload?: unknown }];
+    expect(topic).toBe(Topics.audit.event);
+    expect((envelope?.payload as { reasonCode?: string })?.reasonCode).toBe('no_consent');
   });
 });
 
@@ -681,4 +946,12 @@ describe('TaskCreatedState', () => {
 
     const state = new TaskCreatedState();
     await expect(state.handle(ctx, { type: 'triage.evaluate' })).rejects.toMatchObject({ code: 'conflict' });
+    const errorRecords = getCounterRecords('triage.task.create.error');
+    expect(errorRecords.at(-1)?.attributes).toMatchObject({
+      code: 'conflict',
+      correlationId: 'corr-conflict',
+      outcome: 'error',
+    });
+    const durationRecords = getHistogramRecords('triage.task.create.duration_ms');
+    expect(durationRecords.at(-1)?.attributes?.outcome).toBe('error');
   });

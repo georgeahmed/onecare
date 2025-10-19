@@ -45,6 +45,7 @@ const SLOT_FIXTURE = {
 
 describe('offlineQueue', () => {
   beforeEach(() => {
+    listOfflineJobs().forEach((job) => removeOfflineJob(job.id));
     window.localStorage.clear();
   });
 

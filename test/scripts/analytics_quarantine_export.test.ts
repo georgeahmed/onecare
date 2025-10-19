@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -12,6 +12,15 @@ beforeEach(() => {
 afterEach(() => {
   resetMetrics();
 });
+
+function readLineageEvents(filePath: string) {
+  if (!existsSync(filePath)) return [];
+  return readFileSync(filePath, 'utf8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
 
 describe('analytics_quarantine_export instrumentation', () => {
   it('archives quarantine files and records metrics', async () => {
@@ -33,6 +42,11 @@ describe('analytics_quarantine_export instrumentation', () => {
     expect(getCounterTotal('analytics.quarantine_export.files_archived')).toBe(1);
     expect(getHistogramRecords('analytics.quarantine_export.duration_ms').length).toBe(1);
     expect(readdirSync(archiveRoot).length).toBeGreaterThan(0);
+
+    const lineagePath = path.join(archiveRoot, 'lineage', 'analytics_quarantine_export.jsonl');
+    const lineageEvents = readLineageEvents(lineagePath);
+    const completeEvent = lineageEvents.find((event) => event.eventType === 'COMPLETE');
+    expect(completeEvent?.status).toBe('COMPLETED');
 
     rmSync(tempDir, { recursive: true, force: true });
   });

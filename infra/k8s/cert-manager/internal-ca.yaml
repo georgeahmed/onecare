@@ -1,0 +1,32 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: onecare-internal-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  secretName: onecare-internal-ca
+  commonName: onecare.internal
+  duration: 2160h # 90 days
+  renewBefore: 360h
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: onecare-internal-ca
+spec:
+  ca:
+    secretName: onecare-internal-ca

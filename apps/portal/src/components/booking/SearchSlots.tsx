@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { BookingFilterState, BookingSlot } from '../../lib/booking';
+import {
+  formatAccessibleDateTime,
+  formatDate,
+  formatTime,
+  formatTimeRange,
+  resolveLocalePreferences,
+} from '../../lib/format';
 import { useLocale } from '../../i18n';
 
 export interface SearchSlotsProps {
@@ -12,25 +19,22 @@ export interface SearchSlotsProps {
   onSelect?: (slot: BookingSlot) => void;
   selectedSlotId?: string | null;
   fairnessNote?: string | null;
+  timezone?: string;
 }
 
-const buildDateTimeLabel = (intl: ReturnType<typeof useIntl>, slot: BookingSlot) => {
-  const start = new Date(slot.start);
-  const end = new Date(slot.end);
-  const formatter = new Intl.DateTimeFormat(intl.locale, {
-    dateStyle: 'full',
-    timeStyle: 'short',
-  });
-  const startLabel = formatter.format(start);
-  const endTimeLabel = intl.formatTime(end, { timeStyle: 'short' });
+const buildDateTimeLabel = (intl: ReturnType<typeof useIntl>, slot: BookingSlot, timeZone: string) => {
+  const locale = intl.locale;
+  const startLabel = formatAccessibleDateTime(slot.start, { locale, timeZone });
+  const endLabel = formatTime(slot.end, { locale, timeZone, timeStyle: 'short' });
+  const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
   return intl.formatMessage(
     { id: 'booking.slot.ariaLabel' },
     {
       start: startLabel,
-      end: endTimeLabel,
+      end: endLabel,
       modality: intl.formatMessage({ id: `booking.modality.${slot.modality}` }),
-      location: slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' }),
-    }
+      location: locationLabel,
+    },
   );
 };
 
@@ -56,9 +60,15 @@ const SearchSlots = ({
   onSelect,
   selectedSlotId = null,
   fairnessNote = null,
+  timezone,
 }: SearchSlotsProps) => {
   const intl = useIntl();
   const { direction } = useLocale();
+  const locale = intl.locale;
+  const resolvedTimeZone = useMemo(
+    () => timezone ?? resolveLocalePreferences(locale).timeZone,
+    [timezone, locale],
+  );
   const [filters, setFilters] = useState<BookingFilterState>({ modality: defaultModality });
   const [debouncedFilters, setDebouncedFilters] = useState<BookingFilterState>({ modality: defaultModality });
   const [activeIndex, setActiveIndex] = useState<number>(-1);
@@ -291,77 +301,79 @@ useEffect(() => {
         ) : null}
         {slotsToRender.map((slot, renderIndex) => {
           const index = renderIndex + visibleStart;
-        const dateLabel = intl.formatDate(new Date(slot.start), {
-          weekday: 'short',
-          month: 'short',
-          day: 'numeric',
-        });
-        const startTimeLabel = intl.formatTime(new Date(slot.start), { timeStyle: 'short' });
-        const endTimeLabel = intl.formatTime(new Date(slot.end), { timeStyle: 'short' });
-        const timeLabel = `${startTimeLabel} – ${endTimeLabel}`;
-        const ariaLabel = buildDateTimeLabel(intl, slot);
-        const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
-        const descriptionId = `${slot.id}-description`;
-        const isSelected = selectedSlotId === slot.id;
-        return (
-          <div key={slot.id} className="booking-slot" role="presentation" style={{ height: ITEM_HEIGHT_PX }}>
-            <button
-              type="button"
-              aria-label={ariaLabel}
-              className="slot-button"
-              onClick={() => onSelect?.(slot)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  onSelect?.(slot);
-                }
-              }}
-              onFocus={() => {
-                if (!prefetchTriggeredRef.current) {
-                  prefetchTriggeredRef.current = true;
-                  void prefetchConfirmBookingModule();
-                }
-                ensureVisible(index);
-                setActiveIndex(index);
-              }}
-              onMouseEnter={() => {
-                if (!prefetchTriggeredRef.current) {
-                  prefetchTriggeredRef.current = true;
-                  void prefetchConfirmBookingModule();
-                }
-              }}
-              role="option"
-              aria-selected={isSelected}
-              aria-describedby={descriptionId}
-              id={`${slot.id}-option`}
-              aria-setsize={filteredSlots.length}
-              aria-posinset={index + 1}
-              tabIndex={index === activeIndex ? 0 : -1}
-              ref={(element) => {
-                optionRefs.current[index] = element;
-              }}
-            >
-              <span className="slot-date" aria-hidden="true">{dateLabel}</span>
-              <span className="slot-time" aria-hidden="true">{timeLabel}</span>
-              <span className="slot-modality" aria-hidden="true">
-                {intl.formatMessage({ id: `booking.modality.${slot.modality}` })}
-              </span>
-              <span className="slot-location" aria-hidden="true">{locationLabel}</span>
-              <span id={descriptionId} className="visually-hidden">
-                {intl.formatMessage(
-                  { id: 'booking.slot.description' },
-                  {
-                    date: dateLabel,
-                    time: timeLabel,
-                    modality: intl.formatMessage({ id: `booking.modality.${slot.modality}` }),
-                    location: locationLabel
+          const modalityLabel = intl.formatMessage({ id: `booking.modality.${slot.modality}` });
+          const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
+          const dateLabel = formatDate(slot.start, {
+            locale,
+            timeZone: resolvedTimeZone,
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+          });
+          const timeLabel = formatTimeRange(slot.start, slot.end, { locale, timeZone: resolvedTimeZone });
+          const ariaLabel = buildDateTimeLabel(intl, slot, resolvedTimeZone);
+          const accessibleDate = formatAccessibleDateTime(slot.start, { locale, timeZone: resolvedTimeZone });
+          const descriptionId = `${slot.id}-description`;
+          const isSelected = selectedSlotId === slot.id;
+          return (
+            <div key={slot.id} className="booking-slot" role="presentation" style={{ height: ITEM_HEIGHT_PX }}>
+              <button
+                type="button"
+                aria-label={ariaLabel}
+                className="slot-button"
+                onClick={() => onSelect?.(slot)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect?.(slot);
                   }
-                )}
-              </span>
-            </button>
-          </div>
-        );
-      })}
+                }}
+                onFocus={() => {
+                  if (!prefetchTriggeredRef.current) {
+                    prefetchTriggeredRef.current = true;
+                    void prefetchConfirmBookingModule();
+                  }
+                  ensureVisible(index);
+                  setActiveIndex(index);
+                }}
+                onMouseEnter={() => {
+                  if (!prefetchTriggeredRef.current) {
+                    prefetchTriggeredRef.current = true;
+                    void prefetchConfirmBookingModule();
+                  }
+                }}
+                role="option"
+                aria-selected={isSelected}
+                aria-describedby={descriptionId}
+                id={`${slot.id}-option`}
+                aria-setsize={filteredSlots.length}
+                aria-posinset={index + 1}
+                tabIndex={index === activeIndex ? 0 : -1}
+                ref={(element) => {
+                  optionRefs.current[index] = element;
+                }}
+              >
+                <span className="slot-date" aria-hidden="true">{dateLabel}</span>
+                <span className="slot-time" aria-hidden="true">{timeLabel}</span>
+                <span className="slot-modality" aria-hidden="true">
+                  {modalityLabel}
+                </span>
+                <span className="slot-location" aria-hidden="true">{locationLabel}</span>
+                <span id={descriptionId} className="visually-hidden">
+                  {intl.formatMessage(
+                    { id: 'booking.slot.description' },
+                    {
+                      date: accessibleDate,
+                      time: timeLabel,
+                      modality: modalityLabel,
+                      location: locationLabel,
+                    },
+                  )}
+                </span>
+              </button>
+            </div>
+          );
+        })}
         {virtualizationEnabled ? (
           <div className="booking-slot-spacer" style={{ height: `${bottomSpacer}px` }} aria-hidden="true" />
         ) : null}

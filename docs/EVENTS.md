@@ -20,6 +20,9 @@ Triage
 - Ingress: `schemas/triage/triage-input.json` consumed by the triage application (Topics.triage.input).
 - Egress: `schemas/triage/triage-decision.json` capturing scored outcomes and routing metadata (Topics.triage.decision).
 - Egress: `schemas/tasks/task-created.json` for downstream task orchestration (Topics.tasks.created).
+- Egress: `schemas/tasks/task-updated.json` for SLA escalations (Topics.tasks.updated).
+- Documentation: `apps/triage/README.md`, ADRs `2025-10-18-triage-scoring-and-prioritization`, `2025-10-18-triage-dedup-similarity`, and `2025-10-18-triage-provider-assignment` describe scoring, dedup, assignment, and readiness guardrails in detail.
+- Poison messages: triage consumers retry up to 3 times with exponential backoff+jitter; exhausted or non-retryable failures emit `DlqEvent` on `Topics.broker.deadLetter` containing only correlationId/error code/envelope metadata (no narratives). Operators can inspect `triage.retry` / `triage.dlq` metrics and follow the DLQ runbook to replay after remediation.
 
 Codegen
 - TS: json-schema-to-typescript via `npm run codegen`
@@ -33,9 +36,25 @@ DLQ
 
 Booking
 - Search ingress must validate against `schemas/booking/booking-search-request.json`; responses serialize with `schemas/booking/booking-search-response.json`.
-- The booking HTTP adapter publishes `Topics.booking.appointmentCreated` with payload `schemas/booking/appointment-created.json`; duplicates route to `Topics.booking.appointmentCreatedDlq`.
-- DLQ payloads include `attempts`, `errorCode`, and sanitized `payloadRef` metadata to aid replay without exposing PHI.
-- Use `createEnvelope(Topics.booking.appointmentCreated, payload, correlationId)` after validating via `validateAppointmentCreatedEvent`.
+- The booking HTTP adapter publishes `Topics.booking.appointmentCreated` with payload `schemas/booking/appointment-created.json`; duplicates route to `Topics.booking.appointmentCreatedDlq`. Event publishing retries twice before DLQ and logs `booking_event_publish_error_total` / `booking_event_dlq_total`.
+- Example publish (matches playback fixtures):
+  ```ts
+  const payload = {
+    appointmentId: 'appt-200-1',
+    patientId: 'patient-123',
+    start: '2025-10-20T09:00:00Z',
+    end: '2025-10-20T09:15:00Z',
+    location: 'org-200',
+  };
+  const patientFingerprint = 'patient-hash-123'; // derived via booking.state hashIdentifier
+  const envelope = createEnvelope(Topics.booking.appointmentCreated, payload, 'corr-playback');
+  await bus.publish(envelope.topic, envelope, {
+    'x-correlation-id': envelope.correlationId,
+    'x-idempotency-key': `booking:${patientFingerprint}:slot-200-1:corr-playback`,
+  });
+  ```
+- DLQ payloads include `attempts`, `errorCode`, and sanitized `payloadRef` metadata to aid replay without exposing PHI. See `schemas/common/dlq-event.json`.
+- Deterministic fixtures in `fixtures/gpconnect/*.json` and `apps/booking/test/gpconnect.playback.test.ts` exercise the booking envelopes offline; update them when the contract changes.
 
 Pharmacy
 - Router ingress validates against `schemas/pharmacy/pharmacy-referral.json` before executing the state machine.

@@ -5,11 +5,22 @@ import math
 import os
 import threading
 from typing import Any, Mapping, Optional
+from urllib.parse import urlparse
 
 LOGGER = logging.getLogger("safety_gate_service.acuity")
 
 _MODE_ENV = "SAFETY_GATE_ACUITY_MODE"
 _MODEL_PATH_ENV = "SAFETY_GATE_ACUITY_MODEL_PATH"
+_MODEL_MAX_BYTES_ENV = "SAFETY_GATE_MAX_MODEL_BYTES"
+
+
+def _parse_int(value: Optional[str], default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class AcuityModel:
@@ -33,6 +44,7 @@ class AcuityModel:
         self._model_lock = threading.Lock()
         self._model = None
         self._model_version = self.DEFAULT_VERSION
+        self._max_model_bytes = max(0, _parse_int(self._env.get(_MODEL_MAX_BYTES_ENV)))
 
     def predict(
         self,
@@ -74,10 +86,26 @@ class AcuityModel:
         return self._model
 
     def _load_bundle(self, path: str):
+        parsed = urlparse(path)
+        if parsed.scheme and parsed.scheme not in {"", "file"}:
+            raise RuntimeError("remote acuity bundles are not permitted")
+        if parsed.scheme == "file":
+            path = parsed.path
         try:
             import joblib  # type: ignore
         except ImportError as err:  # pragma: no cover - optional dependency
             raise RuntimeError("joblib not installed for acuity bundle loading") from err
+
+        if self._max_model_bytes > 0:
+            try:
+                file_size = os.path.getsize(path)
+            except OSError as exc:
+                LOGGER.warning("Unable to read acuity model size for %s: %s", path, exc)
+            else:
+                if file_size > self._max_model_bytes:
+                    raise RuntimeError(
+                        f"acuity model bundle exceeds memory budget ({file_size} bytes > {self._max_model_bytes})"
+                    )
 
         loaded = joblib.load(path)
         if not callable(loaded):

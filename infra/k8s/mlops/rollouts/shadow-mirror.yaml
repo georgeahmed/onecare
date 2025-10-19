@@ -1,0 +1,39 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: safety-gate-shadow
+spec:
+  hosts:
+    - safety-gate.staging.svc.cluster.local
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: safety-gate-stable
+            subset: v1
+          weight: 100
+      mirror:
+        host: safety-gate-shadow
+        subset: vnext
+      mirrorPercentage:
+        value: 5
+      headers:
+        response:
+          remove:
+            - x-shadow-evaluated
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: safety-gate-destinations
+spec:
+  host: safety-gate.staging.svc.cluster.local
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: vnext
+      labels:
+        version: vnext

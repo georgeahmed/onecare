@@ -10,6 +10,9 @@ import type {
   TelemetrySource,
   CapacityAuditor,
   TelemetrySnapshot,
+  ReleaseDecision,
+  ReleaseExecutor,
+  ReleasePlan,
 } from '../src/application/types';
 import type { ResolvedConfig } from '@onecare/config';
 import type { IdempotencyStore } from '@onecare/ports';
@@ -399,6 +402,59 @@ describe('Capacity micro-release decision', () => {
     expect(scheduler.requests).toHaveLength(1);
     expect(scheduler.requests[0].slots).toBe(10);
   });
+
+  it('skips release and audit when shutdown signal is aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const releaseExecutor: ReleaseExecutor = {
+      apply: vi.fn(async () => {}),
+    };
+    const auditor: CapacityAuditor = {
+      record: vi.fn(async () => {}),
+    };
+    const plan: ReleasePlan = {
+      slotsToRelease: 4,
+      releaseFraction: 0.04,
+      heldSlotsBefore: 10,
+      heldSlotsAfter: 6,
+      maxFractionSlots: 4,
+      minReserveSlots: 2,
+      cappedBy: [],
+    };
+    const decision: ReleaseDecision = {
+      outcome: 'release',
+      reason: 'release_authorized',
+      plan,
+      deltaThreshold: 3,
+      confidenceThreshold: 0.6,
+      forecastDelta: 5,
+      forecastConfidence: 0.8,
+    };
+
+    const ctx = buildContext({
+      releaseExecutor,
+      auditor,
+      capacityWindow: { totalSlots: 100, heldSlots: 10 },
+      decision,
+      forecast: {
+        delta: 5,
+        confidence: 0.8,
+        band: { lower: 4, upper: 6 },
+        horizonMinutes: 120,
+        need: 55,
+        supply: 50,
+      },
+      shutdownSignal: controller.signal,
+    });
+
+    const applied = new AppliedState();
+    const result = await applied.handle(ctx, tickEvent);
+
+    expect(result).toBe('Applied');
+    expect(releaseExecutor.apply).not.toHaveBeenCalled();
+    expect(auditor.record).not.toHaveBeenCalled();
+  });
 });
 
 function buildContext(overrides: Partial<CapacityContext> = {}): CapacityContext {
@@ -440,6 +496,7 @@ function buildContext(overrides: Partial<CapacityContext> = {}): CapacityContext
     idempotencyTtlSeconds: overrides.idempotencyTtlSeconds,
     releaseIdempotencyKey: overrides.releaseIdempotencyKey,
     auditIdempotencyKey: overrides.auditIdempotencyKey,
+    shutdownSignal: overrides.shutdownSignal,
   };
 
   context.config.practiceId = context.practiceId;

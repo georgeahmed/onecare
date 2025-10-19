@@ -129,6 +129,7 @@ export interface CapacityContext extends MachineContext {
   idempotencyTtlSeconds?: number;
   releaseIdempotencyKey?: string;
   auditIdempotencyKey?: string;
+  shutdownSignal?: AbortSignal;
 }
 
 export interface CapacityEvent extends MachineEvent {

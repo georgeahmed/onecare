@@ -5,10 +5,10 @@ import { DedupStore } from '../src/application/dedup';
 describe('DedupStore', () => {
   let store: DedupStore;
 
-beforeEach(() => {
-  resetMetrics();
-  store = new DedupStore({ maxEntriesPerPatient: 3 });
-});
+  beforeEach(() => {
+    resetMetrics();
+    store = new DedupStore({ maxEntriesPerPatient: 3 });
+  });
 
   it('identifies duplicates within the window above threshold', () => {
     const windowMs = 60 * 60 * 1_000;
@@ -20,6 +20,7 @@ beforeEach(() => {
       now: 0,
       windowMs,
       threshold,
+      correlationId: 'corr-dedup',
     });
 
     expect(first.isDuplicate).toBe(false);
@@ -30,13 +31,18 @@ beforeEach(() => {
       now: 5 * 60 * 1_000,
       windowMs,
       threshold,
+      correlationId: 'corr-dedup',
     });
 
     expect(second.isDuplicate).toBe(true);
     expect(second.similarity).toBeGreaterThanOrEqual(threshold);
     expect(second.reference?.narrative).toContain('chest pain');
-    expect(getCounterRecords('triage.dedup.hit')).toHaveLength(1);
-    expect(getCounterRecords('triage.dedup.miss')).toHaveLength(1);
+    const hitRecords = getCounterRecords('triage.dedup.hit');
+    const missRecords = getCounterRecords('triage.dedup.miss');
+    expect(hitRecords).toHaveLength(1);
+    expect(missRecords).toHaveLength(1);
+    expect(hitRecords[0].attributes?.correlationId).toBe('corr-dedup');
+    expect(missRecords[0].attributes?.correlationId).toBe('corr-dedup');
     expect(getHistogramRecords('triage.dedup.similarity').length).toBeGreaterThan(0);
   });
 

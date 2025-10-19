@@ -69,6 +69,7 @@ const ivrAdapter = new IvrIngestAdapter({
     callStarted: async () => undefined,
     audioChunkStored: async () => undefined,
     promptQueued: async () => undefined,
+    callCompleted: async () => undefined,
   },
 });
 
@@ -176,7 +177,8 @@ async function runCall(callIndex) {
 
     transcriptsByCall.set(callId, scenario.transcript);
 
-    const audioRef = `ivr://${callId}/recording`;
+    const recording = await session.complete();
+    const audioRef = recording.audioUrl;
     const asrStart = performance.now();
     const transcription = await asrClient.transcribe(callId, audioRef);
     const callTranscribed = buildCallTranscribed({

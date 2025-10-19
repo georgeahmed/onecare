@@ -1,0 +1,27 @@
+[
+  {
+    "patientId": "patient-alpha",
+    "condition": "Acute cough",
+    "pharmacyOrg": "org-demo-001",
+    "patientAgeYears": 36,
+    "patientSex": "female",
+    "severity": "mild",
+    "exclusionFlags": [],
+    "slot": {
+      "start": "2025-01-15T10:30:00.000Z",
+      "end": "2025-01-15T10:45:00.000Z",
+      "locationOdsCode": "ODS1234",
+      "reference": "slot-alpha"
+    }
+  },
+  {
+    "patientId": "patient-charlie",
+    "condition": "Conjunctivitis",
+    "pharmacyOrg": "org-demo-002",
+    "patientAgeYears": 52,
+    "patientSex": "male",
+    "severity": null,
+    "exclusionFlags": ["vision-change"],
+    "slot": null
+  }
+]

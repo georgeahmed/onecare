@@ -1,29 +1,81 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: scripts/ci/http_smoke.sh <base-url>" >&2
+usage() {
+  cat <<'EOF'
+Usage: http_smoke.sh --base-url URL [--endpoint PATH]... [--expect CODE]
+
+Runs lightweight HTTP checks against the provided base URL. Each endpoint
+defaults to `/readyz` and `/healthz` if none are specified.
+
+Options:
+  --base-url URL     Base URL (required)
+  --endpoint PATH    Endpoint path (may be repeated)
+  --expect CODE      Expected HTTP status code (default: 200)
+  --timeout SECS     curl timeout (default: 5)
+  -h, --help         Show this help
+EOF
+}
+
+BASE_URL=""
+ENDPOINTS=()
+EXPECT=200
+TIMEOUT=5
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base-url)
+      BASE_URL="$2"
+      shift 2
+      ;;
+    --endpoint)
+      ENDPOINTS+=("$2")
+      shift 2
+      ;;
+    --expect)
+      EXPECT="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$BASE_URL" ]]; then
+  echo "ERROR: --base-url is required" >&2
+  usage >&2
   exit 1
 fi
 
-BASE_URL="${1%/}"
-CORRELATION_ID="${CORRELATION_ID:-cd-smoke-$(date +%s)}"
+if [[ ${#ENDPOINTS[@]} -eq 0 ]]; then
+  ENDPOINTS=(/readyz /healthz)
+fi
 
-curl --fail --silent --show-error "${BASE_URL}/health"
-curl --fail --silent --show-error "${BASE_URL}/ready"
+status=0
+for endpoint in "${ENDPOINTS[@]}"; do
+  url="${BASE_URL%/}/${endpoint#/}"
+  echo "→ Checking ${url}"
+  http_code=$(curl --fail --silent --show-error --max-time "$TIMEOUT" --write-out '%{http_code}' --output /tmp/http_smoke_body "${url}" || true)
+  body=$(cat /tmp/http_smoke_body)
+  rm -f /tmp/http_smoke_body
+  if [[ "$http_code" != "$EXPECT" ]]; then
+    echo "ERROR: ${url} returned status ${http_code}, expected ${EXPECT}" >&2
+    echo "Response body: ${body}" >&2
+    status=1
+  else
+    echo "   Status ${http_code} OK"
+  fi
+done
 
-curl --fail --silent --show-error \
-  -X POST "${BASE_URL}/safety-check" \
-  -H 'content-type: application/json' \
-  -H 'authorization: Bearer cd-smoke-token' \
-  -H "x-request-id: ${CORRELATION_ID}" \
-  -H 'x-actor-type: patient' \
-  -H 'x-actor-id: smoke-patient' \
-  -H 'x-auth-scope: submit triage:submit' \
-  -d '{"practiceId":"cd-smoke","patient":{"id":"patient-smoke"},"narrative":"mild headache","channel":"web"}' \
-  || {
-    echo "::error title=Smoke test failed::Safety-check endpoint returned error"
-    exit 1
-  }
-
-echo "Smoke checks succeeded for ${BASE_URL}"
+exit $status

@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-platform
+  labels:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/name: slo-platform
+spec:
+  groups:
+    - name: platform-readiness
+      rules:
+        - alert: ReadinessFlapBudgetCritical
+          expr: |
+            increase(kube_pod_container_status_ready{condition="false"}[30m]) > 6
+          for: 30m
+          labels:
+            severity: critical
+            slo: readiness-stability
+            team: sre
+          annotations:
+            summary: "Readiness probe instability across services"
+            description: "More than six readiness probe failures recorded over 30 minutes."
+            runbook: https://onecare/runbooks/oncall#readiness-instability
+        - alert: ReadinessFlapBudgetWarning
+          expr: |
+            increase(kube_pod_container_status_ready{condition="false"}[1h]) > 3
+          for: 1h
+          labels:
+            severity: warning
+            slo: readiness-stability
+            team: sre
+          annotations:
+            summary: "Readiness probe flaps approaching SLO"
+            description: "More than three readiness probe failures recorded over the past hour."
+            runbook: https://onecare/runbooks/oncall#readiness-instability

@@ -54,7 +54,7 @@ fairness_floors:
   telephone_min_fraction: 0.15
   interpreter_support: true
 privacy_policy:
-  retention_days: 3650
+  retention_days: 3650 # PHI (special category data) retention in days (10 years)
   minimize_data: true
 ooh_policy:
   accept_submissions: true
@@ -63,6 +63,18 @@ ooh_policy:
     it when we re-open.
 
     '
+access_gate:
+  rate_limit:
+    tenant:
+      capacity: 120
+      refill_per_second: 2
+      ttl_seconds: 600
+      max_entries: 2000
+    account:
+      capacity: 12
+      refill_per_second: 0.3
+      ttl_seconds: 600
+      max_entries: 10000
 callback_windows_by_priority:
   stat: immediate
   urgent: within_2h
@@ -114,6 +126,11 @@ triage:
   priority_tiebreaker:
     epsilon: 0.02
     acuity_promotion: 0.8
+  fallback:
+    enabled: true
+    time_budget_ms: 120
+    score_delta_tolerance: 0.15
+    max_reasons: 5
   aging_interval: PT5M
   sim_threshold: 0.8
   dedup_window: PT72H
@@ -125,10 +142,51 @@ provider_assignment:
     resolution_rate: 0.2
     distance: 0.2
     fairness: 0.5
+  fairness:
+    max_share: 0.6
 telephony:
   ivr_intent_classifier: default
   max_callback_retries: 3
   emergency_transfer_enabled: true
+  audio:
+    retention_days: 30
+  asr:
+    endpoint: https://telephony-asr.example.invalid/v1/transcribe
+    timeout_ms: 5000
+    max_retries: 2
+    base_delay_ms: 150
+    host_allowlist:
+      - telephony-asr.example.invalid
+    cb_failure_threshold: 5
+    cb_cooldown_ms: 15000
+    lang_detect: true
+    diarization: false
+  callback_windows_by_priority:
+    stat:
+      - code: immediate
+        label: We will connect you immediately.
+    urgent:
+      - code: within_2h
+        label: We can call you back within 2 hours.
+    soon:
+      - code: same_day
+        label: We can call you back later today.
+    routine:
+      - code: within_48h
+        label: We can call you back within 48 hours.
+  concurrency:
+    max_concurrent_transcriptions: 32
+  rate_limit:
+    caller:
+      capacity: 4
+      refill_per_second: 0.2
+      ttl_seconds: 600
+      max_entries: 20000
+    practice:
+      capacity: 80
+      refill_per_second: 2
+      ttl_seconds: 600
+      max_entries: 200
 ambient_scribe:
   enabled: true
   asr_model: whisper-large-v3-medical

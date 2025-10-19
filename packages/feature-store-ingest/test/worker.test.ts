@@ -2,27 +2,42 @@ import { describe, expect, it, beforeEach } from 'vitest';
 
 import { MemoryBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
+import { getCounterTotal, getHistogramRecords, resetMetrics } from '@onecare/observability';
 
 import { InMemoryOnlineFeatureStore } from '../../feature-store-online/src/inMemoryOnlineStore';
 import { FeatureIngestionWorker } from '../src/worker';
 
 describe('FeatureIngestionWorker', () => {
   class InMemoryIdempotency implements IdempotencyStore {
-    store = new Map<string, number>();
+    store = new Map<string, number | null>();
+
+    prune() {
+      const now = Date.now();
+      for (const [key, expiresAt] of this.store.entries()) {
+        if (expiresAt !== null && expiresAt <= now) {
+          this.store.delete(key);
+        }
+      }
+    }
 
     async exists(key: string): Promise<boolean> {
+      this.prune();
       return this.store.has(key);
     }
 
-    async put(key: string): Promise<void> {
-      this.store.set(key, Date.now());
+    async put(key: string, ttlSeconds: number): Promise<void> {
+      this.prune();
+      const expiresAt = Number.isFinite(ttlSeconds) ? Date.now() + ttlSeconds * 1000 : null;
+      this.store.set(key, expiresAt);
     }
 
-    async reserve(key: string): Promise<'reserved' | 'exists'> {
+    async reserve(key: string, ttlSeconds: number): Promise<'reserved' | 'exists'> {
+      this.prune();
       if (this.store.has(key)) {
         return 'exists';
       }
-      this.store.set(key, Date.now());
+      const expiresAt = Number.isFinite(ttlSeconds) ? Date.now() + ttlSeconds * 1000 : null;
+      this.store.set(key, expiresAt);
       return 'reserved';
     }
 
@@ -52,6 +67,7 @@ describe('FeatureIngestionWorker', () => {
   };
 
   beforeEach(() => {
+    resetMetrics();
     bus = new MemoryBus();
     featureStore = new InMemoryOnlineFeatureStore();
     idempotency = new InMemoryIdempotency();
@@ -81,6 +97,9 @@ describe('FeatureIngestionWorker', () => {
     const stored = await featureStore.get({ featureSet: 'triage-core', entityId: 'patient-123' });
     expect(stored).not.toBeNull();
     expect(stored?.acuity).toBe(0.4);
+    expect(getCounterTotal('features.ingest.ok')).toBeGreaterThan(0);
+    const lagRecords = getHistogramRecords('features.freshness.lag_ms');
+    expect(lagRecords).toHaveLength(1);
     await worker.stop();
   });
 
@@ -110,6 +129,7 @@ describe('FeatureIngestionWorker', () => {
 
     const metrics = worker.getMetrics();
     expect(metrics.skipped).toBeGreaterThan(0);
+    expect(getCounterTotal('features.ingest.ok')).toBe(1);
     await worker.stop();
   });
 
@@ -143,6 +163,7 @@ describe('FeatureIngestionWorker', () => {
 
     const metrics = worker.getMetrics();
     expect(metrics.retries).toBeGreaterThan(0);
+    expect(getCounterTotal('features.ingest.retry')).toBeGreaterThan(0);
     expect(await featureStore.get({ featureSet: 'triage-core', entityId: 'patient-123' })).not.toBeNull();
     await worker.stop();
   });
@@ -176,8 +197,14 @@ describe('FeatureIngestionWorker', () => {
     });
 
     expect(dlqMessages).toHaveLength(1);
+    const dlqPayload = dlqMessages[0] as Record<string, unknown>;
+    expect(dlqPayload.originalTopic).toBe('features.triage-core');
+    expect(dlqPayload.featureSet).toBe('triage-core');
+    expect(typeof dlqPayload.entityHash === 'string').toBe(true);
     const metrics = worker.getMetrics();
     expect(metrics.dlq).toBe(1);
+    expect(getCounterTotal('features.ingest.dlq')).toBe(1);
+    expect(getCounterTotal('features.ingest.error')).toBeGreaterThan(0);
     await worker.stop();
   });
 });

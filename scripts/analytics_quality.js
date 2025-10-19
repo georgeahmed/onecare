@@ -7,6 +7,7 @@ const path = require('path');
 const readline = require('readline');
 const crypto = require('node:crypto');
 const { logger, createCounter, createHistogram } = require('@onecare/observability');
+const { createLineageEmitter, resolveGitCommit } = require('./analytics/lineage.js');
 
 const DEFAULT_INPUT = process.env.ANALYTICS_SINK_PATH || 'var/analytics/metrics.jsonl';
 const DEFAULT_OUTPUT = process.env.ANALYTICS_QUALITY_REPORT || 'var/analytics/quality.md';
@@ -20,6 +21,7 @@ const qualityRecordsCounter = createCounter('analytics.quality.records_processed
 const qualityQuarantineCounter = createCounter('analytics.quality.quarantine_records');
 const qualityMissingCounter = createCounter('analytics.quality.missing_fields');
 const qualityErrorCounter = createCounter('analytics.quality.errors');
+const QUALITY_SCHEMA_ID = 'analytics_quality_report_v1';
 
 function generateRunId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -175,7 +177,8 @@ async function writeQuarantine(outputPath, records, context = {}) {
 async function run(argv = process.argv.slice(2)) {
   const startedAt = Date.now();
   const runId = generateRunId();
-  const runContext = { runId };
+  const gitCommit = resolveGitCommit();
+  const runContext = { runId, gitCommit };
   qualityRunCounter.add(1, runContext);
 
   const { input, output, quarantine, zscore } = parseArgs(argv);
@@ -184,203 +187,267 @@ async function run(argv = process.argv.slice(2)) {
   const quarantinePath = path.resolve(quarantine || DEFAULT_QUARANTINE);
   const threshold = zscore || DEFAULT_ZSCORE || 3;
 
-  const exists = await fileExists(inputPath);
-  if (!exists) {
-    logger.info('analytics-quality input file not found, skipping', {
-      inputPath,
-      runId,
-    });
-    qualityErrorCounter.add(1, { reason: 'input_not_found', runId });
-    qualityDurationHistogram.record(Date.now() - startedAt, runContext);
-    return;
-  }
-
-  const records = await readMetrics(inputPath, runContext);
-  const total = records.length;
-  qualityRecordsCounter.add(total, runContext);
-
-  if (!total) {
-    logger.info('analytics-quality no records to evaluate', {
-      inputPath,
-      runId,
-    });
-    qualityDurationHistogram.record(Date.now() - startedAt, runContext);
-    return;
-  }
-
-  const missing = {
-    name: { count: 0, samples: [] },
-    value: { count: 0, samples: [] },
-  };
-  const numericBuckets = new Map();
-  const numericSamples = new Map();
-  const quarantineRecords = [];
-
-  for (const record of records) {
-    if (!record || typeof record !== 'object') continue;
-    const entry = { ...record };
-
-    if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
-      missing.name.count += 1;
-      if (missing.name.samples.length < MAX_SAMPLES_PER_ISSUE) {
-        missing.name.samples.push(entry);
-      }
-      quarantineRecords.push({ reason: 'missing_name', record: entry });
-      continue;
-    }
-    const numeric = coerceNumber(entry.value);
-    if (numeric === null) {
-      missing.value.count += 1;
-      if (missing.value.samples.length < MAX_SAMPLES_PER_ISSUE) {
-        missing.value.samples.push(entry);
-      }
-      quarantineRecords.push({ reason: 'missing_numeric_value', record: entry });
-    } else {
-      const bucket = numericBuckets.get(entry.name) || [];
-      bucket.push(numeric);
-      numericBuckets.set(entry.name, bucket);
-
-      const sampleBucket = numericSamples.get(entry.name) || [];
-      if (sampleBucket.length < 2000) {
-        sampleBucket.push({ value: numeric, record: entry });
-        numericSamples.set(entry.name, sampleBucket);
-      }
-    }
-  }
-
-  if (missing.name.count > 0) {
-    qualityMissingCounter.add(missing.name.count, { ...runContext, field: 'name' });
-  }
-  if (missing.value.count > 0) {
-    qualityMissingCounter.add(missing.value.count, { ...runContext, field: 'value' });
-  }
-
-  const outliers = [];
-  for (const [metricName, values] of numericBuckets.entries()) {
-    if (values.length < 3) continue; // need enough data to judge
-    const { mean, stdDev, median, mad } = computeStats(values);
-    let upper;
-    let lower;
-    if (mad !== null && mad > 0) {
-      const scaledMad = mad * 1.4826; // consistency constant for normal distribution
-      upper = median + threshold * scaledMad;
-      lower = median - threshold * scaledMad;
-    } else if (stdDev && stdDev > 0) {
-      upper = mean + threshold * stdDev;
-      lower = mean - threshold * stdDev;
-    } else {
-      continue;
-    }
-
-    const samples = numericSamples.get(metricName) || [];
-    for (const sample of samples) {
-      if (sample.value > upper || sample.value < lower) {
-        outliers.push({
-          metric: metricName,
-          value: sample.value,
-          thresholdUpper: upper,
-          thresholdLower: lower,
-          median,
-          mad:
-            mad !== null && mad > 0
-              ? mad * 1.4826
-              : stdDev,
-          record: sample.record,
-        });
-        quarantineRecords.push({
-          reason: 'numeric_outlier',
-          metric: metricName,
-          value: sample.value,
-          thresholdUpper: upper,
-          thresholdLower: lower,
-          record: sample.record,
-        });
-      }
-    }
-  }
-
-  outliers.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-
-  if (quarantineRecords.length > 0) {
-    const quarantineByReason = new Map();
-    for (const entry of quarantineRecords) {
-      const reason = typeof entry.reason === 'string' ? entry.reason : 'unknown';
-      quarantineByReason.set(reason, (quarantineByReason.get(reason) || 0) + 1);
-    }
-    for (const [reason, count] of quarantineByReason.entries()) {
-      qualityQuarantineCounter.add(count, { ...runContext, reason });
-    }
-  }
-
-  const generatedAt = new Date().toISOString();
-  let markdown = '';
-  markdown += `# Analytics Data Quality Report\n\n`;
-  markdown += `Generated: ${generatedAt}\n\n`;
-  markdown += `Input: \`${inputPath}\`\n\n`;
-  markdown += `Total records analysed: **${total}**\n\n`;
-  markdown += `Z-score threshold: **${formatNumber(threshold)}**\n\n`;
-
-  markdown += `## Missing Fields\n\n`;
-  if (missing.name.count === 0 && missing.value.count === 0) {
-    markdown += `No missing required fields detected.\n\n`;
-  } else {
-    markdown += `| Field | Count |\n`;
-    markdown += `| --- | ---: |\n`;
-    markdown += `| name | ${missing.name.count} |\n`;
-    markdown += `| value | ${missing.value.count} |\n\n`;
-
-    if (missing.name.samples.length) {
-      markdown += `### Sample records missing \`name\`\n\n`;
-      missing.name.samples.forEach((sample) => {
-        markdown += `${toJsonSample(sample)}\n\n`;
-      });
-    }
-    if (missing.value.samples.length) {
-      markdown += `### Sample records missing numeric \`value\`\n\n`;
-      missing.value.samples.forEach((sample) => {
-        markdown += `${toJsonSample(sample)}\n\n`;
-      });
-    }
-  }
-
-  markdown += `## Numeric Outliers\n\n`;
-  if (!outliers.length) {
-    markdown += `No numeric outliers detected with z-score > ${formatNumber(threshold)}.\n\n`;
-  } else {
-    markdown += `| Metric | Value | Upper Threshold | Lower Threshold |\n`;
-    markdown += `| --- | ---: | ---: | ---: |\n`;
-    const preview = outliers.slice(0, 20);
-    preview.forEach((entry) => {
-      markdown += `| ${entry.metric} | ${formatNumber(entry.value)} | ${formatNumber(entry.thresholdUpper)} | ${formatNumber(entry.thresholdLower)} |\n`;
-    });
-    markdown += `\nTotal outliers flagged: **${outliers.length}**\n\n`;
-
-    markdown += `### Outlier Samples\n\n`;
-    preview.forEach((entry) => {
-      markdown += `**${entry.metric}** (value: ${formatNumber(entry.value)})\n\n`;
-      markdown += `${toJsonSample(entry.record)}\n\n`;
-    });
-  }
-
-  await writeReport(outputPath, markdown, runContext);
-  await writeQuarantine(quarantinePath, quarantineRecords, runContext);
-
-  const durationMs = Date.now() - startedAt;
-  qualityDurationHistogram.record(durationMs, runContext);
-
-  logger.info('analytics-quality completed', {
+  const lineage = createLineageEmitter({
+    jobName: 'analytics.quality',
     runId,
-    inputPath,
-    outputPath,
-    quarantinePath,
-    total,
-    missingName: missing.name.count,
-    missingValue: missing.value.count,
-    outliers: outliers.length,
-    quarantineCount: quarantineRecords.length,
-    durationMs,
-    threshold,
+    inputs: [
+      {
+        name: 'analytics.metrics.jsonl',
+        uri: inputPath,
+      },
+    ],
+    outputs: [
+      {
+        name: 'analytics.quality.report',
+        uri: outputPath,
+      },
+      {
+        name: 'analytics.quality.quarantine',
+        uri: quarantinePath,
+      },
+    ],
+    dataset: {
+      name: 'analytics.quality.report',
+      version: 'v1',
+      schema: {
+        id: QUALITY_SCHEMA_ID,
+        format: 'markdown',
+      },
+    },
+    lineagePath: path.join(path.dirname(outputPath), 'lineage', 'analytics_quality.jsonl'),
+    gitCommit,
   });
+
+  try {
+    await lineage.emitStart({
+      inputPath,
+      outputPath,
+      quarantinePath,
+      threshold,
+    });
+
+    const exists = await fileExists(inputPath);
+    if (!exists) {
+      logger.info('analytics-quality input file not found, skipping', {
+        inputPath,
+        runId,
+      });
+      qualityErrorCounter.add(1, { reason: 'input_not_found', runId });
+      qualityDurationHistogram.record(Date.now() - startedAt, runContext);
+      await lineage.emitComplete('SKIPPED', {
+        reason: 'input_not_found',
+        inputPath,
+      });
+      return;
+    }
+
+    const records = await readMetrics(inputPath, runContext);
+    const total = records.length;
+    qualityRecordsCounter.add(total, runContext);
+
+    if (!total) {
+      logger.info('analytics-quality no records to evaluate', {
+        inputPath,
+        runId,
+      });
+      qualityDurationHistogram.record(Date.now() - startedAt, runContext);
+      await lineage.emitComplete('SKIPPED', {
+        reason: 'no_records',
+        inputPath,
+      });
+      return;
+    }
+
+    const missing = {
+      name: { count: 0, samples: [] },
+      value: { count: 0, samples: [] },
+    };
+    const numericBuckets = new Map();
+    const numericSamples = new Map();
+    const quarantineRecords = [];
+
+    for (const record of records) {
+      if (!record || typeof record !== 'object') continue;
+      const entry = { ...record };
+
+      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+        missing.name.count += 1;
+        if (missing.name.samples.length < MAX_SAMPLES_PER_ISSUE) {
+          missing.name.samples.push(entry);
+        }
+        quarantineRecords.push({ reason: 'missing_name', record: entry });
+        continue;
+      }
+      const numeric = coerceNumber(entry.value);
+      if (numeric === null) {
+        missing.value.count += 1;
+        if (missing.value.samples.length < MAX_SAMPLES_PER_ISSUE) {
+          missing.value.samples.push(entry);
+        }
+        quarantineRecords.push({ reason: 'missing_numeric_value', record: entry });
+      } else {
+        const bucket = numericBuckets.get(entry.name) || [];
+        bucket.push(numeric);
+        numericBuckets.set(entry.name, bucket);
+
+        const sampleBucket = numericSamples.get(entry.name) || [];
+        if (sampleBucket.length < 2000) {
+          sampleBucket.push({ value: numeric, record: entry });
+          numericSamples.set(entry.name, sampleBucket);
+        }
+      }
+    }
+
+    if (missing.name.count > 0) {
+      qualityMissingCounter.add(missing.name.count, { ...runContext, field: 'name' });
+    }
+    if (missing.value.count > 0) {
+      qualityMissingCounter.add(missing.value.count, { ...runContext, field: 'value' });
+    }
+
+    const outliers = [];
+    for (const [metricName, values] of numericBuckets.entries()) {
+      if (values.length < 3) continue; // need enough data to judge
+      const { mean, stdDev, median, mad } = computeStats(values);
+      let upper;
+      let lower;
+      if (mad !== null && mad > 0) {
+        const scaledMad = mad * 1.4826; // consistency constant for normal distribution
+        upper = median + threshold * scaledMad;
+        lower = median - threshold * scaledMad;
+      } else if (stdDev && stdDev > 0) {
+        upper = mean + threshold * stdDev;
+        lower = mean - threshold * stdDev;
+      } else {
+        continue;
+      }
+
+      const samples = numericSamples.get(metricName) || [];
+      for (const sample of samples) {
+        if (sample.value > upper || sample.value < lower) {
+          outliers.push({
+            metric: metricName,
+            value: sample.value,
+            thresholdUpper: upper,
+            thresholdLower: lower,
+            median,
+            mad: mad !== null && mad > 0 ? mad * 1.4826 : stdDev,
+            record: sample.record,
+          });
+          quarantineRecords.push({
+            reason: 'numeric_outlier',
+            metric: metricName,
+            value: sample.value,
+            thresholdUpper: upper,
+            thresholdLower: lower,
+            record: sample.record,
+          });
+        }
+      }
+    }
+
+    outliers.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+
+    if (quarantineRecords.length > 0) {
+      const quarantineByReason = new Map();
+      for (const entry of quarantineRecords) {
+        const reason = typeof entry.reason === 'string' ? entry.reason : 'unknown';
+        quarantineByReason.set(reason, (quarantineByReason.get(reason) || 0) + 1);
+      }
+      for (const [reason, count] of quarantineByReason.entries()) {
+        qualityQuarantineCounter.add(count, { ...runContext, reason });
+      }
+    }
+
+    const generatedAt = new Date().toISOString();
+    let markdown = '';
+    markdown += `# Analytics Data Quality Report\n\n`;
+    markdown += `Generated: ${generatedAt}\n\n`;
+    markdown += `Input: \`${inputPath}\`\n\n`;
+    markdown += `Total records analysed: **${total}**\n\n`;
+    markdown += `Z-score threshold: **${formatNumber(threshold)}**\n\n`;
+
+    markdown += `## Missing Fields\n\n`;
+    if (missing.name.count === 0 && missing.value.count === 0) {
+      markdown += `No missing required fields detected.\n\n`;
+    } else {
+      markdown += `| Field | Count |\n`;
+      markdown += `| --- | ---: |\n`;
+      markdown += `| name | ${missing.name.count} |\n`;
+      markdown += `| value | ${missing.value.count} |\n\n`;
+
+      if (missing.name.samples.length) {
+        markdown += `### Sample records missing \`name\`\n\n`;
+        missing.name.samples.forEach((sample) => {
+          markdown += `${toJsonSample(sample)}\n\n`;
+        });
+      }
+      if (missing.value.samples.length) {
+        markdown += `### Sample records missing numeric \`value\`\n\n`;
+        missing.value.samples.forEach((sample) => {
+          markdown += `${toJsonSample(sample)}\n\n`;
+        });
+      }
+    }
+
+    markdown += `## Numeric Outliers\n\n`;
+    if (!outliers.length) {
+      markdown += `No numeric outliers detected with z-score > ${formatNumber(threshold)}.\n\n`;
+    } else {
+      markdown += `| Metric | Value | Upper Threshold | Lower Threshold |\n`;
+      markdown += `| --- | ---: | ---: | ---: |\n`;
+      const preview = outliers.slice(0, 20);
+      preview.forEach((entry) => {
+        markdown += `| ${entry.metric} | ${formatNumber(entry.value)} | ${formatNumber(entry.thresholdUpper)} | ${formatNumber(entry.thresholdLower)} |\n`;
+      });
+      markdown += `\nTotal outliers flagged: **${outliers.length}**\n\n`;
+
+      markdown += `### Outlier Samples\n\n`;
+      preview.forEach((entry) => {
+        markdown += `**${entry.metric}** (value: ${formatNumber(entry.value)})\n\n`;
+        markdown += `${toJsonSample(entry.record)}\n\n`;
+      });
+    }
+
+    await writeReport(outputPath, markdown, runContext);
+    await writeQuarantine(quarantinePath, quarantineRecords, runContext);
+
+    const durationMs = Date.now() - startedAt;
+    qualityDurationHistogram.record(durationMs, runContext);
+    await lineage.emitComplete('COMPLETED', {
+      inputPath,
+      outputPath,
+      quarantinePath,
+      totalRecords: total,
+      missingName: missing.name.count,
+      missingValue: missing.value.count,
+      outliers: outliers.length,
+      quarantineCount: quarantineRecords.length,
+      durationMs,
+      threshold,
+    });
+
+    logger.info('analytics-quality completed', {
+      runId,
+      inputPath,
+      outputPath,
+      quarantinePath,
+      total,
+      missingName: missing.name.count,
+      missingValue: missing.value.count,
+      outliers: outliers.length,
+      quarantineCount: quarantineRecords.length,
+      durationMs,
+      threshold,
+    });
+  } catch (err) {
+    await lineage.emitFailure(err, {
+      inputPath,
+      outputPath,
+      quarantinePath,
+    });
+    throw err;
+  }
 }
 
 if (require.main === module) {

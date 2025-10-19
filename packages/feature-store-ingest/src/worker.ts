@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Message, MessageBus, Subscription } from '@onecare/bus';
 import type { IdempotencyStore, OnlineFeatureStore, OnlineFeatureRecord } from '@onecare/ports';
 import {
@@ -6,6 +8,7 @@ import {
   isFeatureSetRegistered,
   validateFeaturePayload,
 } from '@onecare/ports';
+import { createCounter, createHistogram } from '@onecare/observability';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -42,6 +45,12 @@ const DEFAULT_OPTIONS: Required<Pick<FeatureIngestionWorkerOptions, 'retries' | 
   jitterMs: 50,
   dlqTopic: 'features.ingest.dlq',
 };
+
+const ingestOkCounter = createCounter('features.ingest.ok');
+const ingestErrorCounter = createCounter('features.ingest.error');
+const ingestRetryCounter = createCounter('features.ingest.retry');
+const ingestDlqCounter = createCounter('features.ingest.dlq');
+const freshnessLagHistogram = createHistogram('features.freshness.lag_ms');
 
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -128,7 +137,8 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
     } catch (err) {
       this.logger.warn('[feature-ingest] unable to determine entityId/asOf', { topic: mapping.topic, err });
       this.metrics.failed += 1;
-      await this.publishDlq(mapping, message, err);
+      ingestErrorCounter.add(1, { featureSet: mapping.featureSet, topic: mapping.topic, reason: 'derive_failed' });
+      await this.publishDlq(mapping, message, err, { correlationId });
       return;
     }
 
@@ -147,8 +157,14 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
         correlationId,
       });
       this.metrics.processed += 1;
+      ingestOkCounter.add(1, { featureSet: mapping.featureSet, topic: mapping.topic });
+      const lag = Date.now() - Date.parse(asOf);
+      if (Number.isFinite(lag) && lag >= 0) {
+        freshnessLagHistogram.record(lag, { featureSet: mapping.featureSet });
+      }
     } catch (err) {
       this.metrics.failed += 1;
+      ingestErrorCounter.add(1, { featureSet: mapping.featureSet, topic: mapping.topic, reason: 'max_retries' });
       this.logger.error('[feature-ingest] failed to process message after retries', {
         topic: mapping.topic,
         err,
@@ -156,7 +172,11 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
       if (this.idempotency.delete) {
         await this.idempotency.delete(idempotencyKey);
       }
-      await this.publishDlq(mapping, message, err);
+      await this.publishDlq(mapping, message, err, {
+        entityId,
+        asOf,
+        correlationId,
+      });
     }
   }
 
@@ -197,6 +217,7 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
           throw err;
         }
         this.metrics.retries += 1;
+        ingestRetryCounter.add(1, { featureSet: mapping.featureSet, topic: mapping.topic, attempt });
         const delay = baseBackoff * attempt + Math.floor(Math.random() * jitter);
         this.logger.warn('[feature-ingest] retrying feature ingestion', {
           attempt,
@@ -222,14 +243,35 @@ export class FeatureIngestionWorker<TPayload = Record<string, unknown>> {
     return true;
   }
 
-  private async publishDlq(mapping: FeatureIngestionMapping<TPayload>, message: Message<TPayload>, err: unknown): Promise<void> {
+  private async publishDlq(
+    mapping: FeatureIngestionMapping<TPayload>,
+    message: Message<TPayload>,
+    err: unknown,
+    context?: { entityId?: string; asOf?: string; correlationId?: string },
+  ): Promise<void> {
     const dlqTopic = this.options.dlqTopic ?? DEFAULT_OPTIONS.dlqTopic;
     this.metrics.dlq += 1;
-    await this.bus.publish(dlqTopic, {
+    ingestDlqCounter.add(1, { featureSet: mapping.featureSet, topic: mapping.topic });
+
+    const correlationId = context?.correlationId ?? message.headers?.['x-correlation-id'];
+    const entityHash =
+      context?.entityId && context.entityId.length > 0
+        ? createHash('sha256').update(context.entityId).digest('hex')
+        : undefined;
+
+    const dlqPayload = {
       originalTopic: mapping.topic,
-      payload: message.payload,
-      headers: message.headers,
-      error: err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) },
+      featureSet: mapping.featureSet,
+      entityHash,
+      asOf: context?.asOf ?? null,
+      correlationId: correlationId ?? null,
+      error: err instanceof Error ? err.message : String(err),
+      timestamp: new Date().toISOString(),
+    };
+
+    await this.bus.publish(dlqTopic, dlqPayload, {
+      'x-correlation-id': correlationId ?? undefined,
+      'x-feature-set': mapping.featureSet,
     });
   }
 }

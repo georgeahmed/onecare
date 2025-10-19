@@ -28,17 +28,30 @@ class MemoryIdempotencyStore {
   constructor() {
     this.entries = new Map();
   }
+  prune() {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.entries.entries()) {
+      if (expiresAt !== null && expiresAt <= now) {
+        this.entries.delete(key);
+      }
+    }
+  }
   async exists(key) {
+    this.prune();
     return this.entries.has(key);
   }
-  async put(key) {
-    this.entries.set(key, Date.now());
+  async put(key, ttlSeconds) {
+    this.prune();
+    const expiresAt = Number.isFinite(ttlSeconds) ? Date.now() + ttlSeconds * 1000 : null;
+    this.entries.set(key, expiresAt);
   }
-  async reserve(key) {
+  async reserve(key, ttlSeconds) {
+    this.prune();
     if (this.entries.has(key)) {
       return 'exists';
     }
-    this.entries.set(key, Date.now());
+    const expiresAt = Number.isFinite(ttlSeconds) ? Date.now() + ttlSeconds * 1000 : null;
+    this.entries.set(key, expiresAt);
     return 'reserved';
   }
   async delete(key) {

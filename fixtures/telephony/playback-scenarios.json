@@ -1,0 +1,22 @@
+[
+  {
+    "callId": "call-playback-001",
+    "audioRef": "memory://call-playback-001",
+    "patientId": "patient-playback-001",
+    "transcript": "Caller needs nurse callback about lab results",
+    "intent": "telephony.callback",
+    "confidence": 0.92,
+    "language": "en",
+    "correlationId": "corr-playback-001"
+  },
+  {
+    "callId": "call-playback-002",
+    "audioRef": "memory://call-playback-002",
+    "patientId": "patient-playback-002",
+    "transcript": "Caller reports severe chest pain and shortness of breath",
+    "intent": "telephony.emergency",
+    "confidence": 0.96,
+    "language": "en",
+    "correlationId": "corr-playback-002"
+  }
+]

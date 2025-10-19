@@ -1,3 +1,5 @@
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -20,6 +22,7 @@ const REQUEST_TOTAL_METRIC = 'fhir_requests_total';
 const REQUEST_ERROR_METRIC = 'fhir_request_errors_total';
 const CIRCUIT_OPEN_METRIC = 'fhir_circuit_open_total';
 const CIRCUIT_HALF_OPEN_METRIC = 'fhir_circuit_half_open_total';
+const TRANSACTION_DURATION_METRIC = 'fhir.transaction.duration_ms';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_TIMEOUT_MS = 500;
@@ -37,6 +40,91 @@ const totalCounter: CounterMetric = createCounter(REQUEST_TOTAL_METRIC);
 const errorCounter: CounterMetric = createCounter(REQUEST_ERROR_METRIC);
 const circuitOpenedCounter: CounterMetric = createCounter(CIRCUIT_OPEN_METRIC);
 const circuitHalfOpenCounter: CounterMetric = createCounter(CIRCUIT_HALF_OPEN_METRIC);
+const transactionDurationHistogram: HistogramMetric = createHistogram(TRANSACTION_DURATION_METRIC);
+
+function createKeepAliveFetch(baseUrl: string, timeoutMs: number): FetchImpl {
+  const parsed = new URL(baseUrl);
+  const isHttps = parsed.protocol === 'https:';
+  const httpModule = isHttps ? https : http;
+  const agent = new httpModule.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1_000,
+    maxSockets: 50,
+    timeout: 60_000,
+  });
+
+  return async (input, init = {}) =>
+    new Promise<Response>((resolve, reject) => {
+      const target = typeof input === 'string' ? new URL(input) : new URL(input.toString());
+      const headersInit: Record<string, string> = {};
+      if (init.headers instanceof Headers) {
+        for (const [key, value] of init.headers.entries()) {
+          headersInit[key] = value;
+        }
+      } else if (Array.isArray(init.headers)) {
+        for (const [key, value] of init.headers) {
+          headersInit[key] = value;
+        }
+      } else if (init.headers && typeof init.headers === 'object') {
+        Object.assign(headersInit, init.headers as Record<string, string>);
+      }
+      const requestOptions: http.RequestOptions = {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port ? Number(target.port) : target.protocol === 'https:' ? 443 : 80,
+        path: `${target.pathname}${target.search}`,
+        method: init.method ?? 'GET',
+        headers: headersInit,
+        agent,
+      };
+
+      const request = httpModule.request(requestOptions, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (Array.isArray(value)) {
+              headers.set(key, value.join(', '));
+            } else if (value !== undefined) {
+              headers.set(key, String(value));
+            }
+          }
+          resolve(new Response(body, { status: res.statusCode ?? 0, statusText: res.statusMessage ?? '', headers }));
+        });
+      });
+
+      request.setTimeout(timeoutMs, () => {
+        request.destroy(new Error('RequestTimeout'));
+      });
+
+      request.on('error', (error) => reject(error));
+
+      if (init.body instanceof Uint8Array || Buffer.isBuffer(init.body)) {
+        request.write(init.body);
+      } else if (typeof init.body === 'string') {
+        request.write(init.body);
+      } else if (init.body instanceof ArrayBuffer) {
+        request.write(Buffer.from(init.body));
+      }
+
+      const signal = init.signal;
+      const onAbort = () => {
+        request.destroy(new Error('AbortError'));
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+        request.on('close', () => signal.removeEventListener('abort', onAbort));
+      }
+
+      request.end();
+    });
+}
 
 export interface HttpFhirRepositoryOptions {
   baseUrl: string;
@@ -156,7 +244,7 @@ export class HttpFhirRepository implements FhirRepository {
     this.authHeader = buildAuthHeader(options.authToken);
     this.timeoutMs = clampTimeout(options.timeoutMs);
     this.maxRetries = clampRetries(options.maxRetries);
-    this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? createKeepAliveFetch(this.baseUrl, this.timeoutMs);
     this.practiceId = options.practiceId;
     this.circuitFailureThreshold =
       Number.isFinite(options.circuitBreakerThreshold)
@@ -173,7 +261,8 @@ export class HttpFhirRepository implements FhirRepository {
   }
 
   async upsertBundle(bundle: FhirBundle): Promise<FhirBundle> {
-    return this.request<FhirBundle>({
+    const start = performance.now();
+    const result = await this.request<FhirBundle>({
       method: 'POST',
       path: '',
       body: bundle,
@@ -182,6 +271,12 @@ export class HttpFhirRepository implements FhirRepository {
       idempotent: true,
       expectJsonBody: true,
     });
+    const duration = performance.now() - start;
+    transactionDurationHistogram.record(Number(duration.toFixed(2)), {
+      operation: 'Bundle.upsert',
+      practiceId: this.practiceId,
+    });
+    return result;
   }
 
   async createTask(task: unknown): Promise<FhirResourceRef> {

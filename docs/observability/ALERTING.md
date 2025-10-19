@@ -1,10 +1,10 @@
 # Alert Hygiene & On-Call Guide
 
-This playbook explains how alerts are grouped, deduplicated, and triaged across the observability stack. It complements the Prometheus/Loki configuration shipped in compose and should be mirrored in staging/production infrastructure.
+This playbook explains how alerts are grouped, deduplicated, and triaged across the observability stack. It complements the Prometheus/Loki configuration shipped in compose and should be mirrored in staging/production infrastructure. A summary of active SLOs/alerts lives in `docs/SLOs.md`; service-specific response steps are documented in `docs/runbooks/oncall.md`.
 
 ## Alert Dedupe & Grouping
 
-Alertmanager (or Grafana Alerting) must normalise labels so duplicate events collapse into a single incident. The canonical rule files live in `infra/monitoring/alerts/` and ship with the docker-compose Prometheus config:
+Alertmanager (or Grafana Alerting) must normalise labels so duplicate events collapse into a single incident. The canonical rule files live in `infra/monitoring/alerts/` (converted from the templates in `docs/observability/alerts/`). Sync them into clusters via Helm/Kustomize so alert definitions remain version-controlled.
 
 - **Group by**: `service`, `severity`, `slo`, `team`. Avoid high-cardinality labels such as `pod`, `instance`, or `correlationId`.
 - **Timing knobs**:
@@ -12,6 +12,7 @@ Alertmanager (or Grafana Alerting) must normalise labels so duplicate events col
   - `group_interval: 5m` – aggregate repeated alerts for the same group.
   - `repeat_interval: 2h` – resend if the alert is still active after mitigation window.
 - **Label scrubbing**: ensure exporters drop volatile labels (already enforced in `infra/monitoring/prometheus.yml`) so dedupe stays effective.
+- **Routing**: map `severity=critical` alerts to the PagerDuty/OpsGenie on-call schedule defined in `docs/runbooks/oncall.md#incident-intake`; route `warning` to the owning team Slack channel with a 15-minute auto-escalation.
 
 Record these values in Helm values or Terraform modules when deploying to shared clusters.
 
@@ -24,16 +25,17 @@ Use scheduled silences for maintenance to prevent alert floods while keeping mon
 3. Never silence `severity=critical` without a live fallback; prefer downgrading to `warning` if the risk is acceptable.
 4. After the window, remove silences and verify alerts re-register within 5 minutes.
 
-Track silences in the change log and review weekly to avoid stale entries.
+Track silences in the change log and review weekly to avoid stale entries. Maintenance events must reference the relevant SLO entry (`docs/SLOs.md`) so post-maintenance reviews confirm no objective drift.
 
 ## Runbook Links in Alert Templates
 
-The alert templates in `docs/observability/alerts/*.yaml` include a `runbook` annotation. Populate the value with a URL pointing to the relevant section of this document or service-specific runbooks:
+Alert definitions must carry a `runbook` annotation pointing to `docs/runbooks/oncall.md` anchors. The generator templates in `docs/observability/alerts/*.yaml` show the structure; the concrete PrometheusRule manifests in `infra/monitoring/alerts/` embed the final URLs.
 
-- Triage latency: `https://onecare/runbooks/triage-latency`
-- Scribe backlog: `https://onecare/runbooks/scribe-backlog`
-- On-call response: `https://onecare/runbooks/oncall-protocol`
-- ICS routing/ack latency: `https://onecare/runbooks/ics-routing-latency`
+- Example runbook URLs:
+  - Triage latency: `https://onecare/runbooks/oncall#orchestrator-latency`
+  - Booking latency: `https://onecare/runbooks/oncall#booking-latency`
+  - DLQ backlog: `https://onecare/runbooks/oncall#dlq-remediation`
+  - ICS ack latency: `https://onecare/runbooks/oncall#ics-acknowledgements`
 
 Use the same runbook slug in Grafana dashboards to allow one-click pivoting from panels to playbooks.
 

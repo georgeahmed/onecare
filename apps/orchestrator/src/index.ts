@@ -1,13 +1,24 @@
 import * as http from 'http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID, createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
 import { getBus, getNatsBusHealth, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
-import { createEnvelope, PortalSubmission, Topics, AuditEvent as ContractAuditEvent } from '@onecare/events';
+import {
+  createEnvelope,
+  PortalSubmission,
+  Topics,
+  AuditEvent as ContractAuditEvent,
+  type ClinicianTaskSummary,
+  type ClinicianTaskDetail,
+  type ResolveRequest,
+  type ScheduleCallbackRequest,
+  type BookSlotRequest,
+} from '@onecare/events';
 import { validate } from '@onecare/domain';
 import {
   initTracing,
@@ -34,6 +45,8 @@ import {
   withFhirValidation,
   type FeatureStore,
   type FhirRepository,
+  type FhirBundle,
+  type FhirBundleEntry,
   type IdempotencyStore,
   type InvalidFhirError,
   type ObjectStore,
@@ -468,6 +481,20 @@ const bookingAvailabilityBase = (() => {
   }
 })();
 
+function resolveBookingServiceBase(): URL | null {
+    const raw = process.env.BOOKING_SERVICE_URL?.trim();
+    if (!raw) return null;
+    try {
+      return new URL(raw);
+    } catch (error) {
+      logger.warn('booking service upstream rejected - invalid URL', {
+        value: raw,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+}
+
 function parseBooleanFlag(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
@@ -811,12 +838,18 @@ const oidcJwksUri = resolveOidcJwksUri();
 const oidcTimeoutMs = resolveOidcTimeoutMs();
 const oidcClockSkewSeconds = resolveOidcClockSkewSeconds();
 function constructFhirRepository(): FhirRepository {
+  const maybeFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+  const testFetch =
+    process.env.NODE_ENV === 'test' && typeof maybeFetch === 'function'
+      ? maybeFetch.bind(globalThis)
+      : undefined;
   const repository = createHttpFhirRepository({
     baseUrl: fhirBaseUrl,
     authToken: fhirAuthToken,
     timeoutMs: fhirTimeoutMs,
     maxRetries: fhirMaxRetries,
     practiceId,
+    fetchImpl: testFetch,
     circuitBreakerThreshold: parsePositiveInt(process.env.FHIR_CIRCUIT_FAILURE_THRESHOLD, 3, 20),
     circuitBreakerCooldownMs: parsePositiveInt(process.env.FHIR_CIRCUIT_COOLDOWN_MS, 15_000, 5 * 60_000),
     circuitBreakerHalfOpenSuccesses: parsePositiveInt(process.env.FHIR_CIRCUIT_HALF_OPEN_SUCCESS, 2, 10),
@@ -1069,6 +1102,14 @@ const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
 const BOOKING_RESOURCES = ['Slot'] as const;
 const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
 const BOOKING_SCOPE = 'booking:read';
+const CLINICIAN_TASKS_ACTION = 'clinician:tasks:read';
+const CLINICIAN_TASKS_WRITE_ACTION = 'clinician:tasks:write';
+const CLINIC_SCOPE_PREFIX = 'clinic:';
+const DEFAULT_CLINICIAN_TASK_LIMIT = 25;
+const MAX_CLINICIAN_TASK_LIMIT = 100;
+const TASK_SEARCH_SORT = '-authored-on,-_id';
+const CLINIC_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const TASK_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const BOOKING_PARAM_KEYS = ['serviceType', 'windowStart', 'windowEnd', 'location'] as const;
 type BookingParamKey = typeof BOOKING_PARAM_KEYS[number];
 const BOOKING_ALLOWED_PARAMS = new Set<BookingParamKey>(BOOKING_PARAM_KEYS);
@@ -1077,6 +1118,9 @@ function isBookingParamKey(value: string): value is BookingParamKey {
   return BOOKING_ALLOWED_PARAMS.has(value as BookingParamKey);
 }
 const BOOKING_QUERY_SCHEMA_ID = 'https://onecare/schemas/booking/booking-search-request.json';
+const CLINICIAN_RESOLVE_SCHEMA_ID = 'https://onecare/schemas/clinician/resolve.json';
+const CLINICIAN_SCHEDULE_CALLBACK_SCHEMA_ID = 'https://onecare/schemas/clinician/schedule-callback.json';
+const CLINICIAN_BOOK_SLOT_SCHEMA_ID = 'https://onecare/schemas/clinician/book-slot.json';
 const MAX_ATTACHMENTS = 10;
 const FEATURE_LOG_SCOPE = 'analytics:feature:write';
 const FEATURE_LOG_PURPOSE = 'analytics-lite';
@@ -2167,6 +2211,1135 @@ server = http.createServer((req, res) => withCorrelationContext(() => {
     return;
   }
 
+  const clinicianTaskDetailMatch =
+    req.method === 'GET' ? /^\/clinician\/tasks\/([^/]+)$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskDetailMatch) {
+    const taskId = decodeURIComponent(clinicianTaskDetailMatch[1] ?? '').trim();
+    const routeLabel = 'GET /clinician/tasks/:id';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}`;
+      const signatureOk = await security.verifySignatureAndReplayGuard(authHeader, fingerprint);
+      if (!signatureOk) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+      const scopes = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_ACTION, undefined, scopes))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(
+          `Task/${encodeURIComponent(taskId)}`,
+        );
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      if (!taskResource || (taskResource.resourceType as string | undefined) !== 'Task') {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      const owner = (taskResource.owner as Record<string, unknown> | undefined) ?? undefined;
+      const ownerRef = owner && typeof owner.reference === 'string' ? owner.reference : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scopes, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const now = Date.now();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, now);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      const detail = await buildClinicianTaskDetail(taskResource, summary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now,
+      });
+
+      logger.info('clinician.tasks.detail', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        attachments: detail.attachments?.length ?? 0,
+        correlationId: corr,
+      });
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  const clinicianTaskAssignMatch =
+    req.method === 'POST' ? /^\/clinician\/tasks\/([^/]+)\/assign$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskAssignMatch) {
+    const taskId = decodeURIComponent(clinicianTaskAssignMatch[1] ?? '').trim();
+    const routeLabel = 'POST /clinician/tasks/:id/assign';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+      if (authContext.actor.type !== 'practitioner') {
+        respondError(res, 'invalid_input', 'Only practitioners may assign tasks', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}:assign`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      const scope = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_WRITE_ACTION, undefined, scope))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      const bodyBuffer = await readRequestBody(req, 4 * 1024);
+      let assignBody: unknown = {};
+      if (bodyBuffer.length > 0) {
+        try {
+          assignBody = JSON.parse(bodyBuffer.toString('utf8')) as unknown;
+        } catch {
+          throw new HttpError('invalid_input', 'Invalid JSON body');
+        }
+      }
+      if (assignBody !== null && typeof assignBody !== 'object') {
+        throw new HttpError('invalid_input', 'Invalid request body');
+      }
+      const assigneeInput = typeof (assignBody as { assignee?: unknown }).assignee === 'string'
+        ? ((assignBody as { assignee?: string }).assignee ?? '').trim()
+        : undefined;
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const ownerRef = typeof (taskResource.owner as { reference?: string } | undefined)?.reference === 'string'
+        ? (taskResource.owner as { reference?: string }).reference
+        : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scope, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const nowEpoch = Date.now();
+      const now = new Date(nowEpoch).toISOString();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, nowEpoch);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      const assignment = buildAssigneeInfo(assigneeInput, authContext.actor);
+      if (isTaskAlreadyAssigned(taskResource, assignment)) {
+        const detail = await buildClinicianTaskDetail(taskResource, summary, {
+          repository: fhirRepository,
+          patientId: summary.patientId,
+          requestCorrelationId: corr ?? undefined,
+          now: nowEpoch,
+        });
+        respondJson(res, 200, detail, corr, setOutcome);
+        return;
+      }
+
+      const updatedResource = applyAssignmentToTask(taskResource, assignment, authContext.actor.id, now);
+      const patch = buildTaskAssignmentPatch(taskId, updatedResource);
+      try {
+        if (typeof fhirRepository.updateTask === 'function') {
+          const ifMatch = extractTaskVersion(taskResource);
+          await fhirRepository.updateTask(taskId, patch, ifMatch ? { ifMatch } : undefined);
+        }
+      } catch (error) {
+        const mapped = mapFhirPersistenceError(error);
+        respondError(res, mapped.code, mapped.message, corr, setOutcome, mapped.details);
+        return;
+      }
+
+      const updatedSummary = mapTaskResourceToSummary(updatedResource, clinicId, nowEpoch) ?? summary;
+      const detail = await buildClinicianTaskDetail(updatedResource, updatedSummary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now: nowEpoch,
+      });
+
+      logger.info('clinician.tasks.assigned', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        assignee: assignment.reference,
+        correlationId: corr,
+      });
+
+      const auditEvent = recordAudit('clinician.task.assigned', corr, {
+        actor: authContext.actor,
+        subjectRef: safePatientReference(summary.patientId),
+        outcome: 'allow',
+        details: {
+          taskId: detail.id,
+          clinicId: detail.clinicId,
+          assigneeReference: assignment.reference,
+          assigneeDisplay: assignment.display ?? null,
+        },
+      });
+      await emitAuditEvent(auditEvent);
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  const clinicianTaskUnassignMatch =
+    req.method === 'POST' ? /^\/clinician\/tasks\/([^/]+)\/unassign$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskUnassignMatch) {
+    const taskId = decodeURIComponent(clinicianTaskUnassignMatch[1] ?? '').trim();
+    const routeLabel = 'POST /clinician/tasks/:id/unassign';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+      if (authContext.actor.type !== 'practitioner') {
+        respondError(res, 'invalid_input', 'Only practitioners may unassign tasks', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}:unassign`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      const scope = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_WRITE_ACTION, undefined, scope))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const ownerRef = typeof (taskResource.owner as { reference?: string } | undefined)?.reference === 'string'
+        ? (taskResource.owner as { reference?: string }).reference
+        : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scope, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const nowEpoch = Date.now();
+      const now = new Date(nowEpoch).toISOString();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, nowEpoch);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      if (isTaskUnassigned(taskResource)) {
+        const detail = await buildClinicianTaskDetail(taskResource, summary, {
+          repository: fhirRepository,
+          patientId: summary.patientId,
+          requestCorrelationId: corr ?? undefined,
+          now: nowEpoch,
+        });
+        respondJson(res, 200, detail, corr, setOutcome);
+        return;
+      }
+
+      const updatedResource = applyUnassignmentToTask(taskResource, authContext.actor.id, now);
+      const patch = buildTaskUnassignmentPatch(taskId, updatedResource);
+      try {
+        if (typeof fhirRepository.updateTask === 'function') {
+          const ifMatch = extractTaskVersion(taskResource);
+          await fhirRepository.updateTask(taskId, patch, ifMatch ? { ifMatch } : undefined);
+        }
+      } catch (error) {
+        const mapped = mapFhirPersistenceError(error);
+        respondError(res, mapped.code, mapped.message, corr, setOutcome, mapped.details);
+        return;
+      }
+
+      const updatedSummary = mapTaskResourceToSummary(updatedResource, clinicId, nowEpoch) ?? summary;
+      const detail = await buildClinicianTaskDetail(updatedResource, updatedSummary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now: nowEpoch,
+      });
+
+      logger.info('clinician.tasks.unassigned', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        correlationId: corr,
+      });
+
+      const auditEvent = recordAudit('clinician.task.unassigned', corr, {
+        actor: authContext.actor,
+        subjectRef: safePatientReference(summary.patientId),
+        outcome: 'allow',
+        details: {
+          taskId: detail.id,
+          clinicId: detail.clinicId,
+        },
+      });
+      await emitAuditEvent(auditEvent);
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  const clinicianTaskResolveMatch =
+    req.method === 'POST' ? /^\/clinician\/tasks\/([^/]+)\/resolve$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskResolveMatch) {
+    const taskId = decodeURIComponent(clinicianTaskResolveMatch[1] ?? '').trim();
+    const routeLabel = 'POST /clinician/tasks/:id/resolve';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+      if (authContext.actor.type !== 'practitioner') {
+        respondError(res, 'invalid_input', 'Only practitioners may resolve tasks', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}:resolve`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      const scope = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_WRITE_ACTION, undefined, scope))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      const bodyBuffer = await readRequestBody(req, 8 * 1024);
+      let payload: unknown = {};
+      if (bodyBuffer.length > 0) {
+        try {
+          payload = JSON.parse(bodyBuffer.toString('utf8')) as unknown;
+        } catch {
+          throw new HttpError('invalid_input', 'Invalid JSON body');
+        }
+      }
+      if (!payload || typeof payload !== 'object') {
+        throw new HttpError('invalid_input', 'Invalid request body');
+      }
+      const validation = validate(CLINICIAN_RESOLVE_SCHEMA_ID, payload);
+      if (!validation.ok) {
+        respondError(res, 'invalid_input', 'Invalid request body', corr, setOutcome, {
+          errors: validation.errors.slice(0, 5),
+        });
+        return;
+      }
+      const resolveRequest = payload as ResolveRequest;
+      const outcome = sanitizeResolutionOutcome(resolveRequest.outcome);
+      const note = sanitizeResolutionNote(resolveRequest.note);
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const ownerRef = typeof (taskResource.owner as { reference?: string } | undefined)?.reference === 'string'
+        ? (taskResource.owner as { reference?: string }).reference
+        : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scope, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const nowEpoch = Date.now();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, nowEpoch);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      if (isTaskAlreadyResolved(taskResource, outcome, note)) {
+        const detail = await buildClinicianTaskDetail(taskResource, summary, {
+          repository: fhirRepository,
+          patientId: summary.patientId,
+          requestCorrelationId: corr ?? undefined,
+          now: nowEpoch,
+        });
+        respondJson(res, 200, detail, corr, setOutcome);
+        return;
+      }
+
+      const nowIso = new Date(nowEpoch).toISOString();
+      const updatedResource = applyResolutionToTask(
+        taskResource,
+        { outcome, note },
+        authContext.actor.id,
+        nowIso,
+      );
+      const patch = buildTaskResolutionPatch(taskId, updatedResource);
+      try {
+        if (typeof fhirRepository.updateTask === 'function') {
+          const ifMatch = extractTaskVersion(taskResource);
+          await fhirRepository.updateTask(taskId, patch, ifMatch ? { ifMatch } : undefined);
+        }
+      } catch (error) {
+        const mapped = mapFhirPersistenceError(error);
+        respondError(res, mapped.code, mapped.message, corr, setOutcome, mapped.details);
+        return;
+      }
+
+      const updatedSummary = mapTaskResourceToSummary(updatedResource, clinicId, nowEpoch) ?? summary;
+      const detail = await buildClinicianTaskDetail(updatedResource, updatedSummary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now: nowEpoch,
+      });
+
+      logger.info('clinician.tasks.resolved', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        outcome,
+        correlationId: corr,
+      });
+
+      const auditEvent = recordAudit('clinician.task.resolved', corr, {
+        actor: authContext.actor,
+        subjectRef: safePatientReference(summary.patientId),
+        outcome: 'allow',
+        details: {
+          taskId: detail.id,
+          clinicId: detail.clinicId,
+          resolveOutcome: outcome,
+          noteProvided: Boolean(note),
+        },
+      });
+      await emitAuditEvent(auditEvent);
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  const clinicianTaskScheduleMatch =
+    req.method === 'POST' ? /^\/clinician\/tasks\/([^/]+)\/schedule-callback$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskScheduleMatch) {
+    const taskId = decodeURIComponent(clinicianTaskScheduleMatch[1] ?? '').trim();
+    const routeLabel = 'POST /clinician/tasks/:id/schedule-callback';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+      if (authContext.actor.type !== 'practitioner') {
+        respondError(res, 'invalid_input', 'Only practitioners may schedule callbacks', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}:schedule-callback`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      const scope = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_WRITE_ACTION, undefined, scope))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      const bodyBuffer = await readRequestBody(req, 8 * 1024);
+      let payload: unknown = {};
+      if (bodyBuffer.length > 0) {
+        try {
+          payload = JSON.parse(bodyBuffer.toString('utf8')) as unknown;
+        } catch {
+          throw new HttpError('invalid_input', 'Invalid JSON body');
+        }
+      }
+      if (!payload || typeof payload !== 'object') {
+        throw new HttpError('invalid_input', 'Invalid request body');
+      }
+      const validation = validate(CLINICIAN_SCHEDULE_CALLBACK_SCHEMA_ID, payload);
+      if (!validation.ok) {
+        respondError(res, 'invalid_input', 'Invalid request body', corr, setOutcome, {
+          errors: validation.errors.slice(0, 5),
+        });
+        return;
+      }
+
+      const request = payload as ScheduleCallbackRequest;
+      const scheduledAtIso = sanitizeCallbackTimestamp(request.when);
+      const callbackWindow = sanitizeCallbackWindow(request.window);
+      const callbackNote = sanitizeCallbackUserNote(request.note);
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const ownerRef = typeof (taskResource.owner as { reference?: string } | undefined)?.reference === 'string'
+        ? (taskResource.owner as { reference?: string }).reference
+        : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scope, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const nowEpoch = Date.now();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, nowEpoch);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      const existingSchedule = extractScheduledCallback(taskResource);
+      if (existingSchedule) {
+        const retryAfterSeconds = computeRetryAfterSeconds(existingSchedule.when, nowEpoch);
+        if (retryAfterSeconds !== undefined) {
+          res.setHeader('retry-after', retryAfterSeconds.toString());
+        }
+        respondError(
+          res,
+          'conflict',
+          'Callback already scheduled',
+          corr,
+          setOutcome,
+          {
+            scheduledAt: existingSchedule.when,
+            window: existingSchedule.window ?? null,
+          },
+        );
+        return;
+      }
+
+      const nowIso = new Date(nowEpoch).toISOString();
+      const updatedResource = applyScheduleCallbackToTask(
+        taskResource,
+        { when: scheduledAtIso, window: callbackWindow, note: callbackNote },
+        authContext.actor.id,
+        nowIso,
+      );
+      const patch = buildTaskCallbackPatch(taskId, updatedResource);
+      try {
+        if (typeof fhirRepository.updateTask === 'function') {
+          const ifMatch = extractTaskVersion(taskResource);
+          await fhirRepository.updateTask(taskId, patch, ifMatch ? { ifMatch } : undefined);
+        }
+      } catch (error) {
+        const mapped = mapFhirPersistenceError(error);
+        respondError(res, mapped.code, mapped.message, corr, setOutcome, mapped.details);
+        return;
+      }
+
+      const updatedSummary = mapTaskResourceToSummary(updatedResource, clinicId, nowEpoch) ?? summary;
+      const detail = await buildClinicianTaskDetail(updatedResource, updatedSummary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now: nowEpoch,
+      });
+
+      logger.info('clinician.tasks.callback_scheduled', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        when: scheduledAtIso,
+        window: callbackWindow ?? null,
+        noteProvided: Boolean(callbackNote),
+        correlationId: corr,
+      });
+
+      const auditEvent = recordAudit('clinician.task.callback_scheduled', corr, {
+        actor: authContext.actor,
+        subjectRef: safePatientReference(summary.patientId),
+        outcome: 'allow',
+        details: {
+          taskId: detail.id,
+          clinicId: detail.clinicId,
+          scheduledAt: scheduledAtIso,
+          window: callbackWindow ?? null,
+          noteProvided: Boolean(callbackNote),
+        },
+      });
+      await emitAuditEvent(auditEvent);
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  const clinicianTaskBookMatch =
+    req.method === 'POST' ? /^\/clinician\/tasks\/([^/]+)\/book-slot$/.exec(parsedUrl.pathname ?? '') : null;
+  if (clinicianTaskBookMatch) {
+    const taskId = decodeURIComponent(clinicianTaskBookMatch[1] ?? '').trim();
+    const routeLabel = 'POST /clinician/tasks/:id/book-slot';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      if (!taskId || !TASK_ID_PATTERN.test(taskId)) {
+        respondError(res, 'invalid_input', 'Invalid task id', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+      if (authContext.actor.type !== 'practitioner') {
+        respondError(res, 'invalid_input', 'Only practitioners may book slots', corr, setOutcome);
+        return;
+      }
+      const bookingServiceBase = resolveBookingServiceBase();
+      if (!bookingServiceBase) {
+        respondError(res, 'upstream_unavailable', 'Booking service not configured', corr, setOutcome);
+        return;
+      }
+
+      const fingerprint = `${requestId}:clinician:task:${taskId}:book-slot`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      const scope = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_WRITE_ACTION, undefined, scope))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+
+      const bodyBuffer = await readRequestBody(req, 8 * 1024);
+      let payload: unknown = {};
+      if (bodyBuffer.length > 0) {
+        try {
+          payload = JSON.parse(bodyBuffer.toString('utf8')) as unknown;
+        } catch {
+          throw new HttpError('invalid_input', 'Invalid JSON body');
+        }
+      }
+      if (!payload || typeof payload !== 'object') {
+        throw new HttpError('invalid_input', 'Invalid request body');
+      }
+      const validation = validate(CLINICIAN_BOOK_SLOT_SCHEMA_ID, payload);
+      if (!validation.ok) {
+        respondError(res, 'invalid_input', 'Invalid request body', corr, setOutcome, {
+          errors: validation.errors.slice(0, 5),
+        });
+        return;
+      }
+      const request = payload as BookSlotRequest;
+
+      let taskResource: Record<string, unknown>;
+      try {
+        taskResource = await fhirRepository.readResource<Record<string, unknown>>(`Task/${encodeURIComponent(taskId)}`);
+      } catch (error) {
+        const status = extractStatusCode(error);
+        if (status === 404) {
+          respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+          return;
+        }
+        if (status === 403) {
+          respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const ownerRef = typeof (taskResource.owner as { reference?: string } | undefined)?.reference === 'string'
+        ? (taskResource.owner as { reference?: string }).reference
+        : undefined;
+      const clinicId = extractClinicIdFromOwner(ownerRef);
+      if (!clinicId) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scope, clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+
+      const nowEpoch = Date.now();
+      const summary = mapTaskResourceToSummary(taskResource, clinicId, nowEpoch);
+      if (!summary) {
+        respondError(res, 'not_found', 'Task not found', corr, setOutcome);
+        return;
+      }
+
+      const slot = extractBookingSlot(taskResource, request.slotId);
+      if (!slot) {
+        respondError(res, 'invalid_input', 'Slot details missing on task', corr, setOutcome);
+        return;
+      }
+
+      if (request.modality) {
+        slot.modality = request.modality;
+      }
+      if (request.location) {
+        slot.location = request.location;
+      }
+
+      const bookingUrl = new URL('booking/appointments', bookingServiceBase);
+      const bookingPayload = {
+        slot,
+        patientId: summary.patientId,
+        originatingTaskId: taskId,
+        idempotencyKey: `clinician:${taskId}:${slot.id}`,
+      };
+
+      const bookingHeaders: Record<string, string> = {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'x-correlation-id': corr,
+        'x-idempotency-key': bookingPayload.idempotencyKey,
+      };
+      if (authHeader) {
+        bookingHeaders.authorization = authHeader;
+      }
+      bookingHeaders['x-clinic-id'] = clinicId;
+
+      const controller = new AbortController();
+      const timeoutMs = Math.min(getBookingAvailabilityTimeoutMs(), 10_000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      let upstream: Response;
+      try {
+        upstream = await fetch(bookingUrl, {
+          method: 'POST',
+          headers: bookingHeaders,
+          body: JSON.stringify(bookingPayload),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof Error && error.name === 'AbortError') {
+          respondError(res, 'upstream_timeout', 'Booking service request timed out', corr, setOutcome);
+          return;
+        }
+        respondError(res, 'upstream_unavailable', 'Booking service request failed', corr, setOutcome, {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const upstreamBodyText = await upstream.text();
+      let upstreamBody: Record<string, unknown> | null = null;
+      if (upstreamBodyText.length > 0) {
+        try {
+          upstreamBody = JSON.parse(upstreamBodyText) as Record<string, unknown>;
+        } catch {
+          upstreamBody = null;
+        }
+      }
+
+      if (upstream.status === 409) {
+        const retryAfter = upstream.headers.get('retry-after');
+        if (retryAfter) {
+          res.setHeader('retry-after', retryAfter);
+        }
+        respondError(
+          res,
+          'conflict',
+          'Appointment slot already booked',
+          corr,
+          setOutcome,
+          upstreamBody ?? undefined,
+        );
+        return;
+      }
+      if (upstream.status === 429) {
+        const retryAfter = upstream.headers.get('retry-after');
+        if (retryAfter) {
+          res.setHeader('retry-after', retryAfter);
+        }
+        respondError(res, 'too_many_requests', 'Booking service rate limited the request', corr, setOutcome, upstreamBody ?? undefined);
+        return;
+      }
+      if (!upstream.ok) {
+        respondError(
+          res,
+          upstream.status >= 500 ? 'upstream_unavailable' : 'invalid_input',
+          'Booking service rejected the request',
+          corr,
+          setOutcome,
+          upstreamBody ?? undefined,
+        );
+        return;
+      }
+
+      const appointmentId =
+        (upstreamBody?.appointmentId as string | undefined) ?? `appt-${slot.id}`;
+      const nowIso = new Date(nowEpoch).toISOString();
+      const updatedResource = applyBookSlotToTask(
+        taskResource,
+        {
+          appointmentId,
+          slotId: slot.id,
+          modality: slot.modality,
+          location: slot.location,
+        },
+        authContext.actor.id,
+        nowIso,
+      );
+      const patch = buildTaskBookingPatch(taskId, updatedResource);
+      try {
+        if (typeof fhirRepository.updateTask === 'function') {
+          const ifMatch = extractTaskVersion(taskResource);
+          await fhirRepository.updateTask(taskId, patch, ifMatch ? { ifMatch } : undefined);
+        }
+      } catch (error) {
+        const mapped = mapFhirPersistenceError(error);
+        respondError(res, mapped.code, mapped.message, corr, setOutcome, mapped.details);
+        return;
+      }
+
+      const updatedSummary = mapTaskResourceToSummary(updatedResource, clinicId, nowEpoch) ?? summary;
+      const detail = await buildClinicianTaskDetail(updatedResource, updatedSummary, {
+        repository: fhirRepository,
+        patientId: summary.patientId,
+        requestCorrelationId: corr ?? undefined,
+        now: nowEpoch,
+      });
+
+      logger.info('clinician.tasks.slot_booked', {
+        taskHash: hashIdentifier(detail.id),
+        clinicHash: hashIdentifier(detail.clinicId),
+        appointmentId,
+        slotId: slot.id,
+        correlationId: corr,
+      });
+
+      const auditEvent = recordAudit('clinician.task.slot_booked', corr, {
+        actor: authContext.actor,
+        subjectRef: safePatientReference(summary.patientId),
+        outcome: 'allow',
+        details: {
+          taskId: detail.id,
+          clinicId: detail.clinicId,
+          appointmentId,
+          slotId: slot.id,
+        },
+      });
+      await emitAuditEvent(auditEvent);
+
+      respondJson(res, 200, detail, corr, setOutcome);
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && parsedUrl.pathname === '/clinician/tasks') {
+    const routeLabel = 'GET /clinician/tasks';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+
+      const rawClinicId = parsedUrl.searchParams.get('clinicId') ?? '';
+      const fingerprint = `${requestId}:clinician:tasks:${rawClinicId}`;
+      const signatureOk = await security.verifySignatureAndReplayGuard(authHeader, fingerprint);
+      if (!signatureOk) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      let query: ClinicianTasksQuery;
+      try {
+        query = parseClinicianTasksQuery(parsedUrl.searchParams, authContext.actor);
+      } catch (error) {
+        if (error instanceof HttpError) {
+          respondError(res, error.code, error.message, corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const scopes = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_ACTION, undefined, scopes))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scopes, query.clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+      if (query.cursorClinicId && query.cursorClinicId !== query.clinicId) {
+        respondError(res, 'invalid_input', 'Cursor does not match clinic scope', corr, setOutcome);
+        return;
+      }
+
+      const searchPath = query.cursorPath ?? buildClinicianTaskSearchPath(query);
+      const bundle = await fhirRepository.readResource<FhirBundle>(searchPath);
+      const now = Date.now();
+      const summaries = mapBundleToClinicianSummaries(bundle, query.clinicId, now);
+      const nextCursor = extractNextCursor(bundle);
+
+      logger.info('clinician.tasks.listed', {
+        clinicHash: hashIdentifier(query.clinicId),
+        count: summaries.length,
+        correlationId: corr,
+      });
+
+      const responseBody: { items: ClinicianTaskSummary[]; nextCursor?: string } = {
+        items: summaries,
+      };
+      if (nextCursor) {
+        responseBody.nextCursor = nextCursor;
+      }
+
+      respondJson(res, 200, responseBody, corr, setOutcome);
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && parsedUrl.pathname === '/clinician/tasks') {
+    const routeLabel = 'GET /clinician/tasks';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      res.setHeader('cache-control', 'no-store, max-age=0');
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      if (!authHeader) {
+        respondError(res, 'unauthorized', 'Authorization header missing', corr, setOutcome);
+        return;
+      }
+      const authContext = buildAuthContext(req.headers);
+      if (!authContext) {
+        respondError(res, 'unauthorized', 'Actor context missing', corr, setOutcome);
+        return;
+      }
+
+      const rawClinicId = parsedUrl.searchParams.get('clinicId') ?? '';
+      const fingerprint = `${requestId}:clinician:tasks:${rawClinicId}`;
+      const signatureOk = await security.verifySignatureAndReplayGuard(authHeader, fingerprint);
+      if (!signatureOk) {
+        respondError(res, 'unauthorized', 'Signature verification failed', corr, setOutcome);
+        return;
+      }
+
+      let query: ClinicianTasksQuery;
+      try {
+        query = parseClinicianTasksQuery(parsedUrl.searchParams, authContext.actor);
+      } catch (error) {
+        if (error instanceof HttpError) {
+          respondError(res, error.code, error.message, corr, setOutcome);
+          return;
+        }
+        throw error;
+      }
+
+      const scopes = authContext.scope;
+      if (!(await security.authorize(authContext.actor, CLINICIAN_TASKS_ACTION, undefined, scopes))) {
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+        return;
+      }
+      if (!hasClinicAccess(scopes, query.clinicId)) {
+        respondError(res, 'forbidden', 'Clinic access denied', corr, setOutcome);
+        return;
+      }
+      if (query.cursorClinicId && query.cursorClinicId !== query.clinicId) {
+        respondError(res, 'invalid_input', 'Cursor does not match clinic scope', corr, setOutcome);
+        return;
+      }
+
+      const searchPath = query.cursorPath ?? buildClinicianTaskSearchPath(query);
+      const bundle = await fhirRepository.readResource<FhirBundle>(searchPath);
+      const now = Date.now();
+      const summaries = mapBundleToClinicianSummaries(bundle, query.clinicId, now);
+      const nextCursor = extractNextCursor(bundle);
+
+      logger.info('clinician.tasks.listed', {
+        clinicHash: hashIdentifier(query.clinicId),
+        count: summaries.length,
+        correlationId: corr,
+      });
+
+      const responseBody: { items: ClinicianTaskSummary[]; nextCursor?: string } = {
+        items: summaries,
+      };
+      if (nextCursor) {
+        responseBody.nextCursor = nextCursor;
+      }
+
+      respondJson(res, 200, responseBody, corr, setOutcome);
+    });
+    return;
+  }
+
   if (req.method === 'POST' && parsedUrl.pathname === '/feature-log') {
     const routeLabel = 'POST /feature-log';
     handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
@@ -2545,6 +3718,1257 @@ if (process.env.NODE_ENV !== 'test') {
     // eslint-disable-next-line no-console
     console.log(`orchestrator listening on :${port}`);
   });
+}
+
+interface ClinicianTasksQuery {
+  clinicId: string;
+  limit: number;
+  priorityCode?: string;
+  statusCode?: string;
+  fromIso?: string;
+  toIso?: string;
+  performerRef?: string;
+  performerMissing?: boolean;
+  cursorPath?: string;
+  cursorClinicId?: string;
+}
+
+const PRIORITY_REQUEST_TO_FHIR: Record<string, string> = {
+  STAT: 'stat',
+  URGENT: 'urgent',
+  SOON: 'asap',
+  ROUTINE: 'routine',
+};
+
+const FHIR_PRIORITY_TO_RESPONSE: Record<string, ClinicianTaskSummary['priority']> = {
+  stat: 'STAT',
+  urgent: 'URGENT',
+  asap: 'SOON',
+  routine: 'ROUTINE',
+};
+
+const STATUS_REQUEST_TO_FHIR: Record<string, string> = {
+  NEW: 'requested',
+  IN_PROGRESS: 'in-progress',
+  DONE: 'completed',
+};
+
+const FHIR_STATUS_TO_RESPONSE: Record<string, ClinicianTaskSummary['status']> = {
+  requested: 'NEW',
+  accepted: 'IN_PROGRESS',
+  'in-progress': 'IN_PROGRESS',
+  'on-hold': 'IN_PROGRESS',
+  ready: 'IN_PROGRESS',
+  completed: 'DONE',
+  cancelled: 'DONE',
+  'entered-in-error': 'DONE',
+  failed: 'DONE',
+};
+
+function parseClinicianTasksQuery(params: URLSearchParams, actor: AuthContext['actor']): ClinicianTasksQuery {
+  const clinicIdRaw = (params.get('clinicId') ?? '').trim();
+  if (!clinicIdRaw || !CLINIC_ID_PATTERN.test(clinicIdRaw)) {
+    throw new HttpError('invalid_input', 'clinicId is required');
+  }
+  const clinicId = clinicIdRaw;
+  const limit = parseLimit(params.get('limit'));
+
+  const priorityParam = params.get('priority');
+  let priorityCode: string | undefined;
+  if (priorityParam) {
+    const upper = priorityParam.trim().toUpperCase();
+    const mapped = PRIORITY_REQUEST_TO_FHIR[upper];
+    if (!mapped) {
+      throw new HttpError('invalid_input', 'Invalid priority filter');
+    }
+    priorityCode = mapped;
+  }
+
+  const statusParam = params.get('status');
+  let statusCode: string | undefined;
+  if (statusParam) {
+    const upper = statusParam.trim().toUpperCase();
+    const mapped = STATUS_REQUEST_TO_FHIR[upper];
+    if (!mapped) {
+      throw new HttpError('invalid_input', 'Invalid status filter');
+    }
+    statusCode = mapped;
+  }
+
+  const fromIso = parseDateParam(params.get('from'), 'from');
+  const toIso = parseDateParam(params.get('to'), 'to');
+  if (fromIso && toIso && new Date(fromIso).getTime() > new Date(toIso).getTime()) {
+    throw new HttpError('invalid_input', '`from` must not be later than `to`');
+  }
+
+  const assigneeParam = (params.get('assignee') ?? 'any').trim().toLowerCase();
+  let performerRef: string | undefined;
+  let performerMissing: boolean | undefined;
+  if (assigneeParam === 'me') {
+    if (!actor?.id || actor.type !== 'practitioner') {
+      throw new HttpError('invalid_input', 'assignee=me requires practitioner actor');
+    }
+    performerRef = `Practitioner/${actor.id}`;
+  } else if (assigneeParam === 'unassigned') {
+    performerMissing = true;
+  } else if (assigneeParam === 'any' || assigneeParam === '') {
+    // no-op
+  } else {
+    throw new HttpError('invalid_input', 'Invalid assignee filter');
+  }
+
+  const cursorParam = params.get('cursor');
+  let cursorPath: string | undefined;
+  let cursorClinicId: string | undefined;
+  if (cursorParam) {
+    cursorPath = decodeCursor(cursorParam);
+    cursorClinicId = extractClinicIdFromCursor(cursorPath);
+    if (!cursorClinicId) {
+      throw new HttpError('invalid_input', 'Invalid cursor value');
+    }
+  }
+
+  return {
+    clinicId,
+    limit,
+    priorityCode,
+    statusCode,
+    fromIso,
+    toIso,
+    performerRef,
+    performerMissing,
+    cursorPath,
+    cursorClinicId,
+  };
+}
+
+function parseLimit(raw: string | null): number {
+  if (!raw) {
+    return DEFAULT_CLINICIAN_TASK_LIMIT;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new HttpError('invalid_input', 'limit must be a positive integer');
+  }
+  return Math.max(1, Math.min(Math.floor(parsed), MAX_CLINICIAN_TASK_LIMIT));
+}
+
+function parseDateParam(raw: string | null, field: 'from' | 'to'): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    throw new HttpError('invalid_input', `Invalid ${field} timestamp`);
+  }
+  return date.toISOString();
+}
+
+function decodeCursor(cursor: string): string {
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8').trim();
+    if (!decoded || !decoded.startsWith('Task')) {
+      throw new Error('invalid cursor path');
+    }
+    return decoded;
+  } catch {
+    throw new HttpError('invalid_input', 'Invalid cursor value');
+  }
+}
+
+function encodeCursor(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+function normalizeFhirLink(url: unknown): string | null {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.replace(/^\//, '');
+    return path ? `${path}${parsed.search}` : parsed.search ? parsed.search.replace(/^\?/, '') : null;
+  } catch {
+    return trimmed.replace(/^\//, '') || null;
+  }
+}
+
+function extractClinicIdFromCursor(path: string): string | undefined {
+  const queryIndex = path.indexOf('?');
+  const search = queryIndex >= 0 ? path.slice(queryIndex + 1) : path;
+  const params = new URLSearchParams(search);
+  const owners = params.getAll('owner');
+  for (const owner of owners) {
+    const clinicId = extractClinicIdFromOwner(owner);
+    if (clinicId) {
+      return clinicId;
+    }
+  }
+  return undefined;
+}
+
+function extractClinicIdFromOwner(owner: string | undefined): string | null {
+  if (!owner) return null;
+  const trimmed = owner.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.startsWith('Organization/') ? trimmed.slice('Organization/'.length) : trimmed;
+  if (!normalized || !CLINIC_ID_PATTERN.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function hasClinicAccess(scope: string[] | undefined, clinicId: string): boolean {
+  const normalizedClinic = clinicId.trim().toLowerCase();
+  if (!normalizedClinic) return false;
+  const scopeSet = new Set<string>(
+    (scope ?? []).map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
+  );
+  if (scopeSet.has('*')) return true;
+  if (scopeSet.has(`${CLINIC_SCOPE_PREFIX}${normalizedClinic}`)) return true;
+  if (scopeSet.has(`${CLINIC_SCOPE_PREFIX}*`)) return true;
+  return false;
+}
+
+function buildClinicianTaskSearchPath(query: ClinicianTasksQuery): string {
+  const params: string[] = [
+    `_count=${query.limit}`,
+    '_format=json',
+    `_sort=${TASK_SEARCH_SORT}`,
+    `owner=${encodeURIComponent(`Organization/${query.clinicId}`)}`,
+  ];
+  if (query.priorityCode) {
+    params.push(`priority=${encodeURIComponent(query.priorityCode)}`);
+  }
+  if (query.statusCode) {
+    params.push(`status=${encodeURIComponent(query.statusCode)}`);
+  }
+  if (query.fromIso) {
+    params.push(`authored-on=ge${encodeURIComponent(query.fromIso)}`);
+  }
+  if (query.toIso) {
+    params.push(`authored-on=le${encodeURIComponent(query.toIso)}`);
+  }
+  if (query.performerRef) {
+    params.push(`performer=${encodeURIComponent(query.performerRef)}`);
+  }
+  if (query.performerMissing === true) {
+    params.push('performer:missing=true');
+  }
+  return params.length > 0 ? `Task?${params.join('&')}` : 'Task';
+}
+
+function extractStatusCode(error: unknown): number | undefined {
+  if (isFhirRequestError(error)) {
+    return error.status;
+  }
+  if (error && typeof error === 'object' && 'status' in (error as Record<string, unknown>)) {
+    const candidate = (error as { status?: unknown }).status;
+    if (typeof candidate === 'number') {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+const MAX_DETAIL_ATTACHMENTS = 8;
+const MAX_AUDIT_ENTRIES = 20;
+const CORRELATION_ID_MIN_LENGTH = 6;
+const CORRELATION_ID_MAX_LENGTH = 128;
+
+async function buildClinicianTaskDetail(
+  resource: Record<string, unknown>,
+  summary: ClinicianTaskSummary,
+  options: {
+    repository: FhirRepository;
+    patientId: string;
+    requestCorrelationId?: string;
+  },
+): Promise<ClinicianTaskDetail> {
+  const narrative = extractTaskNarrative(resource, summary.shortReason);
+  const correlationCandidate =
+    extractTaskCorrelationId(resource) ??
+    sanitizeCorrelationId(options.requestCorrelationId) ??
+    `task-${summary.id}`;
+  const correlationId = sanitizeCorrelationId(correlationCandidate) ?? `task-${summary.id}`;
+  const audit = extractTaskAudit(resource);
+  const attachments = await collectTaskAttachments(resource, options.repository, options.patientId);
+  const actionsAllowed = determineActionsAllowed(summary);
+  return {
+    ...summary,
+    narrative,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    actionsAllowed,
+    audit,
+    correlationId,
+  };
+}
+
+function extractTaskNarrative(resource: Record<string, unknown>, fallback: string): string {
+  const notes = Array.isArray(resource.note) ? resource.note : [];
+  for (const note of notes) {
+    if (!note || typeof note !== 'object') continue;
+    const text = typeof (note as Record<string, unknown>).text === 'string' ? (note as Record<string, unknown>).text.trim() : '';
+    if (text) {
+      return safeTruncate(text, 500_000);
+    }
+  }
+  const description = typeof resource.description === 'string' ? resource.description.trim() : '';
+  if (description) {
+    return safeTruncate(description, 500_000);
+  }
+  return fallback;
+}
+
+function sanitizeCorrelationId(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length < CORRELATION_ID_MIN_LENGTH) {
+    return undefined;
+  }
+  return safeTruncate(trimmed, CORRELATION_ID_MAX_LENGTH);
+}
+
+function extractTaskCorrelationId(resource: Record<string, unknown>): string | undefined {
+  const identifiers = Array.isArray(resource.identifier) ? resource.identifier : [];
+  for (const identifier of identifiers) {
+    if (!identifier || typeof identifier !== 'object') continue;
+    const entry = identifier as Record<string, unknown>;
+    const value = typeof entry.value === 'string' ? entry.value.trim() : '';
+    if (!value) continue;
+    const system = typeof entry.system === 'string' ? entry.system.toLowerCase() : '';
+    if (!system || system.includes('correlation')) {
+      return safeTruncate(value, CORRELATION_ID_MAX_LENGTH);
+    }
+  }
+  const extensions = Array.isArray(resource.extension) ? resource.extension : [];
+  for (const extension of extensions) {
+    if (!extension || typeof extension !== 'object') continue;
+    const entry = extension as Record<string, unknown>;
+    const url = typeof entry.url === 'string' ? entry.url.toLowerCase() : '';
+    const valueString = typeof entry.valueString === 'string' ? entry.valueString.trim() : '';
+    if (valueString && url.includes('correlation')) {
+      return safeTruncate(valueString, CORRELATION_ID_MAX_LENGTH);
+    }
+  }
+  return undefined;
+}
+
+function extractTaskAudit(resource: Record<string, unknown>): ClinicianTaskDetail['audit'] {
+  const notes = Array.isArray(resource.note) ? resource.note : [];
+  const audit: ClinicianTaskDetail['audit'] = [];
+  for (const note of notes) {
+    if (!note || typeof note !== 'object') continue;
+    const entry = note as Record<string, unknown>;
+    const text = typeof entry.text === 'string' ? entry.text.trim() : '';
+    if (!text) continue;
+    const when = coerceIsoTimestamp(typeof entry.time === 'string' ? entry.time : undefined);
+    if (!when) continue;
+    const who = extractNoteAuthor(entry);
+    audit.push({
+      when,
+      who,
+      what: safeTruncate(text, 256),
+    });
+    if (audit.length >= MAX_AUDIT_ENTRIES) {
+      break;
+    }
+  }
+  return audit;
+}
+
+function extractNoteAuthor(note: Record<string, unknown>): string {
+  const authorString = typeof note.authorString === 'string' ? note.authorString.trim() : '';
+  if (authorString) {
+    return safeTruncate(authorString, 64);
+  }
+  const authorReference = note.authorReference as Record<string, unknown> | undefined;
+  if (authorReference && typeof authorReference === 'object') {
+    const display = typeof authorReference.display === 'string' ? authorReference.display.trim() : '';
+    if (display) {
+      return safeTruncate(display, 64);
+    }
+    const reference = typeof authorReference.reference === 'string' ? authorReference.reference.trim() : '';
+    if (reference) {
+      return safeTruncate(reference, 64);
+    }
+  }
+  return 'system';
+}
+
+function determineActionsAllowed(summary: ClinicianTaskSummary): string[] {
+  const actions = new Set<string>();
+  if (summary.status !== 'DONE') {
+    actions.add('CALL');
+    actions.add('SCHEDULE');
+    actions.add('RESOLVE');
+    if (summary.priority === 'STAT' || summary.priority === 'URGENT') {
+      actions.add('ESCALATE');
+    }
+    if (summary.status === 'NEW') {
+      actions.add('ASSIGN');
+    } else if (summary.status === 'IN_PROGRESS') {
+      if (summary.assignee) {
+        actions.add('UNASSIGN');
+      } else {
+        actions.add('ASSIGN');
+      }
+    }
+  }
+  return Array.from(actions).slice(0, 16);
+}
+
+interface AssigneeInfo {
+  reference: string;
+  display?: string;
+}
+
+function buildAssigneeInfo(requested: string | undefined, actor: AuthContext['actor']): AssigneeInfo {
+  if (actor.type !== 'practitioner') {
+    throw new HttpError('invalid_input', 'Only practitioners may assign tasks');
+  }
+  const referenceBase = `Practitioner/${actor.id}`;
+  if (!requested) {
+    return { reference: referenceBase, display: actor.id };
+  }
+  const trimmed = requested.trim();
+  if (!trimmed) {
+    return { reference: referenceBase, display: actor.id };
+  }
+  if (/^[A-Za-z]+\/[A-Za-z0-9._-]{1,64}$/.test(trimmed)) {
+    return { reference: trimmed };
+  }
+  return { reference: referenceBase, display: safeTruncate(trimmed, 64) };
+}
+
+function isTaskAlreadyAssigned(resource: Record<string, unknown>, assignment: AssigneeInfo): boolean {
+  const status = typeof resource.status === 'string' ? resource.status.trim().toLowerCase() : '';
+  if (status !== 'in-progress') {
+    return false;
+  }
+  const performers = Array.isArray(resource.performer) ? (resource.performer as Array<Record<string, unknown>>) : [];
+  if (performers.length === 0) {
+    return false;
+  }
+  const first = performers[0] ?? {};
+  const actor = (first.actor as Record<string, unknown> | undefined) ?? {};
+  const referenceCandidate =
+    typeof actor.reference === 'string'
+      ? actor.reference.trim()
+      : typeof first.reference === 'string'
+        ? first.reference.trim()
+        : undefined;
+  if (referenceCandidate && referenceCandidate.toLowerCase() !== assignment.reference.toLowerCase()) {
+    return false;
+  }
+  if (!assignment.display) {
+    return Boolean(referenceCandidate);
+  }
+  const displayCandidate =
+    typeof actor.display === 'string'
+      ? actor.display.trim()
+      : typeof first.display === 'string'
+        ? first.display.trim()
+        : undefined;
+  if (!displayCandidate) {
+    return false;
+  }
+  return displayCandidate.toLowerCase() === assignment.display.toLowerCase();
+}
+
+function isTaskUnassigned(resource: Record<string, unknown>): boolean {
+  const status = typeof resource.status === 'string' ? resource.status.trim().toLowerCase() : '';
+  const performers = Array.isArray(resource.performer) ? resource.performer : [];
+  return (status === 'requested' || status === 'draft') && performers.length === 0;
+}
+
+function applyAssignmentToTask(
+  resource: Record<string, unknown>,
+  assignment: AssigneeInfo,
+  actorId: string,
+  timestamp: string,
+): Record<string, unknown> {
+  const clone = structuredClone(resource) as Record<string, unknown>;
+  clone.status = 'in-progress';
+  clone.lastModified = timestamp;
+  clone.performer = [
+    {
+      actor: {
+        reference: assignment.reference,
+        ...(assignment.display ? { display: assignment.display } : {}),
+      },
+      ...(assignment.display ? { display: assignment.display } : {}),
+    },
+  ];
+  clone.note = appendTaskNoteEntries(clone.note, {
+    text: `assign:${assignment.display ?? assignment.reference}`,
+    time: timestamp,
+    authorString: actorId,
+  });
+  updateTaskMetaLastUpdated(clone, timestamp);
+  return clone;
+}
+
+function applyUnassignmentToTask(resource: Record<string, unknown>, actorId: string, timestamp: string): Record<string, unknown> {
+  const clone = structuredClone(resource) as Record<string, unknown>;
+  clone.status = 'requested';
+  clone.lastModified = timestamp;
+  clone.performer = [];
+  clone.note = appendTaskNoteEntries(clone.note, {
+    text: `unassign:${actorId}`,
+    time: timestamp,
+    authorString: actorId,
+  });
+  updateTaskMetaLastUpdated(clone, timestamp);
+  return clone;
+}
+
+function appendTaskNoteEntries(existing: unknown, entry: Record<string, unknown>): Array<Record<string, unknown>> {
+  const notes = Array.isArray(existing)
+    ? (structuredClone(existing) as Array<Record<string, unknown>>)
+    : [];
+  notes.push(entry);
+  return notes.slice(-MAX_AUDIT_ENTRIES);
+}
+
+function updateTaskMetaLastUpdated(resource: Record<string, unknown>, timestamp: string): void {
+  const currentMeta = (resource.meta as Record<string, unknown> | undefined) ?? {};
+  const meta = { ...currentMeta, lastUpdated: timestamp };
+  resource.meta = meta;
+}
+
+function buildTaskAssignmentPatch(taskId: string, resource: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    resourceType: 'Task',
+    id: taskId,
+    status: resource.status,
+    performer: resource.performer,
+    note: resource.note,
+    lastModified: resource.lastModified,
+  };
+  if (resource.meta) {
+    patch.meta = resource.meta;
+  }
+  return patch;
+}
+
+function buildTaskUnassignmentPatch(taskId: string, resource: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    resourceType: 'Task',
+    id: taskId,
+    status: resource.status,
+    performer: [],
+    note: resource.note,
+    lastModified: resource.lastModified,
+  };
+  if (resource.meta) {
+    patch.meta = resource.meta;
+  }
+  return patch;
+}
+
+function sanitizeResolutionOutcome(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new HttpError('invalid_input', 'Outcome must not be empty');
+  }
+  return safeTruncate(trimmed, 64);
+}
+
+function sanitizeResolutionNote(value: string | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return safeTruncate(trimmed, 500);
+}
+
+function formatResolutionNote(outcome: string, note: string | undefined): string {
+  if (note) {
+    return `resolve:${outcome}:${note}`;
+  }
+  return `resolve:${outcome}`;
+}
+
+function isTaskAlreadyResolved(resource: Record<string, unknown>, outcome: string, note: string | undefined): boolean {
+  const status = typeof resource.status === 'string' ? resource.status.trim().toLowerCase() : '';
+  if (status !== 'completed') {
+    return false;
+  }
+  const businessStatus = resource.businessStatus as Record<string, unknown> | undefined;
+  const businessText =
+    typeof businessStatus?.text === 'string' ? businessStatus.text.trim() : undefined;
+  if ((businessText ?? '') !== outcome) {
+    return false;
+  }
+  const notes = Array.isArray(resource.note) ? (resource.note as Array<Record<string, unknown>>) : [];
+  const expected = formatResolutionNote(outcome, note);
+  for (const entry of notes) {
+    if (!entry || typeof entry !== 'object') continue;
+    const text = typeof (entry as Record<string, unknown>).text === 'string'
+      ? (entry as Record<string, unknown>).text.trim()
+      : '';
+    if (text === expected) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function applyResolutionToTask(
+  resource: Record<string, unknown>,
+  resolution: { outcome: string; note?: string },
+  actorId: string,
+  timestamp: string,
+): Record<string, unknown> {
+  const clone = structuredClone(resource) as Record<string, unknown>;
+  clone.status = 'completed';
+  clone.statusReason = { text: resolution.outcome };
+  clone.businessStatus = { text: resolution.outcome };
+  clone.lastModified = timestamp;
+  const noteEntry = {
+    text: formatResolutionNote(resolution.outcome, resolution.note),
+    time: timestamp,
+    authorString: actorId,
+  };
+  clone.note = appendTaskNoteEntries(clone.note, noteEntry);
+  updateTaskMetaLastUpdated(clone, timestamp);
+  return clone;
+}
+
+function buildTaskResolutionPatch(taskId: string, resource: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    resourceType: 'Task',
+    id: taskId,
+    status: resource.status,
+    businessStatus: resource.businessStatus,
+    statusReason: resource.statusReason,
+    note: resource.note,
+    lastModified: resource.lastModified,
+  };
+  if (resource.meta) {
+    patch.meta = resource.meta;
+  }
+  return patch;
+}
+
+interface ScheduledCallbackInfo {
+  when: string;
+  window?: string;
+  note?: string;
+}
+
+function sanitizeCallbackTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new HttpError('invalid_input', 'Invalid callback timestamp');
+  }
+  return parsed.toISOString();
+}
+
+function sanitizeCallbackWindow(value: string | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return safeTruncate(trimmed, 64);
+}
+
+function sanitizeCallbackUserNote(value: string | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return safeTruncate(trimmed, 500);
+}
+
+function formatCallbackAnnotation(info: ScheduledCallbackInfo): string {
+  return `callback:${JSON.stringify({
+    when: info.when,
+    window: info.window ?? null,
+    note: info.note ?? null,
+  })}`;
+}
+
+function parseCallbackAnnotation(text: string): ScheduledCallbackInfo | null {
+  if (!text.startsWith('callback:')) return null;
+  const payload = text.slice('callback:'.length);
+  try {
+    const parsed = JSON.parse(payload) as { when?: string; window?: string | null; note?: string | null };
+    if (!parsed || typeof parsed.when !== 'string') {
+      return null;
+    }
+    return {
+      when: parsed.when,
+      window: typeof parsed.window === 'string' ? parsed.window : undefined,
+      note: typeof parsed.note === 'string' ? parsed.note : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractScheduledCallback(resource: Record<string, unknown>): ScheduledCallbackInfo | null {
+  const notes = Array.isArray(resource.note) ? (resource.note as Array<Record<string, unknown>>) : [];
+  for (const entry of notes) {
+    if (!entry || typeof entry !== 'object') continue;
+    const text = typeof (entry as Record<string, unknown>).text === 'string'
+      ? (entry as Record<string, unknown>).text.trim()
+      : '';
+    if (!text) continue;
+    const parsed = parseCallbackAnnotation(text);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function applyScheduleCallbackToTask(
+  resource: Record<string, unknown>,
+  schedule: { when: string; window?: string; note?: string },
+  actorId: string,
+  timestamp: string,
+): Record<string, unknown> {
+  const clone = structuredClone(resource) as Record<string, unknown>;
+  clone.status = 'in-progress';
+  clone.businessStatus = { text: 'callback_scheduled' };
+  clone.lastModified = timestamp;
+  const noteEntry = {
+    text: formatCallbackAnnotation(schedule),
+    time: timestamp,
+    authorString: actorId,
+  };
+  clone.note = appendTaskNoteEntries(clone.note, noteEntry);
+  updateTaskMetaLastUpdated(clone, timestamp);
+  return clone;
+}
+
+function buildTaskCallbackPatch(taskId: string, resource: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    resourceType: 'Task',
+    id: taskId,
+    status: resource.status,
+    businessStatus: resource.businessStatus,
+    note: resource.note,
+    lastModified: resource.lastModified,
+  };
+  if (resource.meta) {
+    patch.meta = resource.meta;
+  }
+  return patch;
+}
+
+function computeRetryAfterSeconds(whenIso: string, nowEpoch: number): number | undefined {
+  const target = Date.parse(whenIso);
+  if (!Number.isFinite(target)) return undefined;
+  const diffSeconds = Math.ceil((target - nowEpoch) / 1000);
+  if (diffSeconds <= 0) return undefined;
+  return Math.min(diffSeconds, 24 * 60 * 60);
+}
+
+interface BookingSlotDetails {
+  id: string;
+  start: string;
+  end: string;
+  organisationId: string;
+  serviceType?: string;
+  modality?: string;
+  location?: string;
+}
+
+function extractBookingSlot(resource: Record<string, unknown>, expectedSlotId: string): BookingSlotDetails | null {
+  const inputs = Array.isArray(resource.input) ? (resource.input as Array<Record<string, unknown>>) : [];
+  for (const entry of inputs) {
+    const valueString = typeof entry.valueString === 'string' ? entry.valueString : undefined;
+    if (!valueString) continue;
+    try {
+      const parsed = JSON.parse(valueString) as Partial<BookingSlotDetails>;
+      if (parsed && parsed.id === expectedSlotId && parsed.start && parsed.end && parsed.organisationId) {
+        return {
+          id: parsed.id,
+          start: parsed.start,
+          end: parsed.end,
+          organisationId: parsed.organisationId,
+          serviceType: parsed.serviceType,
+          modality: parsed.modality,
+          location: parsed.location,
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+interface AppointmentBookingInfo {
+  appointmentId: string;
+  slotId: string;
+  modality?: string;
+  location?: string;
+}
+
+function applyBookSlotToTask(
+  resource: Record<string, unknown>,
+  booking: AppointmentBookingInfo,
+  actorId: string,
+  timestamp: string,
+): Record<string, unknown> {
+  const clone = structuredClone(resource) as Record<string, unknown>;
+  clone.status = 'in-progress';
+  clone.businessStatus = { text: 'appointment_booked' };
+  clone.lastModified = timestamp;
+  clone.output = appendAppointmentOutput(clone.output, booking.appointmentId);
+  const noteEntry = {
+    text: formatBookingNote(booking),
+    time: timestamp,
+    authorString: actorId,
+  };
+  clone.note = appendTaskNoteEntries(clone.note, noteEntry);
+  updateTaskMetaLastUpdated(clone, timestamp);
+  return clone;
+}
+
+function buildTaskBookingPatch(taskId: string, resource: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    resourceType: 'Task',
+    id: taskId,
+    status: resource.status,
+    businessStatus: resource.businessStatus,
+    note: resource.note,
+    output: resource.output,
+    lastModified: resource.lastModified,
+  };
+  if (resource.meta) {
+    patch.meta = resource.meta;
+  }
+  return patch;
+}
+
+function appendAppointmentOutput(existing: unknown, appointmentId: string): Array<Record<string, unknown>> {
+  const entries = Array.isArray(existing)
+    ? (structuredClone(existing) as Array<Record<string, unknown>>)
+    : [];
+  entries.push({
+    type: { text: 'Appointment' },
+    valueReference: { reference: `Appointment/${appointmentId}` },
+    valueString: appointmentId,
+  });
+  return entries.slice(-MAX_DETAIL_ATTACHMENTS);
+}
+
+function formatBookingNote(booking: AppointmentBookingInfo): string {
+  return `book:${JSON.stringify({
+    appointmentId: booking.appointmentId,
+    slotId: booking.slotId,
+    modality: booking.modality ?? null,
+    location: booking.location ?? null,
+  })}`;
+}
+
+function extractTaskVersion(resource: Record<string, unknown>): string | undefined {
+  const meta = resource.meta as Record<string, unknown> | undefined;
+  const version = typeof meta?.versionId === 'string' ? meta.versionId.trim() : undefined;
+  if (!version) return undefined;
+  return `W/"${version}"`;
+}
+
+async function collectTaskAttachments(
+  resource: Record<string, unknown>,
+  repository: FhirRepository,
+  patientId: string,
+): Promise<Array<{ contentType: string; url: string }>> {
+  const attachments: Array<{ contentType: string; url: string }> = [];
+  const seenUrls = new Set<string>();
+  const containedDocs = collectContainedResources(resource, 'DocumentReference');
+  const targets = extractDocumentReferenceTargets(resource);
+  for (const id of targets.containedIds) {
+    if (attachments.length >= MAX_DETAIL_ATTACHMENTS) break;
+    const doc = containedDocs.get(id);
+    if (!doc) continue;
+    const mapped = mapDocumentReferenceToAttachments(
+      doc,
+      patientId,
+      seenUrls,
+      MAX_DETAIL_ATTACHMENTS - attachments.length,
+    );
+    attachments.push(...mapped);
+  }
+  for (const path of targets.externalRefs) {
+    if (attachments.length >= MAX_DETAIL_ATTACHMENTS) break;
+    try {
+      const doc = await repository.readResource<Record<string, unknown>>(path);
+      if (!doc || (doc.resourceType as string | undefined) !== 'DocumentReference') {
+        continue;
+      }
+      const mapped = mapDocumentReferenceToAttachments(
+        doc,
+        patientId,
+        seenUrls,
+        MAX_DETAIL_ATTACHMENTS - attachments.length,
+      );
+      attachments.push(...mapped);
+    } catch (error) {
+      if (isFhirRequestError(error)) {
+        if (error.status === 404 || error.status === 403) {
+          continue;
+        }
+      }
+      logger.warn('clinician.tasks.detail.attachment_fetch_failed', {
+        documentHash: hashIdentifier(path),
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return attachments.slice(0, MAX_DETAIL_ATTACHMENTS);
+}
+
+function extractDocumentReferenceTargets(resource: Record<string, unknown>): {
+  containedIds: Set<string>;
+  externalRefs: string[];
+} {
+  const containedIds = new Set<string>();
+  const external = new Set<string>();
+
+  const collect = (raw: unknown) => {
+    if (typeof raw !== 'string') return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('#')) {
+      const id = trimmed.slice(1);
+      if (id) containedIds.add(id);
+      return;
+    }
+    const normalized = normalizeReference(trimmed, 'DocumentReference');
+    if (normalized) {
+      external.add(normalized);
+    }
+  };
+
+  const supportingInfo = resource.supportingInfo;
+  if (Array.isArray(supportingInfo)) {
+    for (const entry of supportingInfo) {
+      if (!entry || typeof entry !== 'object') continue;
+      collect((entry as Record<string, unknown>).reference);
+    }
+  }
+
+  const input = resource.input;
+  if (Array.isArray(input)) {
+    for (const entry of input) {
+      if (!entry || typeof entry !== 'object') continue;
+      const valueReference = (entry as Record<string, unknown>).valueReference as Record<string, unknown> | undefined;
+      if (valueReference && typeof valueReference.reference === 'string') {
+        collect(valueReference.reference);
+      }
+    }
+  }
+
+  const output = resource.output;
+  if (Array.isArray(output)) {
+    for (const entry of output) {
+      if (!entry || typeof entry !== 'object') continue;
+      const valueReference = (entry as Record<string, unknown>).valueReference as Record<string, unknown> | undefined;
+      if (valueReference && typeof valueReference.reference === 'string') {
+        collect(valueReference.reference);
+      }
+    }
+  }
+
+  return {
+    containedIds,
+    externalRefs: Array.from(external).slice(0, MAX_DETAIL_ATTACHMENTS),
+  };
+}
+
+function collectContainedResources(
+  resource: Record<string, unknown>,
+  resourceType: string,
+): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  const contained = resource.contained;
+  if (!Array.isArray(contained)) return map;
+  for (const entry of contained) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as Record<string, unknown>;
+    const type = typeof candidate.resourceType === 'string' ? candidate.resourceType : '';
+    if (type !== resourceType) continue;
+    const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+    if (!id) continue;
+    map.set(id, candidate);
+  }
+  return map;
+}
+
+function mapDocumentReferenceToAttachments(
+  doc: Record<string, unknown>,
+  patientId: string,
+  seenUrls: Set<string>,
+  remaining: number,
+): Array<{ contentType: string; url: string }> {
+  if (remaining <= 0) return [];
+  const subject = doc.subject as Record<string, unknown> | undefined;
+  const subjectRef = subject && typeof subject.reference === 'string' ? subject.reference.trim() : undefined;
+  if (subjectRef) {
+    const subjectId = extractIdFromReference(subjectRef, 'Patient');
+    if (subjectId && subjectId !== patientId) {
+      return [];
+    }
+  }
+  const contents = Array.isArray(doc.content) ? doc.content : [];
+  const attachments: Array<{ contentType: string; url: string }> = [];
+  for (const entry of contents) {
+    if (attachments.length >= remaining) break;
+    if (!entry || typeof entry !== 'object') continue;
+    const attachment = (entry as Record<string, unknown>).attachment as Record<string, unknown> | undefined;
+    if (!attachment || typeof attachment !== 'object') continue;
+    const url = sanitizeAttachmentUrl(attachment.url);
+    if (!url || seenUrls.has(url)) continue;
+    const contentType =
+      typeof attachment.contentType === 'string' && attachment.contentType.trim().length > 0
+        ? safeTruncate(attachment.contentType.trim(), 128)
+        : 'application/octet-stream';
+    attachments.push({ contentType, url });
+    seenUrls.add(url);
+  }
+  return attachments;
+}
+
+function sanitizeAttachmentUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:') {
+    return null;
+  }
+  if (isPrivateHostname(parsed.hostname)) {
+    return null;
+  }
+  parsed.hash = '';
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.toString();
+}
+
+function normalizeReference(reference: string, expectedType: string): string | null {
+  const trimmed = reference.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      let segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length >= 3 && segments[2].toLowerCase() === '_history') {
+        segments = segments.slice(0, 2);
+      }
+      if (segments.length >= 2) {
+        const [type, id] = segments;
+        if (type.toLowerCase() === expectedType.toLowerCase() && id) {
+          return `${expectedType}/${id.split('?')[0]}`;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  const withoutQuery = trimmed.split('?')[0];
+  const segments = withoutQuery.split('/').filter(Boolean);
+  if (segments.length === 1) {
+    return `${expectedType}/${segments[0]}`;
+  }
+  if (segments.length >= 2) {
+    const [type, id] = segments;
+    if (type.toLowerCase() !== expectedType.toLowerCase() || !id) {
+      return null;
+    }
+    return `${expectedType}/${id}`;
+  }
+  return null;
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  if (!hostname) return true;
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.local') || lower.endsWith('.internal')) {
+    return true;
+  }
+  const ipType = isIP(hostname);
+  if (ipType === 4) {
+    const parts = hostname.split('.').map((part) => Number(part));
+    if (parts[0] === 10) return true;
+    if (parts[0] === 127) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  } else if (ipType === 6) {
+    const normalized = hostname.toLowerCase();
+    if (normalized === '::1') return true;
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+    if (normalized.startsWith('fe80')) return true;
+  }
+  return false;
+}
+
+function mapBundleToClinicianSummaries(bundle: FhirBundle, clinicId: string, now: number): ClinicianTaskSummary[] {
+  const entries = Array.isArray(bundle.entry) ? (bundle.entry as FhirBundleEntry[]) : [];
+  const results: ClinicianTaskSummary[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const resource = entry.resource;
+    if (!resource || typeof resource !== 'object') continue;
+    const mapped = mapTaskResourceToSummary(resource as Record<string, unknown>, clinicId, now);
+    if (mapped) {
+      results.push(mapped);
+    }
+  }
+  return results;
+}
+
+function mapTaskResourceToSummary(
+  resource: Record<string, unknown>,
+  clinicId: string,
+  now: number,
+): ClinicianTaskSummary | null {
+  if ((resource.resourceType as string | undefined) !== 'Task') {
+    return null;
+  }
+
+  const idRaw = typeof resource.id === 'string' ? resource.id.trim() : '';
+  if (!idRaw) {
+    return null;
+  }
+  const taskId = safeTruncate(idRaw, 64);
+
+  const owner = (resource.owner as Record<string, unknown> | undefined) ?? undefined;
+  const ownerRef = owner && typeof owner.reference === 'string' ? owner.reference : undefined;
+  const clinicFromOwner = extractClinicIdFromOwner(ownerRef);
+  if (!clinicFromOwner || clinicFromOwner !== clinicId) {
+    return null;
+  }
+
+  const priorityRaw = typeof resource.priority === 'string' ? resource.priority.trim().toLowerCase() : '';
+  const priority = FHIR_PRIORITY_TO_RESPONSE[priorityRaw];
+  if (!priority) {
+    return null;
+  }
+
+  const statusRaw = typeof resource.status === 'string' ? resource.status.trim().toLowerCase() : '';
+  const status = FHIR_STATUS_TO_RESPONSE[statusRaw];
+  if (!status) {
+    return null;
+  }
+
+  const subject = (resource as Record<string, unknown>)['for'] as Record<string, unknown> | undefined;
+  const subjectRef = subject && typeof subject.reference === 'string' ? subject.reference : undefined;
+  const patientIdRaw = subjectRef ? extractIdFromReference(subjectRef, 'Patient') : null;
+  if (!patientIdRaw) {
+    return null;
+  }
+  const patientId = safeTruncate(patientIdRaw, 64);
+
+  const authoredOn = typeof resource.authoredOn === 'string' ? resource.authoredOn : undefined;
+  const lastModified = typeof resource.lastModified === 'string' ? resource.lastModified : undefined;
+  const meta = (resource.meta as Record<string, unknown> | undefined) ?? undefined;
+  const lastUpdated =
+    meta && typeof meta.lastUpdated === 'string' ? (meta.lastUpdated as string) : undefined;
+  const createdAtIso =
+    coerceIsoTimestamp(authoredOn) ??
+    coerceIsoTimestamp(lastModified) ??
+    coerceIsoTimestamp(lastUpdated) ??
+    new Date(now).toISOString();
+
+  const waitMs = computeWaitMs(createdAtIso, now);
+  const shortReason = sanitizeShortReason(typeof resource.description === 'string' ? resource.description : undefined);
+  const assignee = extractAssignee(resource);
+  return {
+    id: taskId,
+    clinicId,
+    priority,
+    status,
+    shortReason,
+    patientId,
+    waitMs,
+    interpreter: undefined,
+    assignee,
+    createdAt: createdAtIso,
+  };
+}
+
+function coerceIsoTimestamp(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
+function extractIdFromReference(reference: string, expectedType: string): string | null {
+  const trimmed = reference.trim();
+  if (!trimmed) return null;
+  if (trimmed.toLowerCase().startsWith(`${expectedType.toLowerCase()}/`)) {
+    return trimmed.slice(expectedType.length + 1);
+  }
+  return trimmed;
+}
+
+function sanitizeShortReason(value: string | undefined): string {
+  const fallback = 'Clinical follow-up';
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return safeTruncate(trimmed, 256);
+}
+
+function safeTruncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return value.slice(0, maxLength);
+}
+
+function extractAssignee(resource: Record<string, unknown>): string | undefined {
+  const performers = resource.performer;
+  if (!Array.isArray(performers)) {
+    return undefined;
+  }
+  for (const performer of performers) {
+    if (!performer || typeof performer !== 'object') continue;
+    const performerObj = performer as Record<string, unknown>;
+    const actor = performerObj.actor as Record<string, unknown> | undefined;
+    const actorDisplay = actor && typeof actor.display === 'string' ? actor.display.trim() : undefined;
+    if (actorDisplay) {
+      return safeTruncate(actorDisplay, 64);
+    }
+    const actorReference = actor && typeof actor.reference === 'string' ? actor.reference.trim() : undefined;
+    if (actorReference) {
+      return safeTruncate(actorReference, 64);
+    }
+    const performerDisplay = typeof performerObj.display === 'string' ? performerObj.display.trim() : undefined;
+    if (performerDisplay) {
+      return safeTruncate(performerDisplay, 64);
+    }
+  }
+  return undefined;
+}
+
+function computeWaitMs(createdAtIso: string, now: number): number {
+  const createdAt = new Date(createdAtIso).getTime();
+  if (!Number.isFinite(createdAt)) return 0;
+  const diff = now - createdAt;
+  return diff <= 0 ? 0 : Math.round(diff);
+}
+
+function extractNextCursor(bundle: FhirBundle): string | undefined {
+  const links = Array.isArray(bundle.link) ? bundle.link : [];
+  const nextLink = links.find((link) => (link?.relation ?? '').toLowerCase() === 'next');
+  if (!nextLink || typeof nextLink.url !== 'string') {
+    return undefined;
+  }
+  const relative = normalizeFhirLink(nextLink.url);
+  if (!relative || !relative.startsWith('Task')) {
+    return undefined;
+  }
+  return encodeCursor(relative);
 }
 
 export function setBusReadyForTest(ready: boolean): void {

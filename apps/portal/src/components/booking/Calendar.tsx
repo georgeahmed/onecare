@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { BookingSlot } from '../../lib/booking';
 import type { EnhancedAccessWindow } from '../../lib/enhancedAccess';
-import { dayIndexToLabel, minutesToTimeLabel } from '../../lib/enhancedAccess';
+import {
+  formatDate,
+  formatTime,
+  getWeekdaySequence,
+  resolveLocalePreferences,
+  toIsoDay,
+  fromIsoDay,
+} from '../../lib/format';
 import { useLocale } from '../../i18n';
 
 export interface BookingCalendarProps {
@@ -23,9 +30,19 @@ interface CellContent {
   primarySlots: BookingSlot[];
 }
 
+interface DayDescriptor {
+  isoDay: number;
+  orderIndex: number;
+  date: Date;
+  weekdayShort: string;
+  dateLabel: string;
+  longLabel: string;
+}
+
 interface CellData {
   key: string;
-  day: number;
+  isoDay: number;
+  orderIndex: number;
   minute: number;
   rowIndex: number;
   withinWindow: boolean;
@@ -39,26 +56,6 @@ interface CellData {
 
 const INTERVAL_MINUTES = 15;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
-const WEEKDAY_LABELS: Record<number, string> = {
-  1: 'shortWeekday.monday',
-  2: 'shortWeekday.tuesday',
-  3: 'shortWeekday.wednesday',
-  4: 'shortWeekday.thursday',
-  5: 'shortWeekday.friday',
-  6: 'shortWeekday.saturday',
-  7: 'shortWeekday.sunday',
-};
-
-const LONG_WEEKDAY_LABELS: Record<number, string> = {
-  1: 'longWeekday.monday',
-  2: 'longWeekday.tuesday',
-  3: 'longWeekday.wednesday',
-  4: 'longWeekday.thursday',
-  5: 'longWeekday.friday',
-  6: 'longWeekday.saturday',
-  7: 'longWeekday.sunday',
-};
 
 const weekdayMap: Record<string, number> = {
   Mon: 1,
@@ -121,6 +118,7 @@ const BookingCalendar = ({
 }: BookingCalendarProps) => {
   const intl = useIntl();
   const { direction } = useLocale();
+  const localePreferences = useMemo(() => resolveLocalePreferences(intl.locale), [intl.locale]);
   const rows = useMemo(() => {
     const slotPlacements = slots
       .map((slot) => {
@@ -154,33 +152,60 @@ const BookingCalendar = ({
     return { range, slotPlacements };
   }, [slots, timezone, windows]);
 
-  const dayLabels = useMemo(() => {
+  const dayOrderZeroBased = useMemo(
+    () => getWeekdaySequence(localePreferences.firstDayOfWeek),
+    [localePreferences.firstDayOfWeek],
+  );
+
+  const isoDayOrder = useMemo(() => dayOrderZeroBased.map((value) => toIsoDay(value)), [dayOrderZeroBased]);
+
+  const dayDescriptors = useMemo<DayDescriptor[]>(() => {
     const referenceIso = slots.length > 0 ? slots[0].start : new Date().toISOString();
     const referenceDate = new Date(referenceIso);
-    const currentDay = getZonedDayAndMinutes(referenceIso, timezone)?.day ?? 1;
-    const startOfWeek = new Date(referenceDate.getTime() - (currentDay - 1) * DAY_IN_MS);
-    const formatterShort = new Intl.DateTimeFormat(intl.locale, {
-      timeZone: timezone,
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    });
-    const formatterFull = new Intl.DateTimeFormat(intl.locale, {
-      timeZone: timezone,
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-    });
-    return Array.from({ length: 7 }, (_, index) => {
+    const referenceIsoDay = getZonedDayAndMinutes(referenceIso, timezone)?.day ?? 1;
+    const referenceZeroDay = fromIsoDay(referenceIsoDay);
+    const offset = (referenceZeroDay - localePreferences.firstDayOfWeek + 7) % 7;
+    const startOfWeek = new Date(referenceDate.getTime() - offset * DAY_IN_MS);
+    return isoDayOrder.map((isoDay, index) => {
       const date = new Date(startOfWeek.getTime() + index * DAY_IN_MS);
-      const dayIndex = clampDay(index + 1);
+      const weekdayShort = formatDate(date, {
+        locale: intl.locale,
+        timeZone: timezone,
+        weekday: 'short',
+      });
+      const dateLabel = formatDate(date, {
+        locale: intl.locale,
+        timeZone: timezone,
+        month: 'short',
+        day: 'numeric',
+      });
+      const longLabel = formatDate(date, {
+        locale: intl.locale,
+        timeZone: timezone,
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      });
       return {
-        short: formatterShort.format(date),
-        full: formatterFull.format(date),
-        dayIndex,
+        isoDay,
+        orderIndex: index,
+        date,
+        weekdayShort,
+        dateLabel,
+        longLabel,
       };
     });
-  }, [intl.locale, slots, timezone]);
+  }, [isoDayOrder, slots, timezone, intl.locale, localePreferences.firstDayOfWeek]);
+
+  const getTimeLabelForMinute = useCallback(
+    (minute: number) =>
+      formatTime(new Date(Date.UTC(2020, 0, 1, 0, minute)), {
+        locale: intl.locale,
+        timeZone: timezone,
+        timeStyle: 'short',
+      }),
+    [intl.locale, timezone],
+  );
 
   const cellData = useMemo(() => {
     const rowsRange = rows.range;
@@ -231,13 +256,14 @@ const BookingCalendar = ({
     const lookup = new Map<string, CellData>();
 
     rowsRange.forEach((minute, rowIndex) => {
-      for (let day = 1; day <= 7; day += 1) {
-        const key = `${day}-${minute}`;
+      isoDayOrder.forEach((isoDay, orderIndex) => {
+        const key = `${isoDay}-${minute}`;
         const content = slotContent.get(key);
         const window = windowCoverage.get(key);
         const data: CellData = {
           key,
-          day,
+          isoDay,
+          orderIndex,
           minute,
           rowIndex,
           withinWindow: Boolean(window),
@@ -250,11 +276,11 @@ const BookingCalendar = ({
         };
         lookup.set(key, data);
         cells.push(data);
-      }
+      });
     });
 
     return { cells, lookup };
-  }, [rows, selectedSlotId, windows]);
+  }, [isoDayOrder, rows, selectedSlotId, windows]);
 
   const initialActiveKey = useMemo(() => {
     const selectedCell = cellData.cells.find((cell) => cell.isSelected);
@@ -289,13 +315,14 @@ const BookingCalendar = ({
   }, [activeCellKey]);
 
   const moveFocus = (current: CellData, deltaDay: number, deltaRow: number) => {
-    let nextDay = current.day + deltaDay;
-    let nextRow = current.rowIndex + deltaRow;
-    if (nextDay < 1 || nextDay > 7 || nextRow < 0 || nextRow >= rows.range.length) {
+    const nextOrderIndex = current.orderIndex + deltaDay;
+    const nextRow = current.rowIndex + deltaRow;
+    if (nextOrderIndex < 0 || nextOrderIndex >= isoDayOrder.length || nextRow < 0 || nextRow >= rows.range.length) {
       return current.key;
     }
     const nextMinute = rows.range[nextRow];
-    const nextKey = `${nextDay}-${nextMinute}`;
+    const nextIsoDay = isoDayOrder[nextOrderIndex];
+    const nextKey = `${nextIsoDay}-${nextMinute}`;
     if (cellData.lookup.has(nextKey)) {
       return nextKey;
     }
@@ -318,14 +345,16 @@ const BookingCalendar = ({
         targetKey = moveFocus(cell, 0, 1);
         break;
       case 'Home': {
-        const nextKey = `${1}-${cell.minute}`;
+        const firstIsoDay = isoDayOrder[0];
+        const nextKey = `${firstIsoDay}-${cell.minute}`;
         if (cellData.lookup.has(nextKey)) {
           targetKey = nextKey;
         }
         break;
       }
       case 'End': {
-        const nextKey = `${7}-${cell.minute}`;
+        const lastIsoDay = isoDayOrder[isoDayOrder.length - 1];
+        const nextKey = `${lastIsoDay}-${cell.minute}`;
         if (cellData.lookup.has(nextKey)) {
           targetKey = nextKey;
         }
@@ -381,12 +410,15 @@ const BookingCalendar = ({
       <div className="booking-calendar__grid-container">
         <div className="booking-calendar__header">
           <div aria-hidden="true" />
-          {dayLabels.map((label) => (
-            <div key={label.dayIndex} className="booking-calendar__header-cell" title={label.full}>
-              <span className="booking-calendar__header-label">
-                {intl.formatMessage({ id: WEEKDAY_LABELS[label.dayIndex] })}
+          {dayDescriptors.map((descriptor) => (
+            <div key={descriptor.isoDay} className="booking-calendar__header-cell" title={descriptor.longLabel}>
+              <span className="booking-calendar__header-label" aria-hidden="true">
+                {descriptor.weekdayShort}
               </span>
-              <span className="booking-calendar__header-date">{label.short}</span>
+              <span className="booking-calendar__header-date" aria-hidden="true">
+                {descriptor.dateLabel}
+              </span>
+              <span className="visually-hidden">{descriptor.longLabel}</span>
             </div>
           ))}
         </div>
@@ -394,9 +426,10 @@ const BookingCalendar = ({
           <div className="booking-calendar__times" style={gridStyle} aria-hidden="true">
             {rows.range.map((minute) => {
               const showLabel = minute % 60 === 0;
+              const timeDisplay = getTimeLabelForMinute(minute);
               return (
                 <div key={minute} className="booking-calendar__time-cell">
-                  {showLabel ? minutesToTimeLabel(minute) : ''}
+                  {showLabel ? timeDisplay : ''}
                 </div>
               );
             })}
@@ -408,95 +441,102 @@ const BookingCalendar = ({
             aria-describedby={instructionsId}
             style={gridStyle}
           >
-            {cellData.cells.map((cell) => {
-              const isActive = cell.key === activeCellKey;
-              const cellRef = (element: HTMLDivElement | null) => {
-                if (element) {
-                  cellRefs.current.set(cell.key, element);
-                } else {
-                  cellRefs.current.delete(cell.key);
-                }
-              };
-              const windowLabel =
-                cell.withinWindow && cell.windowStart !== undefined && cell.windowEnd !== undefined
-                  ? intl.formatMessage(
-                      { id: 'booking.calendar.windowTooltip' },
-                      {
-                        name: cell.windowName ?? 'Enhanced access',
-                        day: intl.formatMessage({ id: LONG_WEEKDAY_LABELS[cell.day] }),
-                        start: minutesToTimeLabel(cell.windowStart),
-                        end: minutesToTimeLabel(cell.windowEnd),
-                        timezone,
-                      },
-                    )
-                  : undefined;
-              const slotLabel =
-                cell.primarySlots.length > 0
-                  ? intl.formatMessage(
-                      { id: 'booking.calendar.slotTooltip' },
-                      {
-                        count: cell.primarySlots.length,
-                        day: intl.formatMessage({ id: LONG_WEEKDAY_LABELS[cell.day] }),
-                        time: intl.formatTime(new Date(cell.primarySlots[0].start), {
-                          timeStyle: 'short',
-                          timeZone: timezone,
-                        }),
-                        modality: intl.formatMessage({ id: `booking.modality.${cell.primarySlots[0].modality}` }),
-                      },
-                    )
-                  : undefined;
-              const title = slotLabel ?? windowLabel ?? undefined;
-              const ariaLabelParts = [
-                intl.formatMessage({ id: LONG_WEEKDAY_LABELS[cell.day] }),
-                minutesToTimeLabel(cell.minute),
-              ];
-              if (cell.withinWindow) {
-                ariaLabelParts.push(intl.formatMessage({ id: 'booking.calendar.cellEnhanced' }));
-              }
-              if (cell.primarySlots.length > 0) {
-                ariaLabelParts.push(
-                  intl.formatMessage(
-                    { id: 'booking.calendar.cellSlots' },
-                    { count: cell.primarySlots.length },
-                  ),
-                );
-              }
-              return (
-                <div
-                  key={cell.key}
-                  role="gridcell"
-                  ref={cellRef}
-                  className={[
-                    'booking-calendar__cell',
-                    cell.withinWindow ? 'booking-calendar__cell--window' : '',
-                    cell.primarySlots.length > 0 ? 'booking-calendar__cell--has-slot' : '',
-                    cell.isSelected ? 'booking-calendar__cell--selected' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  tabIndex={isActive ? 0 : -1}
-                  onKeyDown={(event) => handleCellKeyDown(event, cell)}
-                  onFocus={() => setActiveCellKey(cell.key)}
-                  onClick={() => {
-                    if (cell.primarySlots.length > 0 && onSelectSlot) {
-                      onSelectSlot(cell.primarySlots[0]);
+            {rows.range.map((minute) => (
+              <div key={`row-${minute}`} role="row" style={{ display: 'contents' }}>
+                {dayDescriptors.map((descriptor) => {
+                  const key = `${descriptor.isoDay}-${minute}`;
+                  const cell = cellData.lookup.get(key);
+                  if (!cell) {
+                    return <div key={key} className="booking-calendar__cell" aria-hidden="true" />;
+                  }
+                  const isActive = cell.key === activeCellKey;
+                  const cellRef = (element: HTMLDivElement | null) => {
+                    if (element) {
+                      cellRefs.current.set(cell.key, element);
+                    } else {
+                      cellRefs.current.delete(cell.key);
                     }
-                  }}
-                  aria-label={ariaLabelParts.join(', ')}
-                  aria-selected={cell.isSelected}
-                  title={title}
-                >
-                  {cell.primarySlots.length > 0 ? (
-                    <span className="booking-calendar__cell-slot-indicator">
-                      {intl.formatMessage(
-                        { id: 'booking.calendar.slotCount' },
+                  };
+                  const windowLabel =
+                    cell.withinWindow && cell.windowStart !== undefined && cell.windowEnd !== undefined
+                      ? intl.formatMessage(
+                          { id: 'booking.calendar.windowTooltip' },
+                          {
+                            name: cell.windowName ?? 'Enhanced access',
+                            day: descriptor.longLabel,
+                            start: getTimeLabelForMinute(cell.windowStart),
+                            end: getTimeLabelForMinute(cell.windowEnd),
+                            timezone,
+                          },
+                        )
+                      : undefined;
+                  const slotLabel =
+                    cell.primarySlots.length > 0
+                      ? intl.formatMessage(
+                          { id: 'booking.calendar.slotTooltip' },
+                          {
+                            count: cell.primarySlots.length,
+                            day: descriptor.longLabel,
+                            time: formatTime(new Date(cell.primarySlots[0].start), {
+                              locale: intl.locale,
+                              timeZone: timezone,
+                              timeStyle: 'short',
+                            }),
+                            modality: intl.formatMessage({ id: `booking.modality.${cell.primarySlots[0].modality}` }),
+                          },
+                        )
+                      : undefined;
+                  const title = slotLabel ?? windowLabel ?? undefined;
+                  const ariaLabelParts = [descriptor.longLabel, getTimeLabelForMinute(cell.minute)];
+                  if (cell.withinWindow) {
+                    ariaLabelParts.push(intl.formatMessage({ id: 'booking.calendar.cellEnhanced' }));
+                  }
+                  if (cell.primarySlots.length > 0) {
+                    ariaLabelParts.push(
+                      intl.formatMessage(
+                        { id: 'booking.calendar.cellSlots' },
                         { count: cell.primarySlots.length },
-                      )}
-                    </span>
-                  ) : null}
-                </div>
-              );
-            })}
+                      ),
+                    );
+                  }
+                  return (
+                    <div
+                      key={cell.key}
+                      role="gridcell"
+                      ref={cellRef}
+                      className={[
+                        'booking-calendar__cell',
+                        cell.withinWindow ? 'booking-calendar__cell--window' : '',
+                        cell.primarySlots.length > 0 ? 'booking-calendar__cell--has-slot' : '',
+                        cell.isSelected ? 'booking-calendar__cell--selected' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      tabIndex={isActive ? 0 : -1}
+                      onKeyDown={(event) => handleCellKeyDown(event, cell)}
+                      onFocus={() => setActiveCellKey(cell.key)}
+                      onClick={() => {
+                        if (cell.primarySlots.length > 0 && onSelectSlot) {
+                          onSelectSlot(cell.primarySlots[0]);
+                        }
+                      }}
+                      aria-label={ariaLabelParts.join(', ')}
+                      aria-selected={cell.isSelected}
+                      title={title}
+                    >
+                      {cell.primarySlots.length > 0 ? (
+                        <span className="booking-calendar__cell-slot-indicator">
+                          {intl.formatMessage(
+                            { id: 'booking.calendar.slotCount' },
+                            { count: cell.primarySlots.length },
+                          )}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       </div>

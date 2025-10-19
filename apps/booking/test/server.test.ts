@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createBookingServer, type BookingServerOptions } from '../src/index';
+import { createBookingServer, type BookingServerOptions, type BookingHttpServer } from '../src/index';
 import type { GpConnectClient, AppointmentRef, Slot, AppointmentRequest } from '../src/adapters/gpconnect.client';
 import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import { MemoryBus } from '@onecare/bus';
@@ -67,9 +67,31 @@ describe('booking HTTP server', () => {
     const duplicateBody = await duplicateResponse.json();
     expect(duplicateBody.error.code).toBe('conflict');
   });
+
+  it('returns 503 on /readyz when readiness fails', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createBookingServer(
+      buildOptions({
+        readinessCheck: async () => false,
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const readyResponse = await fetch(`${baseUrl}/readyz`);
+    expect(readyResponse.status).toBe(503);
+    const body = (await readyResponse.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it('supports graceful shutdown via initiateShutdown', async () => {
+    const bookingServer = server as BookingHttpServer;
+    await expect(bookingServer.initiateShutdown(100)).resolves.toBeUndefined();
+  });
 });
 
-function buildOptions(): BookingServerOptions {
+function buildOptions(overrides: Partial<BookingServerOptions> = {}): BookingServerOptions {
   const appointments = new Map<string, AppointmentRef>();
 
   const client: GpConnectClient = {
@@ -128,7 +150,7 @@ function buildOptions(): BookingServerOptions {
 
   const idempotencyStore = createIdempotencyStore();
 
-  return {
+  const base: BookingServerOptions = {
     client,
     bus: new MemoryBus(),
     fhirRepository,
@@ -136,6 +158,7 @@ function buildOptions(): BookingServerOptions {
     auditPublisher,
     idempotencyStore,
   };
+  return { ...base, ...overrides };
 }
 
 async function fetchJson(url: string, body?: unknown, headers?: Record<string, string>): Promise<Response> {

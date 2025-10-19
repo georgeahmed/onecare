@@ -29,6 +29,22 @@ export interface IdempotencyConfig {
   ttlSeconds: number;
 }
 
+export interface TokenBucketRateLimitConfig {
+  capacity: number;
+  refillPerSecond: number;
+  ttlSeconds: number;
+  maxEntries: number;
+}
+
+export interface AccessGateRateLimitConfig {
+  tenant: TokenBucketRateLimitConfig;
+  account: TokenBucketRateLimitConfig;
+}
+
+export interface AccessGateConfig {
+  rateLimit: AccessGateRateLimitConfig;
+}
+
 export interface CpcsRetryConfig {
   attempts?: number;
   baseDelayMs?: number;
@@ -131,6 +147,57 @@ export interface CpcsConfig {
   correlationHeader?: string;
 }
 
+export interface TriageFallbackConfig {
+  enabled: boolean;
+  timeBudgetMs: number;
+  scoreDeltaTolerance: number;
+  maxReasons: number;
+}
+
+export interface TelephonyAudioConfig {
+  retention_days?: number;
+  retention_seconds?: number;
+  content_type?: string;
+}
+
+export interface TelephonyAsrConfig {
+  endpoint?: string;
+  timeout_ms?: number;
+  max_retries?: number;
+  base_delay_ms?: number;
+  host_allowlist?: string[];
+  cb_failure_threshold?: number;
+  cb_cooldown_ms?: number;
+  lang_detect?: boolean;
+  diarization?: boolean;
+}
+
+export interface TelephonyCallbackWindow {
+  code: string;
+  label?: string;
+}
+
+export interface TelephonyRateLimitConfig {
+  caller?: TokenBucketRateLimitConfig;
+  practice?: TokenBucketRateLimitConfig;
+}
+
+export interface TelephonyConcurrencyConfig {
+  max_concurrent_transcriptions?: number;
+}
+
+export interface TelephonyConfig {
+  ivr_intent_classifier?: string;
+  max_callback_retries?: number;
+  emergency_transfer_enabled?: boolean;
+  audio?: TelephonyAudioConfig;
+  asr?: TelephonyAsrConfig;
+  callback_windows_by_priority?: Record<string, TelephonyCallbackWindow[]>;
+  rate_limit?: TelephonyRateLimitConfig;
+  concurrency?: TelephonyConcurrencyConfig;
+  [key: string]: unknown;
+}
+
 export interface ResolvedConfig {
   practiceId: string;
   core_hours?: CoreHours;
@@ -141,8 +208,12 @@ export interface ResolvedConfig {
   ics?: IcsConfig;
   billing?: BillingConfig;
   pharmacy?: PharmacyConfig;
+  triage?: Record<string, unknown>;
   red_flag_set?: string[];
   red_flag_source?: string;
+  triageFallback?: TriageFallbackConfig;
+  access_gate?: AccessGateConfig;
+  telephony?: TelephonyConfig;
   [key: string]: unknown;
 }
 
@@ -197,6 +268,17 @@ const SAFETY_GATE_ACUITY_EMERGENCY_MAX = 0.97;
 const SAFETY_GATE_FALLBACK_DEFAULT: SafetyGateConfig['fallback'] = 'rules';
 const DEFAULT_RED_FLAG_SOURCE = 'core';
 
+const TRIAGE_FALLBACK_ENABLED_DEFAULT = true;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_DEFAULT = 120;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_MIN = 20;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_MAX = 1_000;
+const TRIAGE_FALLBACK_SCORE_DELTA_DEFAULT = 0.15;
+const TRIAGE_FALLBACK_SCORE_DELTA_MIN = 0.01;
+const TRIAGE_FALLBACK_SCORE_DELTA_MAX = 0.5;
+const TRIAGE_FALLBACK_MAX_REASONS_DEFAULT = 5;
+const TRIAGE_FALLBACK_MAX_REASONS_MIN = 1;
+const TRIAGE_FALLBACK_MAX_REASONS_MAX = 10;
+
 const IDEMPOTENCY_TTL_DEFAULT = 600;
 const IDEMPOTENCY_TTL_MIN = 30;
 const IDEMPOTENCY_TTL_MAX = 86_400;
@@ -204,6 +286,32 @@ const IDEMPOTENCY_TTL_MAX = 86_400;
 const BOOKING_AVAILABILITY_TIMEOUT_DEFAULT = 2_000;
 const BOOKING_AVAILABILITY_TIMEOUT_MIN = 200;
 const BOOKING_AVAILABILITY_TIMEOUT_MAX = 10_000;
+
+const ACCESS_GATE_TENANT_CAPACITY_DEFAULT = 120;
+const ACCESS_GATE_TENANT_CAPACITY_MIN = 10;
+const ACCESS_GATE_TENANT_CAPACITY_MAX = 10_000;
+const ACCESS_GATE_TENANT_REFILL_DEFAULT = 2;
+const ACCESS_GATE_TENANT_REFILL_MIN = 0.1;
+const ACCESS_GATE_TENANT_REFILL_MAX = 1_000;
+const ACCESS_GATE_TENANT_TTL_DEFAULT = 600;
+const ACCESS_GATE_TENANT_TTL_MIN = 60;
+const ACCESS_GATE_TENANT_TTL_MAX = 3_600;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_DEFAULT = 2_000;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_MIN = 10;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_MAX = 200_000;
+
+const ACCESS_GATE_ACCOUNT_CAPACITY_DEFAULT = 12;
+const ACCESS_GATE_ACCOUNT_CAPACITY_MIN = 1;
+const ACCESS_GATE_ACCOUNT_CAPACITY_MAX = 2_000;
+const ACCESS_GATE_ACCOUNT_REFILL_DEFAULT = 0.3;
+const ACCESS_GATE_ACCOUNT_REFILL_MIN = 0.05;
+const ACCESS_GATE_ACCOUNT_REFILL_MAX = 200;
+const ACCESS_GATE_ACCOUNT_TTL_DEFAULT = 600;
+const ACCESS_GATE_ACCOUNT_TTL_MIN = 60;
+const ACCESS_GATE_ACCOUNT_TTL_MAX = 3_600;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_DEFAULT = 10_000;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MIN = 100;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MAX = 500_000;
 
 export interface MergeConfigOptions {
   arrayStrategies?: StrategyMap;
@@ -541,6 +649,143 @@ function applyBookingConfig(raw: unknown): BookingConfig {
   return { availabilityTimeoutMs: timeout };
 }
 
+interface TokenBucketBounds {
+  capacityMin: number;
+  capacityMax: number;
+  refillMin: number;
+  refillMax: number;
+  ttlMin: number;
+  ttlMax: number;
+  maxEntriesMin: number;
+  maxEntriesMax: number;
+}
+
+function applyTokenBucketConfig(
+  raw: unknown,
+  defaults: TokenBucketRateLimitConfig,
+  bounds: TokenBucketBounds,
+): TokenBucketRateLimitConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  const capacityCandidate = parseNumberish(
+    readRecordValue(source, 'capacity') ??
+      readRecordValue(source, 'burst') ??
+      readRecordValue(source, 'maxTokens') ??
+      readRecordValue(source, 'max_tokens'),
+  );
+  let capacity =
+    capacityCandidate !== undefined && Number.isFinite(capacityCandidate)
+      ? Number(capacityCandidate)
+      : defaults.capacity;
+  if (!Number.isFinite(capacity)) capacity = defaults.capacity;
+  capacity = clamp(capacity, bounds.capacityMin, bounds.capacityMax);
+  capacity = Math.max(bounds.capacityMin, Math.floor(capacity));
+
+  const refillCandidate = parseNumberish(
+    readRecordValue(source, 'refillPerSecond') ??
+      readRecordValue(source, 'refill_per_second') ??
+      readRecordValue(source, 'tokensPerSecond') ??
+      readRecordValue(source, 'tokens_per_second') ??
+      readRecordValue(source, 'ratePerSecond') ??
+      readRecordValue(source, 'rate_per_second') ??
+      readRecordValue(source, 'rate'),
+  );
+  let refill =
+    refillCandidate !== undefined && Number.isFinite(refillCandidate)
+      ? Number(refillCandidate)
+      : defaults.refillPerSecond;
+  if (!Number.isFinite(refill)) refill = defaults.refillPerSecond;
+  refill = clamp(refill, bounds.refillMin, bounds.refillMax);
+
+  const ttlCandidate = parseNumberish(
+    readRecordValue(source, 'ttlSeconds') ?? readRecordValue(source, 'ttl_seconds') ?? readRecordValue(source, 'ttl'),
+  );
+  let ttl =
+    ttlCandidate !== undefined && Number.isFinite(ttlCandidate) ? Number(ttlCandidate) : defaults.ttlSeconds;
+  if (!Number.isFinite(ttl)) ttl = defaults.ttlSeconds;
+  ttl = clamp(ttl, bounds.ttlMin, bounds.ttlMax);
+  ttl = Math.max(bounds.ttlMin, Math.round(ttl));
+
+  const maxEntriesCandidate = parseNumberish(
+    readRecordValue(source, 'maxEntries') ??
+      readRecordValue(source, 'max_entries') ??
+      readRecordValue(source, 'cacheSize') ??
+      readRecordValue(source, 'cache_size'),
+  );
+  let maxEntries =
+    maxEntriesCandidate !== undefined && Number.isFinite(maxEntriesCandidate)
+      ? Number(maxEntriesCandidate)
+      : defaults.maxEntries;
+  if (!Number.isFinite(maxEntries)) maxEntries = defaults.maxEntries;
+  maxEntries = clamp(maxEntries, bounds.maxEntriesMin, bounds.maxEntriesMax);
+  maxEntries = Math.max(bounds.maxEntriesMin, Math.round(maxEntries));
+
+  return {
+    capacity,
+    refillPerSecond: refill,
+    ttlSeconds: ttl,
+    maxEntries,
+  };
+}
+
+function applyAccessGateConfig(raw: unknown): AccessGateConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+  const rateLimitSource: Record<string, unknown> =
+    (isPlainObject(source?.rateLimit) ? (source?.rateLimit as Record<string, unknown>) : undefined) ??
+    (isPlainObject(source?.rate_limit) ? (source?.rate_limit as Record<string, unknown>) : undefined) ??
+    (source ?? {});
+
+  const tenantDefaults: TokenBucketRateLimitConfig = {
+    capacity: ACCESS_GATE_TENANT_CAPACITY_DEFAULT,
+    refillPerSecond: ACCESS_GATE_TENANT_REFILL_DEFAULT,
+    ttlSeconds: ACCESS_GATE_TENANT_TTL_DEFAULT,
+    maxEntries: ACCESS_GATE_TENANT_MAX_ENTRIES_DEFAULT,
+  };
+  const accountDefaults: TokenBucketRateLimitConfig = {
+    capacity: ACCESS_GATE_ACCOUNT_CAPACITY_DEFAULT,
+    refillPerSecond: ACCESS_GATE_ACCOUNT_REFILL_DEFAULT,
+    ttlSeconds: ACCESS_GATE_ACCOUNT_TTL_DEFAULT,
+    maxEntries: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_DEFAULT,
+  };
+
+  const tenant = applyTokenBucketConfig(
+    readRecordValue(rateLimitSource, 'tenant'),
+    tenantDefaults,
+    {
+      capacityMin: ACCESS_GATE_TENANT_CAPACITY_MIN,
+      capacityMax: ACCESS_GATE_TENANT_CAPACITY_MAX,
+      refillMin: ACCESS_GATE_TENANT_REFILL_MIN,
+      refillMax: ACCESS_GATE_TENANT_REFILL_MAX,
+      ttlMin: ACCESS_GATE_TENANT_TTL_MIN,
+      ttlMax: ACCESS_GATE_TENANT_TTL_MAX,
+      maxEntriesMin: ACCESS_GATE_TENANT_MAX_ENTRIES_MIN,
+      maxEntriesMax: ACCESS_GATE_TENANT_MAX_ENTRIES_MAX,
+    },
+  );
+
+  const account = applyTokenBucketConfig(
+    readRecordValue(rateLimitSource, 'account'),
+    accountDefaults,
+    {
+      capacityMin: ACCESS_GATE_ACCOUNT_CAPACITY_MIN,
+      capacityMax: ACCESS_GATE_ACCOUNT_CAPACITY_MAX,
+      refillMin: ACCESS_GATE_ACCOUNT_REFILL_MIN,
+      refillMax: ACCESS_GATE_ACCOUNT_REFILL_MAX,
+      ttlMin: ACCESS_GATE_ACCOUNT_TTL_MIN,
+      ttlMax: ACCESS_GATE_ACCOUNT_TTL_MAX,
+      maxEntriesMin: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MIN,
+      maxEntriesMax: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MAX,
+    },
+  );
+
+  return {
+    rateLimit: {
+      tenant,
+      account,
+    },
+  };
+}
+
 function parseHeadersRecord(raw: unknown): Record<string, string> {
   if (!isPlainObject(raw)) return {};
   const headers: Record<string, string> = {};
@@ -851,6 +1096,48 @@ function applyPharmacyConfig(raw: unknown): PharmacyConfig | undefined {
   const config: PharmacyConfig = {};
   if (ruleset) config.eligibility = ruleset;
   return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function applyTriageFallbackConfig(raw: unknown): TriageFallbackConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  let enabled = TRIAGE_FALLBACK_ENABLED_DEFAULT;
+  if (source && typeof source.enabled === 'boolean') {
+    enabled = source.enabled;
+  } else if (source && typeof source.mode === 'string') {
+    enabled = source.mode.trim().toLowerCase() !== 'none';
+  }
+
+  const rawBudget =
+    source && source.time_budget_ms !== undefined ? Number(source.time_budget_ms) : Number(source?.timeBudgetMs);
+  let timeBudget =
+    rawBudget !== undefined && Number.isFinite(rawBudget) ? Number(rawBudget) : TRIAGE_FALLBACK_TIME_BUDGET_MS_DEFAULT;
+  timeBudget = clamp(timeBudget, TRIAGE_FALLBACK_TIME_BUDGET_MS_MIN, TRIAGE_FALLBACK_TIME_BUDGET_MS_MAX);
+
+  const rawDelta =
+    source && source.score_delta_tolerance !== undefined
+      ? Number(source.score_delta_tolerance)
+      : Number(source?.scoreDeltaTolerance);
+  let scoreDelta =
+    rawDelta !== undefined && Number.isFinite(rawDelta) ? Number(rawDelta) : TRIAGE_FALLBACK_SCORE_DELTA_DEFAULT;
+  scoreDelta = clamp(scoreDelta, TRIAGE_FALLBACK_SCORE_DELTA_MIN, TRIAGE_FALLBACK_SCORE_DELTA_MAX);
+
+  const rawMaxReasons =
+    source && source.max_reasons !== undefined
+      ? Number(source.max_reasons)
+      : Number(source?.maxReasons ?? source?.max_reason_count);
+  let maxReasons =
+    rawMaxReasons !== undefined && Number.isFinite(rawMaxReasons)
+      ? Math.floor(Number(rawMaxReasons))
+      : TRIAGE_FALLBACK_MAX_REASONS_DEFAULT;
+  maxReasons = clamp(maxReasons, TRIAGE_FALLBACK_MAX_REASONS_MIN, TRIAGE_FALLBACK_MAX_REASONS_MAX);
+
+  return {
+    enabled,
+    timeBudgetMs: timeBudget,
+    scoreDeltaTolerance: scoreDelta,
+    maxReasons,
+  };
 }
 
 function parsePharmacyEligibilityRuleset(raw: unknown): PharmacyEligibilityRuleset | undefined {
@@ -1249,6 +1536,19 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   resolved.booking = applyBookingConfig(bookingRaw);
   const pharmacyRaw = (mergedConfig as Record<string, unknown>).pharmacy ?? resolved.pharmacy;
   resolved.pharmacy = applyPharmacyConfig(pharmacyRaw);
+  const accessGateRaw = (mergedConfig as Record<string, unknown>).access_gate ?? resolved.access_gate;
+  resolved.access_gate = applyAccessGateConfig(accessGateRaw);
+  const triageRaw = (mergedConfig as Record<string, unknown>).triage;
+  const triageSection =
+    triageRaw && isPlainObject(triageRaw)
+      ? { ...(triageRaw as Record<string, unknown>) }
+      : resolved.triage && typeof resolved.triage === 'object'
+        ? { ...(resolved.triage as Record<string, unknown>) }
+        : {};
+  const fallbackConfig = applyTriageFallbackConfig(triageSection.fallback);
+  resolved.triageFallback = fallbackConfig;
+  triageSection.fallback = fallbackConfig;
+  resolved.triage = triageSection;
 
   if (pcnId || icsId || mergedSources.length > 0) {
     const lineage: Record<string, unknown> = {};

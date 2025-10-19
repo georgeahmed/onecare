@@ -14,6 +14,7 @@ export interface DedupEvaluateInput {
   threshold: number;
   shingleSize?: number;
   textOptions?: TextNormalizeOptions;
+  correlationId?: string;
 }
 
 export interface DedupEntry {
@@ -76,7 +77,12 @@ export class DedupStore {
   evaluate(input: DedupEvaluateInput): DedupDecision {
     if (input.windowMs <= 0) {
       this.reset();
-      recordDedupMetrics({ duplicate: false, threshold: input.threshold, reason: 'disabled' });
+      recordDedupMetrics({
+        duplicate: false,
+        threshold: input.threshold,
+        reason: 'disabled',
+        correlationId: input.correlationId,
+      });
       return { isDuplicate: false, reason: 'disabled' };
     }
 
@@ -85,7 +91,12 @@ export class DedupStore {
     const patientId = input.patientId?.trim();
     const narrative = input.narrative?.trim();
     if (!patientId || !narrative) {
-      recordDedupMetrics({ duplicate: false, threshold: input.threshold, reason: 'missing_fields' });
+      recordDedupMetrics({
+        duplicate: false,
+        threshold: input.threshold,
+        reason: 'missing_fields',
+        correlationId: input.correlationId,
+      });
       return { isDuplicate: false, reason: 'missing_fields' };
     }
 
@@ -101,6 +112,7 @@ export class DedupStore {
         threshold: input.threshold,
         similarity: 0,
         reason: 'no_tokens',
+        correlationId: input.correlationId,
       });
       return { isDuplicate: false, normalized, entries: freshEntries, maxSimilarity: 0, reason: 'no_tokens' };
     }
@@ -133,6 +145,7 @@ export class DedupStore {
       threshold: input.threshold,
       similarity: isDuplicate ? bestSimilarity : maxSimilarity,
       reason: isDuplicate ? undefined : freshEntries.length === 0 ? 'no_history' : 'below_threshold',
+      correlationId: input.correlationId,
     });
 
     return {
@@ -167,6 +180,7 @@ function recordDedupMetrics(options: {
   threshold: number;
   similarity?: number;
   reason?: string;
+  correlationId?: string;
 }): void {
   const similarity = Number.isFinite(options.similarity) ? (options.similarity as number) : 0;
   const baseAttributes: Record<string, unknown> = {
@@ -175,6 +189,9 @@ function recordDedupMetrics(options: {
   };
   if (options.reason) {
     baseAttributes.reason = options.reason;
+  }
+  if (options.correlationId) {
+    baseAttributes.correlationId = options.correlationId;
   }
 
   if (options.duplicate) {

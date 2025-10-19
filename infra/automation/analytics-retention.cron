@@ -1,0 +1,13 @@
+# Nightly analytics retention sweep (03:00 UTC)
+# Ensure `/opt/onecare` points at the deployment checkout and volume mounts expose
+# `/srv/analytics-<env>` with the hot/warm partitions. Replace the bucket URIs if
+# cold storage lives under a different account or namespace.
+
+# Development
+0 3 * * * ENVIRONMENT=dev ANALYTICS_LAKE_PATH=/srv/analytics-dev/lake ANALYTICS_BACKFILL_ROOT=/srv/analytics-dev/backfill ANALYTICS_LINEAGE_DIR=/srv/analytics-dev/lineage ANALYTICS_BACKFILL_LEDGER=/srv/analytics-dev/backfill-ledger.jsonl ANALYTICS_TIER_ROOT=s3://onecare-analytics-cold-dev cd /opt/onecare/onecare && npm run analytics:retention -- --vacuum >> /var/log/analytics-retention-dev.log 2>&1
+
+# Staging
+0 3 * * * ENVIRONMENT=staging ANALYTICS_LAKE_PATH=/srv/analytics-staging/lake ANALYTICS_BACKFILL_ROOT=/srv/analytics-staging/backfill ANALYTICS_LINEAGE_DIR=/srv/analytics-staging/lineage ANALYTICS_BACKFILL_LEDGER=/srv/analytics-staging/backfill-ledger.jsonl ANALYTICS_TIER_ROOT=s3://onecare-analytics-cold-staging cd /opt/onecare/onecare && npm run analytics:retention -- --vacuum >> /var/log/analytics-retention-staging.log 2>&1
+
+# Production
+0 3 * * * ENVIRONMENT=prod ANALYTICS_LAKE_PATH=/srv/analytics-prod/lake ANALYTICS_BACKFILL_ROOT=/srv/analytics-prod/backfill ANALYTICS_LINEAGE_DIR=/srv/analytics-prod/lineage ANALYTICS_BACKFILL_LEDGER=/srv/analytics-prod/backfill-ledger.jsonl ANALYTICS_TIER_ROOT=s3://onecare-analytics-cold-prod cd /opt/onecare/onecare && npm run analytics:retention -- --vacuum >> /var/log/analytics-retention-prod.log 2>&1

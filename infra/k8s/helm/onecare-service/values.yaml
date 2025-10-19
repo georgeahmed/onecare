@@ -1,0 +1,110 @@
+replicaCount: 2
+
+containerPort: 8080
+
+image:
+  repository: ghcr.io/onecare/example
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+revisionHistoryLimit: 5
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+probes:
+  liveness:
+    enabled: true
+    path: /healthz
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    path: /readyz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  startup:
+    enabled: false
+    path: /readyz
+    port: http
+    failureThreshold: 40
+    periodSeconds: 5
+
+service:
+  enabled: true
+  type: ClusterIP
+  annotations: {}
+  port: 80
+  targetPort: http
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: null
+
+env: []
+envFrom: []
+
+volumeMounts: []
+volumes: []
+
+nodeSelector: {}
+affinity: {}
+tolerations: []
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+    from: [] # e.g., [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx }}}]
+  egress:
+    enabled: true
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: observability
+        ports:
+          - protocol: TCP
+            port: 4317
+
+hpaMetrics: []
+
+secretMounts: []

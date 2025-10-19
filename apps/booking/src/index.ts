@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { logger, setCorrelationId, createHistogram, createCounter } from '@onecare/observability';
 import {
@@ -22,6 +23,9 @@ import { BookingSearchError, BookingAppointmentError } from './application/booki
 const JSON_CONTENT_TYPE = 'application/json';
 const DEFAULT_BODY_LIMIT = 128 * 1024;
 const DEFAULT_MAX_CONCURRENCY = 20;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+const READINESS_CACHE_MIN_MS = 250;
+const DEFAULT_READINESS_CACHE_MS = 1_000;
 
 const bookingHttpDuration = createHistogram('booking_http_duration_ms');
 const bookingHttpRequests = createCounter('booking_http_requests_total');
@@ -58,20 +62,120 @@ class RequestError extends Error {
   }
 }
 
-export function createBookingServer(options: BookingServerOptions): http.Server {
+export interface BookingHttpServer extends http.Server {
+  initiateShutdown(timeoutMs?: number): Promise<void>;
+}
+
+interface ReadinessStatus {
+  ok: boolean;
+  reason?: string;
+  checkedAt: number;
+}
+
+interface ReadinessManager {
+  check(): Promise<ReadinessStatus>;
+  markShutdown(): void;
+  isShuttingDown(): boolean;
+  getStatus(): ReadinessStatus | null;
+}
+
+function createReadinessManager(options: BookingServerOptions): ReadinessManager {
+  const cacheMs = resolveReadinessCacheMs();
+  let shuttingDown = false;
+  let lastStatus: ReadinessStatus | null = null;
+  let inFlight: Promise<ReadinessStatus> | null = null;
+
+  const dependencyProbe = async (): Promise<ReadinessStatus> => {
+    if (typeof options.readinessCheck === 'function') {
+      try {
+        const ok = await options.readinessCheck();
+        return { ok: Boolean(ok), reason: ok ? undefined : 'dependency_unavailable', checkedAt: Date.now() };
+      } catch (error) {
+        return { ok: false, reason: asMessage(error), checkedAt: Date.now() };
+      }
+    }
+    const clientWithHealth = options.client as { checkHealth?: () => Promise<{ ok: boolean; reason?: string }> };
+    if (clientWithHealth && typeof clientWithHealth.checkHealth === 'function') {
+      try {
+        const result = await clientWithHealth.checkHealth();
+        return {
+          ok: Boolean(result?.ok),
+          reason: result?.reason,
+          checkedAt: Date.now(),
+        };
+      } catch (error) {
+        return { ok: false, reason: asMessage(error), checkedAt: Date.now() };
+      }
+    }
+    return { ok: true, checkedAt: Date.now() };
+  };
+
+  const runCheck = async (): Promise<ReadinessStatus> => {
+    const status = await dependencyProbe();
+    lastStatus = status;
+    return status;
+  };
+
+  return {
+    async check(): Promise<ReadinessStatus> {
+      if (shuttingDown) {
+        const status: ReadinessStatus = { ok: false, reason: 'shutting_down', checkedAt: Date.now() };
+        lastStatus = status;
+        return status;
+      }
+      const now = Date.now();
+      if (lastStatus && now - lastStatus.checkedAt < cacheMs) {
+        return lastStatus;
+      }
+      if (!inFlight) {
+        inFlight = runCheck().finally(() => {
+          inFlight = null;
+        });
+      }
+      return inFlight;
+    },
+    markShutdown(): void {
+      shuttingDown = true;
+      lastStatus = { ok: false, reason: 'shutting_down', checkedAt: Date.now() };
+    },
+    isShuttingDown(): boolean {
+      return shuttingDown;
+    },
+    getStatus(): ReadinessStatus | null {
+      return lastStatus;
+    },
+  };
+}
+
+export function createBookingServer(options: BookingServerOptions): BookingHttpServer {
   const maxConcurrency = options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
   let activeBookings = 0;
+  let inflightRequests = 0;
+  const sockets = new Set<Socket>();
+  let shutdownPromise: Promise<void> | null = null;
+
+  const readiness = createReadinessManager(options);
+  void readiness.check().catch(() => undefined);
 
   const searchState = new SearchState();
   const bookedState = new BookedState();
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
+    inflightRequests += 1;
+    const settle = (): void => {
+      inflightRequests = Math.max(0, inflightRequests - 1);
+      res.off('finish', settle);
+      res.off('close', settle);
+    };
+    res.on('finish', settle);
+    res.on('close', settle);
+
     const correlationId = ensureCorrelationId(req);
     setCorrelationId(correlationId);
     res.setHeader('x-correlation-id', correlationId);
     const startedAt = performance.now();
     let outcomeRecorded = false;
-    let path = normalizePath(req.url);
+    const path = normalizePath(req.url);
 
     const recordOutcome = (outcome: string, status: number): void => {
       if (outcomeRecorded) return;
@@ -92,20 +196,32 @@ export function createBookingServer(options: BookingServerOptions): http.Server 
     };
 
     try {
+      if (readiness.isShuttingDown() && !(req.method === 'GET' && path === '/healthz')) {
+        const status = sendJson(res, 503, { ok: false, reason: 'shutting_down' });
+        recordOutcome('shutting_down', status);
+        return;
+      }
       if (req.method === 'GET' && path === '/healthz') {
         const status = sendJson(res, 200, { ok: true });
         recordOutcome('success', status);
         return;
       }
       if (req.method === 'GET' && path === '/readyz') {
-        const ready = await evaluateReadiness(options);
-        if (ready) {
+        const statusInfo = await readiness.check();
+        if (statusInfo.ok) {
           const status = sendJson(res, 200, { ok: true });
           recordOutcome('success', status);
           return;
         }
-        const status = sendError(res, 'upstream_unavailable', 'Booking dependencies unavailable', correlationId);
-        recordOutcome('upstream_unavailable', status);
+        logger.warn('booking.readiness.unavailable', {
+          reason: statusInfo.reason ?? 'dependency_unavailable',
+          correlationId,
+        });
+        const status = sendJson(res, 503, {
+          ok: false,
+          reason: statusInfo.reason ?? 'dependency_unavailable',
+        });
+        recordOutcome('dependency_unavailable', status);
         return;
       }
       if (req.method === 'POST' && path === '/booking/search') {
@@ -151,7 +267,44 @@ export function createBookingServer(options: BookingServerOptions): http.Server 
       }
       setCorrelationId(undefined);
     }
+  }) as BookingHttpServer;
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
   });
+
+  server.initiateShutdown = async (timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS) => {
+    if (shutdownPromise) {
+      return shutdownPromise;
+    }
+    readiness.markShutdown();
+    shutdownPromise = (async () => {
+      logger.warn('booking.shutdown.start', { timeoutMs, inflight: inflightRequests });
+      const closePromise = new Promise<void>((resolve) => server.close(() => resolve()));
+      const deadline = Date.now() + Math.max(0, timeoutMs);
+      while (inflightRequests > 0 && Date.now() < deadline) {
+        await sleep(50);
+      }
+      if (inflightRequests > 0) {
+        logger.warn('booking.shutdown.force_close', { inflight: inflightRequests });
+        for (const socket of sockets) {
+          try {
+            socket.destroy();
+          } catch {
+            // ignore destroy errors
+          }
+        }
+      }
+      await closePromise;
+      logger.info('booking.shutdown.complete', { inflight: inflightRequests });
+    })().finally(() => {
+      shutdownPromise = null;
+    });
+    return shutdownPromise;
+  };
+
+  return server;
 }
 
 async function handleSearch(
@@ -463,18 +616,18 @@ function ensureCorrelationId(req: IncomingMessage): string {
   return randomUUID();
 }
 
-async function evaluateReadiness(options: BookingServerOptions): Promise<boolean> {
-  if (typeof options.readinessCheck === 'function') {
-    try {
-      return await options.readinessCheck();
-    } catch (error) {
-      logger.warn('booking.readiness.check_failed', {
-        reason: asMessage(error),
-      });
-      return false;
-    }
+function resolveReadinessCacheMs(): number {
+  const raw = Number(process.env.BOOKING_READINESS_CACHE_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_READINESS_CACHE_MS;
   }
-  return true;
+  return Math.max(READINESS_CACHE_MIN_MS, Math.floor(raw));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function asMessage(value: unknown): string {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
+import metaDraft7 from 'ajv/dist/refs/json-schema-draft-07.json';
 import type { ErrorObject, ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 
@@ -23,6 +24,7 @@ const schemaCache = new Map<string, JSONSchema>();
 const aliasToCanonical = new Map<string, string>();
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
+ajv.addMetaSchema(metaDraft7);
 addFormats(ajv);
 
 const fallbackSchemaRoot = path.resolve(__dirname, '../../../..', 'schemas');

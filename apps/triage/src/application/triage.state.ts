@@ -1,7 +1,7 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
 import type { ResolvedConfig } from '@onecare/config';
-import { logger, ensureTracing } from '@onecare/observability';
+import { logger, ensureTracing, createCounter, createHistogram, startSpan, type Span } from '@onecare/observability';
 import type {
   FeatureStore,
   FhirRepository,
@@ -12,14 +12,22 @@ import type {
 import { createTaskResource, executeWithIdempotency } from '@onecare/ports';
 import type { MessageBus } from '@onecare/bus';
 import { withMessageGuards } from '@onecare/bus';
-import { Topics, createEnvelope, type TriageDecision, type TriageInput } from '@onecare/events';
-import { computeTriageScore, type TriageFeatureVector } from './scoring';
+import { Topics, createEnvelope, type AuditEvent, type TriageDecision, type TriageInput } from '@onecare/events';
+import {
+  computeRulesFallback,
+  computeTriageScore,
+  resolvePriorityThresholds,
+  type RulesFallbackResult,
+  type TriageFeatureVector,
+} from './scoring';
 import { extractFeatures } from './features';
-import { createDedupStore, type DedupEntry } from './dedup';
+import { createDedupStore, type DedupEntry, type DedupDecision } from './dedup';
 import type { TextNormalizeOptions } from './text-normalize';
 import { assertValidTriageDecision, assertValidTriageInput } from './contracts';
 import { logFeatureVector } from '../featuresHook';
 import { callWithGuard } from './guard';
+import type { TriageSlaTracker } from '../sla/aging';
+import { safePatientReference, safeTaskReference } from '../support/privacy';
 
 export interface TriageContext extends MachineContext {
   config: ResolvedConfig;
@@ -55,6 +63,12 @@ export interface TriageContext extends MachineContext {
   triageInput?: TriageInput;
   decision?: TriageDecision;
   decisionReasons?: string[];
+  mlDependencies?: Partial<Record<MlDependencyKey, MlDependencyState>>;
+  scoreSource?: 'ml' | 'rules';
+  fallbackApplied?: boolean;
+  fallbackDeltaExceeded?: boolean;
+  slaTracker?: TriageSlaTracker;
+  consentEvaluator?: AssignmentConsentEvaluator;
 }
 
 export interface TriageEvent extends MachineEvent {
@@ -63,11 +77,13 @@ export interface TriageEvent extends MachineEvent {
 
 type PriorityCode = 'STAT' | 'URGENT' | 'SOON' | 'ROUTINE';
 
+type MlDependencyKey = 'acuity' | 'similarity';
+type MlDependencyState = 'ok' | 'timeout' | 'unavailable' | 'circuit_open' | 'degraded';
+
 interface TaskCreatedEvent {
   taskId: string;
   patientId: string;
   priority: PriorityCode;
-  owner?: string;
 }
 
 export interface DuplicateDetails {
@@ -82,14 +98,91 @@ export interface DuplicateDetails {
 
 export type DuplicateHandler = (details: DuplicateDetails) => Promise<void> | void;
 
+export interface AssignmentConsentInput {
+  patientId: string;
+  correlationId?: string;
+  purpose: 'triage.assignment';
+}
+
+export interface AssignmentConsentDecision {
+  allowed: boolean;
+  reason?: string;
+  auditDetails?: Record<string, unknown>;
+}
+
+export interface AssignmentConsentEvaluator {
+  check(input: AssignmentConsentInput): Promise<AssignmentConsentDecision> | AssignmentConsentDecision;
+}
+
 ensureTracing('triage');
 
 const TRIAGE_TASKS_CREATED_TOPIC = Topics.tasks.created;
+const TRIAGE_TASKS_UPDATED_TOPIC = Topics.tasks.updated;
 const TRIAGE_DECISION_TOPIC = (Topics.triage as { decision?: string } | undefined)?.decision ?? 'triage.decision';
-const TRIAGE_ALLOWED_TOPICS = new Set<string>([TRIAGE_TASKS_CREATED_TOPIC, TRIAGE_DECISION_TOPIC]);
+const TRIAGE_ALLOWED_TOPICS = new Set<string>([
+  TRIAGE_TASKS_CREATED_TOPIC,
+  TRIAGE_TASKS_UPDATED_TOPIC,
+  TRIAGE_DECISION_TOPIC,
+  Topics.broker.deadLetter,
+  Topics.audit.event,
+]);
 const DEDUP_CACHE_LIMIT = 50;
 const dedupStore = createDedupStore({ maxEntriesPerPatient: DEDUP_CACHE_LIMIT });
 const DEFAULT_TRIAGE_IDEMPOTENCY_TTL_SECONDS = 10 * 60;
+
+const scoreDecisionCounter = createCounter('triage.score.decision');
+const scoreDurationHistogram = createHistogram('triage.score.duration_ms');
+const dedupDurationHistogram = createHistogram('triage.dedup.duration_ms');
+const taskCreateSuccessCounter = createCounter('triage.task.create.success');
+const taskCreateErrorCounter = createCounter('triage.task.create.error');
+const taskCreateDurationHistogram = createHistogram('triage.task.create.duration_ms');
+const notifySuccessCounter = createCounter('triage.notify.success');
+const notifyErrorCounter = createCounter('triage.notify.error');
+const notifyDurationHistogram = createHistogram('triage.notify.duration_ms');
+
+function metricAttributes(ctx: TriageContext, attributes: Record<string, unknown> = {}): Record<string, unknown> {
+  if (ctx.correlationId) {
+    return { ...attributes, correlationId: ctx.correlationId };
+  }
+  return { ...attributes };
+}
+
+function endSpan(span: Span | undefined, error?: unknown): void {
+  if (!span) return;
+  if (error instanceof Error && span.isRecording()) {
+    span.recordException(error);
+  }
+  span.end();
+}
+
+function recordScoreDecision(ctx: TriageContext, priority: PriorityCode): void {
+  const attributes: Record<string, unknown> = {
+    priority,
+    source: ctx.scoreSource ?? 'unknown',
+    fallback: ctx.fallbackApplied ? 'yes' : 'no',
+    duplicate: ctx.isDuplicate ? 'yes' : 'no',
+  };
+  const deltaExceeded = ctx.fallbackDeltaExceeded === true;
+  attributes.deltaExceeded = deltaExceeded ? 'yes' : 'no';
+  scoreDecisionCounter.add(1, metricAttributes(ctx, attributes));
+}
+
+function resolveFallbackCause(ctx: TriageContext): string | undefined {
+  const dependencies = ctx.mlDependencies;
+  if (dependencies) {
+    for (const [name, state] of Object.entries(dependencies) as [MlDependencyKey, MlDependencyState | undefined][]) {
+      if (!state || state === 'ok') continue;
+      return `ml_${name}_${state}`;
+    }
+  }
+
+  const featureSource = ctx.triageInput?.features;
+  if (!featureSource || (typeof featureSource === 'object' && featureSource !== null && Object.keys(featureSource).length === 0)) {
+    return 'ml_features_missing';
+  }
+
+  return undefined;
+}
 
 function parseDurationToMs(raw: unknown): number {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -196,15 +289,44 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
     const narrative = ctx.narrative?.trim();
     const now = getNow(ctx);
 
-    const decision = dedupStore.evaluate({
-      patientId,
-      narrative,
-      now,
-      windowMs,
-      threshold,
-      shingleSize: getDedupShingleSize(ctx.config),
-      textOptions: getDedupTextOptions(ctx.config),
-    });
+    const dedupSpan = startSpan('triage.dedup');
+    const dedupStarted = Date.now();
+    let decision: DedupDecision | undefined;
+    let dedupError: unknown;
+    try {
+      decision = dedupStore.evaluate({
+        patientId,
+        narrative,
+        now,
+        windowMs,
+        threshold,
+        shingleSize: getDedupShingleSize(ctx.config),
+        textOptions: getDedupTextOptions(ctx.config),
+        correlationId: ctx.correlationId,
+      });
+    } catch (error) {
+      dedupError = error;
+      throw error;
+    } finally {
+      const duration = Date.now() - dedupStarted;
+      const outcome = decision ? (decision.isDuplicate ? 'duplicate' : 'unique') : 'error';
+      const attributes: Record<string, unknown> = { outcome };
+      if (decision?.reason) {
+        attributes.reason = decision.reason;
+      }
+      dedupDurationHistogram.record(duration, metricAttributes(ctx, attributes));
+      if (decision && dedupSpan.isRecording()) {
+        dedupSpan.setAttribute('triage.dedup.duplicate', decision.isDuplicate ? 1 : 0);
+        if (decision.reason) {
+          dedupSpan.setAttribute('triage.dedup.reason', decision.reason);
+        }
+      }
+      endSpan(dedupSpan, dedupError);
+    }
+
+    if (!decision) {
+      throw new Error('dedup_decision_missing');
+    }
 
     ctx.duplicateWindowMs = windowMs > 0 ? windowMs : undefined;
     ctx.duplicateSimilarity = decision.similarity;
@@ -220,7 +342,62 @@ export class IntakeState extends BaseState<TriageContext, TriageEvent> {
     ctx.duplicateDetectedAt = undefined;
     const normalizedFeatures = extractFeatures(ctx.rawFeatures ?? ctx.features ?? {}, ctx.config);
     ctx.features = normalizedFeatures;
-    ctx.score = computeTriageScore(ctx.config, normalizedFeatures);
+    const scoreSpan = startSpan('triage.score');
+    const scoreStarted = Date.now();
+    let baselineScore = 0;
+    let fallbackResult: RulesFallbackResult | undefined;
+    let scoringError: unknown;
+
+    try {
+      baselineScore = computeTriageScore(ctx.config, normalizedFeatures);
+      const fallbackCause = resolveFallbackCause(ctx);
+
+      if (fallbackCause) {
+        fallbackResult = computeRulesFallback({
+          config: ctx.config,
+          features: normalizedFeatures,
+          narrative: ctx.narrative ?? ctx.triageInput?.narrative ?? '',
+          cause: fallbackCause,
+          redFlags: ctx.config.red_flag_set ?? [],
+          baselineScore,
+        });
+      }
+
+      if (fallbackResult?.applied) {
+        ctx.score = fallbackResult.score;
+        ctx.decisionReasons = fallbackResult.reasons;
+        ctx.scoreSource = 'rules';
+        ctx.fallbackApplied = true;
+        ctx.fallbackDeltaExceeded = fallbackResult.deltaExceeded;
+      } else {
+        ctx.score = baselineScore;
+        ctx.decisionReasons = fallbackResult?.reasons?.length ? fallbackResult.reasons : undefined;
+        ctx.scoreSource = 'ml';
+        ctx.fallbackApplied = false;
+        ctx.fallbackDeltaExceeded = fallbackResult?.deltaExceeded ?? false;
+      }
+    } catch (error) {
+      scoringError = error;
+      throw error;
+    } finally {
+      const duration = Date.now() - scoreStarted;
+      const attributes: Record<string, unknown> = {
+        source: ctx.scoreSource ?? 'unknown',
+        fallback: ctx.fallbackApplied ? 'yes' : 'no',
+      };
+      if (typeof ctx.score === 'number' && Number.isFinite(ctx.score)) {
+        attributes.score = ctx.score;
+      }
+      scoreDurationHistogram.record(duration, metricAttributes(ctx, attributes));
+      if (scoreSpan.isRecording()) {
+        scoreSpan.setAttribute('triage.score.source', ctx.scoreSource ?? 'unknown');
+        scoreSpan.setAttribute('triage.score.fallback', ctx.fallbackApplied ? 'yes' : 'no');
+        if (typeof ctx.score === 'number' && Number.isFinite(ctx.score)) {
+          scoreSpan.setAttribute('triage.score.value', ctx.score);
+        }
+      }
+      endSpan(scoreSpan, scoringError);
+    }
     return 'Scored';
   }
 }
@@ -233,6 +410,7 @@ export class ScoredState extends BaseState<TriageContext, TriageEvent> {
   async handle(ctx: TriageContext, _evt: TriageEvent): Promise<string> {
     const score = typeof ctx.score === 'number' ? ctx.score : 0;
     ctx.priority = determinePriority(ctx.config, score, ctx.features);
+    recordScoreDecision(ctx, ctx.priority);
     await logFeatureVector({
       source: 'triage',
       store: ctx.featureStore,
@@ -268,6 +446,8 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
     const priority = ctx.priority ?? determinePriority(ctx.config, score, ctx.features);
     ctx.priority = priority;
 
+    await ensureAssignmentConsent(ctx, correlationId, bus);
+
     const timestamp = new Date().toISOString();
     const idempotencyKey = ctx.idempotencyKey ?? deriveTriageIdempotencyKey(ctx);
     const ttlSeconds = resolveTriageIdempotencyTtl(ctx);
@@ -279,6 +459,9 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
       execute: async () => {
         const taskResource = buildTaskResource(ctx, priority, timestamp);
         let reference;
+        const taskSpan = startSpan('triage.task.create');
+        const taskStarted = Date.now();
+        let taskError: (Error & { code: string }) | undefined;
         try {
           reference = await callWithGuard(
             'fhir.createTask',
@@ -291,14 +474,35 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
               correlationId,
             },
           );
+          taskCreateSuccessCounter.add(1, metricAttributes(ctx, { owner: ctx.taskOwner ?? 'unknown' }));
         } catch (error) {
           const mapped = classifyFhirTaskError(error);
+          taskError = mapped;
+          taskCreateErrorCounter.add(1, metricAttributes(ctx, { code: mapped.code, outcome: 'error' }));
           logger.error('triage.fhir_task.failed', {
+            component: 'triage',
             code: mapped.code,
             message: mapped.message,
             correlationId,
+            patientRef: safePatientReference(ctx.patientId),
           });
           throw mapped;
+        } finally {
+          const duration = Date.now() - taskStarted;
+          const outcomeAttributes: Record<string, unknown> = {
+            outcome: taskError ? 'error' : 'success',
+          };
+          if (taskError) {
+            outcomeAttributes.code = taskError.code;
+          }
+          taskCreateDurationHistogram.record(duration, metricAttributes(ctx, outcomeAttributes));
+          if (taskSpan.isRecording()) {
+            taskSpan.setAttribute('triage.task.create.outcome', taskError ? 'error' : 'success');
+            if (taskError) {
+              taskSpan.setAttribute('triage.task.create.error_code', taskError.code);
+            }
+          }
+          endSpan(taskSpan, taskError);
         }
 
         ctx.taskReference = reference;
@@ -315,10 +519,14 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
           taskId: reference.id,
           patientId: ctx.patientId!,
           priority,
-          owner: ctx.taskOwner,
         };
         const envelope = createEnvelope(TRIAGE_TASKS_CREATED_TOPIC, payload, correlationId);
-        const headers = correlationId ? { 'x-correlation-id': correlationId } : undefined;
+        const headers: Record<string, string> = {
+          'x-idempotency-key': idempotencyKey,
+        };
+        if (correlationId) {
+          headers['x-correlation-id'] = correlationId;
+        }
         await bus.publish(TRIAGE_DECISION_TOPIC, decisionEnvelope, headers);
         await bus.publish(TRIAGE_TASKS_CREATED_TOPIC, envelope, headers);
         ctx.taskEventPublished = true;
@@ -331,24 +539,27 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
         });
 
         logger.info('triage.idempotency.executed', {
-          key: idempotencyKey,
-          patientId: ctx.patientId,
-          taskId: reference.id,
+          component: 'triage',
           correlationId,
+          idempotencyKey,
+          taskRef: safeTaskReference(reference.id),
+          patientRef: safePatientReference(ctx.patientId),
         });
         return true;
       },
       onDuplicate: () => {
         logger.warn('triage.idempotency.duplicate', {
-          key: idempotencyKey,
-          patientId: ctx.patientId,
+          component: 'triage',
+          idempotencyKey,
+          patientRef: safePatientReference(ctx.patientId),
           correlationId,
         });
       },
       onError: (error) => {
         logger.error('triage.idempotency.failed', {
-          key: idempotencyKey,
-          patientId: ctx.patientId,
+          component: 'triage',
+          idempotencyKey,
+          patientRef: safePatientReference(ctx.patientId),
           correlationId,
           reason: error instanceof Error ? error.message : 'unknown_error',
         });
@@ -357,6 +568,20 @@ export class TaskCreatedState extends BaseState<TriageContext, TriageEvent> {
 
     if (status === 'skipped') {
       return 'Notified';
+    }
+
+    if (status === 'executed' && ctx.slaTracker && ctx.taskId && ctx.patientId) {
+      const createdAtIso = ctx.taskCreatedAt ?? new Date().toISOString();
+      ctx.slaTracker.track({
+        taskId: ctx.taskId,
+        patientId: ctx.patientId,
+        priority,
+        createdAt: createdAtIso,
+        correlationId,
+        queueName: ctx.queueName,
+        queueNotifier: ctx.queueNotifier,
+        ownerReference: ctx.taskOwner,
+      });
     }
     return 'Notified';
   }
@@ -412,7 +637,8 @@ export class DuplicateState extends BaseState<TriageContext, TriageEvent> {
       await ctx.handleDuplicate(details);
     } else {
       logger.info('triage duplicate detected', {
-        hasPatientId: Boolean(details.patientId),
+        component: 'triage',
+        patientRef: safePatientReference(details.patientId),
         windowMs: details.windowMs,
         similarity: details.similarity,
         detectedAt: details.detectedAt,
@@ -487,13 +713,7 @@ export function determinePriority(
   score: number,
   features?: TriageFeatureVector,
 ): PriorityCode {
-  const raw = (config.priority_thresholds as Record<string, unknown> | undefined) ?? {};
-  const thresholds = {
-    STAT: sanitizeNumber(raw.stat, 0.9),
-    URGENT: sanitizeNumber(raw.urgent, 0.7),
-    SOON: sanitizeNumber(raw.soon, 0.4),
-    ROUTINE: sanitizeNumber(raw.routine, 0),
-  };
+  const thresholds = resolvePriorityThresholds(config);
 
   const tieBreaker = getPriorityTieBreaker(config);
   const acuity = typeof features?.acuity === 'number' && Number.isFinite(features.acuity) ? features.acuity : 0;
@@ -601,34 +821,12 @@ function buildTriageDecision(ctx: TriageContext, generatedAt: string): TriageDec
     generatedAt,
   };
 
-  const normalizedReasons =
-    ctx.decisionReasons
-      ?.map((code) => (typeof code === 'string' ? code.trim().toLowerCase() : ''))
-      .filter((code) => code.length > 0 && /^[a-z0-9_.-]{1,64}$/.test(code))
-      .slice(0, 10) ?? [];
-  if (normalizedReasons.length > 0) {
-    decision.reasons = normalizedReasons as [string, ...string[]];
-  }
-
-  if (ctx.isDuplicate && ctx.duplicateReference) {
-    decision.duplicateOf = `${ctx.patientId}:${ctx.duplicateReference.timestamp}`;
-  }
-
-  const featureEntries = Object.entries(ctx.features ?? {}).filter(
-    ([, value]) => typeof value === 'number' && Number.isFinite(value),
-  );
-  if (featureEntries.length > 0) {
-    decision.features = Object.fromEntries(featureEntries);
-  }
-
-  if (ctx.taskOwner || ctx.queueName) {
-    decision.assignment = {};
-    if (ctx.taskOwner) {
-      decision.assignment.owner = ctx.taskOwner;
-    }
-    if (ctx.queueName) {
-      decision.assignment.team = ctx.queueName;
-    }
+  const rawReasons = ctx.decisionReasons
+    ?.map((code) => (typeof code === 'string' ? code.trim().toLowerCase() : ''))
+    .filter((code) => code.length > 0 && /^[a-z0-9_.-]{1,64}$/.test(code))
+    .slice(0, 10);
+  if (rawReasons && rawReasons.length > 0) {
+    decision.reasons = rawReasons as TriageDecision['reasons'];
   }
 
   return decision;
@@ -644,14 +842,119 @@ interface QueueNotificationPayload {
 async function notifyQueue(ctx: TriageContext, payload: QueueNotificationPayload): Promise<void> {
   if (!ctx.queueNotifier) {
     logger.info('queue notifier not configured; skipping', {
-      taskId: payload.taskId,
+      component: 'triage',
+      taskRef: safeTaskReference(payload.taskId),
+      patientRef: safePatientReference(payload.patientId),
       patientIdPresent: Boolean(payload.patientId),
+      correlationId: ctx.correlationId,
     });
     return;
   }
 
   const queue = ctx.queueName || ctx.taskOwner || 'triage.default';
-  await ctx.queueNotifier.notify(queue, payload);
+  const span = startSpan('triage.notify');
+  const startedAt = Date.now();
+  const baseAttributes = { queue };
+  let notifyError: unknown;
+
+  try {
+    await ctx.queueNotifier.notify(queue, payload);
+    notifySuccessCounter.add(1, metricAttributes(ctx, { ...baseAttributes, outcome: 'success' }));
+    logger.info('triage.notify.success', {
+      component: 'triage',
+      queue,
+      correlationId: ctx.correlationId,
+      taskRef: safeTaskReference(payload.taskId),
+      patientRef: safePatientReference(payload.patientId),
+    });
+  } catch (error) {
+    notifyError = error;
+    const reason = error instanceof Error ? error.message : String(error);
+    notifyErrorCounter.add(1, metricAttributes(ctx, { ...baseAttributes, outcome: 'error', reason }));
+    logger.error('triage.notify.failed', {
+      component: 'triage',
+      queue,
+      reason,
+      correlationId: ctx.correlationId,
+      taskRef: safeTaskReference(payload.taskId),
+      patientRef: safePatientReference(payload.patientId),
+    });
+    throw error;
+  } finally {
+    const duration = Date.now() - startedAt;
+    notifyDurationHistogram.record(
+      duration,
+      metricAttributes(ctx, { ...baseAttributes, outcome: notifyError ? 'error' : 'success' }),
+    );
+    if (span.isRecording()) {
+      span.setAttribute('triage.notify.queue', queue);
+      span.setAttribute('triage.notify.outcome', notifyError ? 'error' : 'success');
+    }
+    endSpan(span, notifyError);
+  }
+}
+
+async function ensureAssignmentConsent(
+  ctx: TriageContext,
+  correlationId: string | undefined,
+  bus: MessageBus,
+): Promise<void> {
+  if (!ctx.consentEvaluator || !ctx.patientId) {
+    return;
+  }
+  const decision = await ctx.consentEvaluator.check({
+    patientId: ctx.patientId,
+    correlationId,
+    purpose: 'triage.assignment',
+  });
+  if (decision.allowed) {
+    return;
+  }
+  const reason = decision.reason ?? 'consent_denied';
+  logger.warn('triage.assignment.consent_denied', {
+    component: 'triage',
+    correlationId,
+    reason,
+  });
+  await publishConsentAudit(bus, ctx.patientId, correlationId, reason, decision.auditDetails);
+  const error = Object.assign(new Error('consent_denied'), { code: 'consent_denied' });
+  throw error;
+}
+
+async function publishConsentAudit(
+  bus: MessageBus,
+  patientId: string,
+  correlationId: string | undefined,
+  reason: string,
+  details?: Record<string, unknown>,
+): Promise<void> {
+  const payload: AuditEvent = {
+    type: 'triage.assignment.denied',
+    ts: new Date().toISOString(),
+    correlationId: correlationId ?? null,
+    subjectRef: safePatientReference(patientId),
+    outcome: 'deny',
+    reasonCode: reason,
+    details: details ?? null,
+  };
+
+  try {
+    const envelope = createEnvelope(Topics.audit.event, payload, correlationId);
+    const headers: Record<string, string> = {
+      'x-message-id': envelope.id,
+      'x-idempotency-key': `audit:${envelope.id}`,
+    };
+    if (correlationId) {
+      headers['x-correlation-id'] = correlationId;
+    }
+    await bus.publish(Topics.audit.event, envelope, headers);
+  } catch (error) {
+    logger.warn('triage.assignment.audit_publish_failed', {
+      component: 'triage',
+      correlationId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function deriveTriageIdempotencyKey(ctx: TriageContext): string {

@@ -24,7 +24,7 @@ Contracts & Validation
 - Validate triage.input, tasks.created/updated payloads with Ajv (QA-01.1 harness pattern).
 
 Status: in-progress
-Progress: 30%
+Progress: 60%
 
 Dependencies
 - ml/engineer-02 (Acuity model)
@@ -46,12 +46,12 @@ Tasks
 - [x] BE-03.3b — Emit tasks.created; contract tests and validators
 - [ ] BE-03.4a — Provider assignment policy (weights, fairness floors, continuity; pure; tests)
 - [ ] BE-03.4b — Tie-breakers and backpressure-aware assignment
-- [ ] BE-03.7 — Event-driven ingress (consume triage.input via bus; idempotency keys; bounded retries + DLQ)
-- [ ] BE-03.8 — SLA aging and escalation (timer/interval, update Task priority/state; emit tasks.updated; tests)
+- [x] BE-03.7 — Event-driven ingress (consume triage.input via bus; idempotency keys; bounded retries + DLQ)
+- [x] BE-03.8 — SLA aging and escalation (timer/interval, update Task priority/state; emit tasks.updated; tests)
 - [ ] BE-03.9 — Fallbacks for missing ML (rules-based scoring thresholds; config-driven; consistent outcomes)
 - [ ] BE-03.10 — Observability (correlationId propagation; metrics for scoring, dedup, assignment; spans)
 - [ ] BE-03.11 — Security & privacy (PHI minimization in events/logs, consent checks when accessing patient context)
 - [ ] BE-03.12 — Performance baselines (p50/p95 latency for scoring/assignment; microbench; doc budgets)
-- [ ] BE-03.13 — DLQ and poison-message quarantine (bounded retries, safe payloads, remediation notes)
-- [ ] BE-03.14 — Health/readiness for triage service (bus connectivity, repo reachability; graceful shutdown)
-- [ ] BE-03.15 — Documentation & ADRs (scoring/assignment design, dedup strategy, event semantics)
+- [x] BE-03.13 — DLQ and poison-message quarantine (bounded retries, safe payloads, remediation notes)
+- [x] BE-03.14 — Health/readiness for triage service (bus connectivity, repo reachability; graceful shutdown)
+- [x] BE-03.15 — Documentation & ADRs (scoring/assignment design, dedup strategy, event semantics)

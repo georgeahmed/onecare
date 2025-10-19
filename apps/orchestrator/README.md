@@ -13,6 +13,13 @@ Folders
 FHIR Validation
 - The orchestrator now validates every normalized transaction bundle against `schemas/fhir/bundle-transaction.json` (and the referenced entry schemas) before writing to the repository. Payloads that drift from the contract return HTTP 400 with code `invalid_fhir`; update the schema and rerun codegen before changing bundle shapes.
 
+Performance Baselines
+- HTTP adapters use keep-alive connection pools for FHIR and Object Store calls. `fhir.transaction.duration_ms` and `object.store.put.duration_ms` histograms summarise the end-to-end request cost alongside the existing per-request metrics.
+- Run `node scripts/perf/fhir_client_bench.js` (pure serialization microbench) to sanity-check local budgets. Current sample (10k iterations, 256 KB payloads) yields:
+  - `fhir.transaction.duration_ms` avg ≈0.002 ms (p95 ≈0.002 ms, p99 ≈0.003 ms)
+  - `object.store.put.duration_ms` avg ≈0.014 ms (p95 ≈0.022 ms, p99 ≈0.046 ms)
+- Re-run after touching bundle composition or Object Store staging helpers to keep the baselines fresh.
+
 Dev Endpoint (example)
 - POST `/safety-check` → forwards a `PortalSubmission` to Python Safety Gate and returns `SafetyDecision`.
   - Body example:

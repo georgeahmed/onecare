@@ -11,10 +11,12 @@ import {
   type OfflineBookingJob,
 } from '../../lib/offlineQueue';
 import { createCorrelationId, recordRumEvent, safeLog, startTimer } from '../../lib/telemetry';
+import { formatAccessibleDateTime, formatDate, formatTimeRange, formatTimeZoneName } from '../../lib/format';
 import { useLocale } from '../../i18n';
 
 const BASE_BACKOFF_MS = 1_500;
 const MAX_BACKOFF_MS = 30_000;
+const RETRY_JITTER_MAX_MS = 750;
 const isBrowser = typeof window !== 'undefined';
 
 const isNavigatorOnline = (): boolean => {
@@ -30,6 +32,7 @@ export interface ConfirmBookingProps {
   slot: BookingSlot;
   patientId: string;
   idempotencyKey: string;
+  timezone: string;
   onBack: () => void;
   onSuccess: (result: ConfirmBookingResult) => void;
   onError: (error: BookingConfirmationError) => void;
@@ -39,12 +42,18 @@ export interface ConfirmBookingContentProps {
   slot: BookingSlot;
   patientId: string;
   idempotencyKey: string;
+  timezone: string;
   isSubmitting: boolean;
   statusMessageId: string;
   onBack: () => void;
   onConfirm: () => void;
   titleId?: string;
   descriptionId?: string;
+  queueJob: OfflineBookingJob | null;
+  queueStatus: QueueStatus;
+  retryCountdown: number | null;
+  onRetryQueued: () => void;
+  onCancelQueued: () => void;
 }
 
 export interface BookingConfirmationError {
@@ -55,35 +64,65 @@ export interface BookingConfirmationError {
   status?: number;
 }
 
+const ConfirmBookingSkeleton = () => (
+  <div className="booking-confirm-skeleton" aria-hidden="true">
+    <div className="booking-confirm-skeleton__header skeleton skeleton-line long" />
+    <div className="booking-confirm-skeleton__grid">
+      {Array.from({ length: 6 }, (_, index) => (
+        <div key={index} className="booking-confirm-skeleton__row">
+          <span className="skeleton skeleton-line short" />
+          <span className="skeleton skeleton-line long" />
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 export const ConfirmBookingContent = ({
   slot,
   patientId,
   idempotencyKey,
+  timezone,
   isSubmitting,
   statusMessageId,
   onBack,
   onConfirm,
   titleId,
   descriptionId,
-}: ConfirmBookingContentProps & { titleId?: string; descriptionId?: string }) => {
+  queueJob,
+  queueStatus,
+  retryCountdown,
+  onRetryQueued,
+  onCancelQueued,
+}: ConfirmBookingContentProps) => {
   const intl = useIntl();
   const { direction } = useLocale();
   const resolvedTitleId = titleId ?? 'booking-confirm-title';
   const resolvedDescriptionId = descriptionId ?? `${resolvedTitleId}-description`;
 
+  const locale = intl.locale;
   const dateLabel = useMemo(
-    () =>
-      intl.formatDate(new Date(slot.start), {
-        dateStyle: 'full'
-      }),
-    [slot.start, intl]
+    () => formatDate(slot.start, { locale, timeZone: timezone, dateStyle: 'full' }),
+    [slot.start, locale, timezone],
   );
 
   const timeLabel = useMemo(
-    () =>
-      `${intl.formatTime(new Date(slot.start), { timeStyle: 'short' })} – ${intl.formatTime(new Date(slot.end), { timeStyle: 'short' })}`,
-    [slot.start, slot.end, intl]
+    () => formatTimeRange(slot.start, slot.end, { locale, timeZone: timezone }),
+    [slot.start, slot.end, locale, timezone],
   );
+
+  const accessibleStart = useMemo(
+    () => formatAccessibleDateTime(slot.start, { locale, timeZone: timezone }),
+    [slot.start, locale, timezone],
+  );
+
+  const accessibleEnd = useMemo(
+    () => formatAccessibleDateTime(slot.end, { locale, timeZone: timezone }),
+    [slot.end, locale, timezone],
+  );
+
+  const accessibleRange = useMemo(() => `${accessibleStart} – ${accessibleEnd}`, [accessibleStart, accessibleEnd]);
+  const timeZoneLabel = useMemo(() => formatTimeZoneName(timezone, { locale }), [timezone, locale]);
 
   const modalityLabel = intl.formatMessage({ id: `booking.modality.${slot.modality}` });
   const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
@@ -103,47 +142,73 @@ export const ConfirmBookingContent = ({
         <p id={resolvedDescriptionId}>{intl.formatMessage({ id: 'booking.confirm.summary' })}</p>
       </header>
 
-      <dl className="booking-confirm-summary">
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.patient' })}</dt>
-          <dd>{patientId}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.date' })}</dt>
-          <dd>{dateLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.time' })}</dt>
-          <dd>{timeLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.modality' })}</dt>
-          <dd>{modalityLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.location' })}</dt>
-          <dd>{locationLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.idempotencyKey' })}</dt>
-          <dd>
-            <code>{idempotencyKey}</code>
-          </dd>
-        </div>
-      </dl>
+      <div
+        className={['booking-confirm-summary-container', (isSubmitting || queueStatus === 'processing') ? 'booking-confirm-summary-container--loading' : '']
+          .filter(Boolean)
+          .join(' ')}
+      >
+        <dl className="booking-confirm-summary">
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.patient' })}</dt>
+            <dd>{patientId}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.date' })}</dt>
+            <dd>
+              <span aria-hidden="true">{dateLabel}</span>
+              <span className="visually-hidden">{accessibleStart}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.time' })}</dt>
+            <dd>
+              <span aria-hidden="true">{timeLabel}</span>
+              <span className="visually-hidden">{accessibleRange}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.modality' })}</dt>
+            <dd>{modalityLabel}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.location' })}</dt>
+            <dd>{locationLabel}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.timeZone' })}</dt>
+            <dd>
+              <span aria-hidden="true">{timeZoneLabel}</span>
+              <span className="visually-hidden">{timezone}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.idempotencyKey' })}</dt>
+            <dd>
+              <code>{idempotencyKey}</code>
+            </dd>
+          </div>
+        </dl>
+        {(isSubmitting || queueStatus === 'processing') ? <ConfirmBookingSkeleton /> : null}
+      </div>
 
       <div id={statusMessageId} aria-live="polite" role="status">
         {statusLabel}
       </div>
 
       <div className="booking-confirm-actions">
-        <button type="button" onClick={onBack} disabled={isSubmitting || queueStatus === 'processing'}>
+        <button
+          type="button"
+          className="ui-button ui-button--subtle"
+          onClick={onBack}
+          disabled={isSubmitting || queueStatus === 'processing'}
+        >
           {intl.formatMessage({ id: 'booking.confirm.back' })}
         </button>
         <button
           type="button"
+          className="ui-button"
           onClick={onConfirm}
-          disabled={isSubmitting || Boolean(queueJob)}
+          disabled={isSubmitting || queueStatus === 'processing' || Boolean(queueJob)}
           aria-describedby={statusLabel ? statusMessageId : undefined}
         >
           {isSubmitting ? submittingLabel : confirmLabel}
@@ -174,10 +239,20 @@ export const ConfirmBookingContent = ({
             </p>
           ) : null}
           <div className="booking-offline-actions">
-            <button type="button" onClick={handleRetryQueued} disabled={queueStatus === 'processing'}>
+            <button
+              type="button"
+              className="ui-button"
+              onClick={onRetryQueued}
+              disabled={queueStatus === 'processing'}
+            >
               {intl.formatMessage({ id: 'booking.confirm.offline.retryNow' })}
             </button>
-            <button type="button" onClick={handleCancelQueued} disabled={queueStatus === 'processing'}>
+            <button
+              type="button"
+              className="ui-button ui-button--subtle"
+              onClick={onCancelQueued}
+              disabled={queueStatus === 'processing'}
+            >
               {intl.formatMessage({ id: 'booking.confirm.offline.cancel' })}
             </button>
           </div>
@@ -194,7 +269,7 @@ const getFocusableElements = (container: HTMLElement): HTMLElement[] =>
     )
   ).filter((element) => !element.hasAttribute('disabled') && !element.getAttribute('aria-hidden'));
 
-const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, onError }: ConfirmBookingProps) => {
+const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onSuccess, onError }: ConfirmBookingProps) => {
   const intl = useIntl();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -313,7 +388,8 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
             ? error.message
             : fallbackMessage;
         const attempts = job.attempt + 1;
-        const delay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempts);
+        const jitter = Math.floor(Math.random() * RETRY_JITTER_MAX_MS);
+        const delay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempts) + jitter;
         const next = updateOfflineJob(job.id, {
           attempt: attempts,
           lastError: message,
@@ -553,12 +629,18 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
           slot={slot}
           patientId={patientId}
           idempotencyKey={idempotencyKey}
+          timezone={timezone}
           isSubmitting={isSubmitting}
           statusMessageId={statusMessageId}
           onBack={onBack}
           onConfirm={handleConfirm}
           titleId={titleId}
           descriptionId={descriptionId}
+          queueJob={queueJob}
+          queueStatus={queueStatus}
+          retryCountdown={retryCountdown}
+          onRetryQueued={handleRetryQueued}
+          onCancelQueued={handleCancelQueued}
         />
       </div>
     </div>

@@ -10,3 +10,4 @@ build/
 infra/tls/dev/*.key
 infra/tls/dev/*.csr
 infra/tls/dev/*.srl
+artifacts/

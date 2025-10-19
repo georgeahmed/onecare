@@ -1,0 +1,57 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-telephony
+  labels:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/name: slo-telephony
+spec:
+  groups:
+    - name: telephony-slo
+      rules:
+        - alert: TelephonySessionLatencyFast
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(telephony_session_setup_ms_bucket[5m])) by (le)
+            ) > 4000
+          for: 5m
+          labels:
+            severity: critical
+            slo: telephony-latency
+            team: telephony
+          annotations:
+            summary: "Telephony WebRTC setup latency above target"
+            description: "WebRTC session setup p95 exceeded 4s for 5 minutes."
+            runbook: https://onecare/runbooks/oncall#telephony-webrtc
+        - alert: TelephonySessionLatencySlow
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(telephony_session_setup_ms_bucket[30m])) by (le)
+            ) > 4000
+          for: 30m
+          labels:
+            severity: warning
+            slo: telephony-latency
+            team: telephony
+          annotations:
+            summary: "Telephony WebRTC latency trending high"
+            description: "WebRTC session setup p95 exceeded 4s for 30 minutes."
+            runbook: https://onecare/runbooks/oncall#telephony-webrtc
+        - alert: TelephonyFailureRate
+          expr: |
+            (
+              rate(telephony_session_failed_total[5m])
+              /
+              rate(telephony_session_started_total[5m])
+            ) > 0.04
+          for: 10m
+          labels:
+            severity: critical
+            slo: telephony-error
+            team: telephony
+          annotations:
+            summary: "Telephony session failure rate above threshold"
+            description: "Telephony failure rate exceeded 4% for 10 minutes (double the 2% budget)."
+            runbook: https://onecare/runbooks/oncall#telephony-webrtc

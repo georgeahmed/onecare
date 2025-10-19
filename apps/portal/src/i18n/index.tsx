@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { IntlProvider } from 'react-intl';
 import enMessages from './messages/en';
 import { generatePseudoMessages } from './pseudo';
+import { recordRumEvent, safeLog } from '../lib/telemetry';
 
 const DEV_PSEUDO_LOCALE = 'pseudo' as const;
 const REAL_LOCALES = ['en', 'es', 'ar'] as const;
@@ -17,10 +18,16 @@ type LocaleDefinition = {
   devOnly?: boolean;
 };
 
+type LocaleStatus = 'ready' | 'loading' | 'fallback';
+
 type LocaleContextValue = {
   locale: Locale;
   direction: LocaleDirection;
+  status: LocaleStatus;
+  hasLocaleUpdate: boolean;
+  lastUpdatedAt: number | null;
   setLocale: (locale: Locale) => void;
+  refreshLocale: () => void;
 };
 
 const LOCALE_DEFINITIONS: Record<Locale, LocaleDefinition> = {
@@ -42,6 +49,24 @@ const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
 
 export const LOCALE_STORAGE_KEY = 'onecare.portal.locale';
 const LOCALE_CACHE_PREFIX = 'onecare.portal.locale.messages.';
+
+type LocaleCacheEnvelope = {
+  updatedAt: number;
+  messages: Record<string, string>;
+};
+
+const FALLBACK_MESSAGES: Record<string, string> = { ...enMessages };
+
+const getLocaleCacheKey = (locale: Locale): string => `${LOCALE_CACHE_PREFIX}${locale}`;
+
+const areMessagesEqual = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) {
+    return false;
+  }
+  return keysA.every((key) => a[key] === b[key]);
+};
 
 type MaybeNodeProcess = { process?: { env?: Record<string, string | undefined> } };
 
@@ -137,34 +162,62 @@ export const getLocaleMetadata = (locale: Locale): LocaleDefinition => LOCALE_DE
 
 export const getLocaleDirection = (locale: Locale): LocaleDirection => LOCALE_DEFINITIONS[locale].direction;
 
-export const cacheLocaleMessages = (locale: Locale, messages: Record<string, string>): void => {
-  messageCache.set(locale, messages);
+const readCachedLocaleEnvelope = (locale: Locale): LocaleCacheEnvelope | null => {
+  if (messageCache.has(locale)) {
+    return {
+      updatedAt: Date.now(),
+      messages: messageCache.get(locale)!,
+    };
+  }
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(getLocaleCacheKey(locale));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LocaleCacheEnvelope | Record<string, string>;
+    if (parsed && typeof parsed === 'object' && 'messages' in parsed) {
+      const envelope = parsed as LocaleCacheEnvelope;
+      messageCache.set(locale, envelope.messages);
+      return envelope;
+    }
+    if (parsed && typeof parsed === 'object') {
+      const legacyMessages = parsed as Record<string, string>;
+      messageCache.set(locale, legacyMessages);
+      return {
+        updatedAt: 0,
+        messages: legacyMessages,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const writeLocaleCache = (locale: Locale, messages: Record<string, string>): void => {
   if (typeof window === 'undefined' || !window.localStorage) {
     return;
   }
   try {
-    window.localStorage.setItem(`${LOCALE_CACHE_PREFIX}${locale}`, JSON.stringify(messages));
+    const envelope: LocaleCacheEnvelope = {
+      updatedAt: Date.now(),
+      messages
+    };
+    window.localStorage.setItem(getLocaleCacheKey(locale), JSON.stringify(envelope));
   } catch {
     // ignore cache write errors
   }
 };
 
+export const cacheLocaleMessages = (locale: Locale, messages: Record<string, string>): void => {
+  messageCache.set(locale, messages);
+  writeLocaleCache(locale, messages);
+};
+
 export const readCachedLocaleMessages = (locale: Locale): Record<string, string> | null => {
-  if (messageCache.has(locale)) {
-    return messageCache.get(locale)!;
-  }
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return null;
-  }
-  try {
-    const stored = window.localStorage.getItem(`${LOCALE_CACHE_PREFIX}${locale}`);
-    if (!stored) return null;
-    const parsed = JSON.parse(stored) as Record<string, string>;
-    messageCache.set(locale, parsed);
-    return parsed;
-  } catch {
-    return null;
-  }
+  const envelope = readCachedLocaleEnvelope(locale);
+  return envelope ? envelope.messages : null;
 };
 
 export const applyDocumentLanguage = (value: Locale): void => {
@@ -185,31 +238,65 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
   const [locale, setLocaleState] = useState<Locale>(resolveInitialLocale);
   const [messages, setMessages] = useState<Record<string, string>>(() => messageCache.get(locale) ?? enMessages);
   const [direction, setDirection] = useState<LocaleDirection>(() => getLocaleDirection(locale));
+  const [status, setStatus] = useState<LocaleStatus>(() => (messageCache.has(locale) ? 'ready' : 'loading'));
+  const [hasLocaleUpdate, setHasLocaleUpdate] = useState<boolean>(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [reloadGeneration, setReloadGeneration] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
-    const cached = readCachedLocaleMessages(locale);
-    if (cached) {
-      setMessages(cached);
+    setStatus((previous) => (previous === 'fallback' ? previous : 'loading'));
+    setHasLocaleUpdate(false);
+
+    const cachedEnvelope = readCachedLocaleEnvelope(locale);
+    if (cachedEnvelope) {
+      setMessages(cachedEnvelope.messages);
+      setLastUpdatedAt(cachedEnvelope.updatedAt);
+      setStatus('ready');
+    } else if (messageCache.has(locale)) {
+      setMessages(messageCache.get(locale)!);
+      setLastUpdatedAt(Date.now());
+      setStatus('ready');
+    } else if (locale === 'en') {
+      setMessages(FALLBACK_MESSAGES);
+      setLastUpdatedAt(Date.now());
+      setStatus('ready');
     }
 
     loadLocaleMessages(locale)
       .then((loaded) => {
         if (cancelled) return;
         cacheLocaleMessages(locale, loaded);
+        const cachedMessages = cachedEnvelope?.messages;
+        const different = cachedMessages ? !areMessagesEqual(cachedMessages, loaded) : false;
         setMessages(loaded);
+        setStatus('ready');
+        setLastUpdatedAt(Date.now());
+        setHasLocaleUpdate(different);
+        if (different) {
+          recordRumEvent('i18n.cache.updated', { locale });
+          safeLog('i18n.cache.updated', { locale });
+        }
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
-        const fallback = messageCache.get('en') ?? enMessages;
-        setMessages(fallback);
+        setMessages(FALLBACK_MESSAGES);
+        setStatus('fallback');
+        setLastUpdatedAt(null);
+        setHasLocaleUpdate(false);
+        const message =
+          error instanceof Error && typeof error.message === 'string' && error.message.trim().length > 0
+            ? error.message
+            : 'Unknown error';
+        recordRumEvent('i18n.load.fallback', { locale, message });
+        safeLog('i18n.load.fallback', { locale, message });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [locale]);
+  }, [locale, reloadGeneration]);
 
   useEffect(() => {
     const nextDirection = getLocaleDirection(locale);
@@ -226,16 +313,27 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
+    setStatus(messageCache.has(next) ? 'ready' : 'loading');
+    setHasLocaleUpdate(false);
+    setLastUpdatedAt(null);
     persistLocaleValue(next);
+  }, []);
+
+  const refreshLocale = useCallback(() => {
+    setReloadGeneration((value) => value + 1);
   }, []);
 
   const contextValue = useMemo(
     () => ({
       locale,
       direction,
-      setLocale
+      status,
+      hasLocaleUpdate,
+      lastUpdatedAt,
+      setLocale,
+      refreshLocale
     }),
-    [locale, direction, setLocale]
+    [locale, direction, status, hasLocaleUpdate, lastUpdatedAt, setLocale, refreshLocale]
   );
 
   return (

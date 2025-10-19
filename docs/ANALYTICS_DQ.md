@@ -32,6 +32,33 @@ Archive Automation
 - Outputs are timestamped and grouped under `YYYY/MM/DD/analytics-quarantine-<timestamp>.jsonl.gz` for simple lifecycle management.
 - Recommended workflow: schedule the quality script, then invoke the export script; ensure the archive directory is backed by the agreed cold-storage tier once retention targets are finalised.
 
+Threshold Catalogue
+-------------------
+
+| Metric | Check | Threshold | Action |
+|--------|-------|-----------|--------|
+| `latency_ms` | Numeric outlier | Z-score > 3 or raw value > 10 000 | Quarantine record; investigate producer latency or timestamp skew |
+| `errors_total` | Missing labels | `labels.service` absent | Reject, update producer instrumentation, backfill via playback/backfill |
+| `requests_total` | Missing numeric `value` | Non-numeric (NaN/empty) | Reject and fix producer type coercion |
+| Any metric | Missing `name` | Schema validation failure | Block at ingress; raise incident with producing team |
+| Any metric | Ingest lag | `analytics.ingest.lag_ms` p95 > 5 s for >10 min | Treat as pipeline incident; examine bus backpressure |
+
+Remediation Playbook
+--------------------
+
+1. **Identify** — Use `analytics.ingest.*` counters and quality reports to isolate impacted metrics.
+2. **Isolate** — Filter the quarantine NDJSON by `reason` to understand the failure class quickly.
+3. **Fix** — Patch the upstream producer (labels/value types) or adjust metric throttles.
+4. **Replay** — After remediation, run the playback or backfill tooling to restore gaps.
+5. **Verify** — Re-run `npm run metrics:quality` and confirm the quarantine file is empty before closing.
+
+Automation Cadence
+------------------
+
+- **Daily** — Schedule `npm run metrics:quality` followed by `npm run analytics:quarantine:export`.
+- **Weekly** — Review reports, sanity-check quarantine counts, and update dashboards with new anomaly classes.
+- **Monthly** — Align quarantine/export counts with retention reports to ensure archives match expectations.
+
 Follow-ups
 ----------
 - Wire the quality + export commands into CI/cron once the retention target, archive mount, and secrets are finalised.

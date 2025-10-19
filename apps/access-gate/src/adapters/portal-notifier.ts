@@ -1,7 +1,7 @@
 import { withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, Topics, type DlqEvent, type PortalNotify, type TypedEnvelope } from '@onecare/events';
-import { logger } from '@onecare/observability';
+import { createCounter, logger } from '@onecare/observability';
 import { validate, type ValidationError } from '@onecare/domain/src/schema/validator';
 
 import { computePortalNotifyKey } from '../util/idempotency';
@@ -19,6 +19,10 @@ const defaultSleep: SleepFn = (ms) =>
   });
 
 const defaultNow: NowFn = () => new Date();
+
+const portalEventRetryCounter = createCounter('event.retry_total');
+const portalEventDlqCounter = createCounter('event.dlq_total');
+const portalEventPublishErrorCounter = createCounter('event.publish_error_total');
 
 export type PortalNotifyPublishRequest = PortalNotify & { correlationId?: string };
 
@@ -84,7 +88,11 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
     }
 
     const correlationId = normalizeCorrelationId(request.correlationId);
-    const envelope = createEnvelope(Topics.portal.notify, payload, correlationId);
+    const firstSeenAt = this.now().toISOString();
+    const envelope = createEnvelope(Topics.portal.notify, payload, correlationId, {
+      attempt: 0,
+      firstSeenAt,
+    });
     const idempotencyKey = computePortalNotifyKey(payload.practiceId, payload.state, payload.at);
     const headers = this.buildHeaders(correlationId, idempotencyKey);
 
@@ -93,6 +101,12 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
 
     while (attempt < this.maxAttempts) {
       attempt += 1;
+      envelope.metadata = {
+        attempt,
+        firstSeenAt,
+      };
+      headers['x-attempt'] = String(attempt);
+      headers['x-first-seen-at'] = firstSeenAt;
       try {
         await this.bus.publish(Topics.portal.notify, envelope, headers);
         logger.info('portal.notify.published', {
@@ -106,19 +120,28 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       } catch (error) {
         lastError = error;
         const retryable = this.isRetryable(error);
+        const errorCode = this.extractErrorCode(error) ?? 'unknown';
+        portalEventPublishErrorCounter.add(1, {
+          topic: Topics.portal.notify,
+          code: errorCode,
+        });
         logger.warn('portal.notify.publish_failed', {
           practiceId: payload.practiceId,
           state: payload.state,
           attempt,
           retryable,
           correlationId,
-          code: this.extractErrorCode(error),
+          code: errorCode,
         });
 
         if (!retryable || attempt >= this.maxAttempts) {
           break;
         }
 
+        portalEventRetryCounter.add(1, {
+          topic: Topics.portal.notify,
+          code: errorCode,
+        });
         const delay = this.computeBackoff(attempt);
         if (delay > 0) {
           await this.sleep(delay);
@@ -126,7 +149,21 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       }
     }
 
-    await this.publishDlq(envelope, idempotencyKey, request, lastError);
+    if (lastError) {
+      const dlqCode = this.extractErrorCode(lastError) ?? 'unknown';
+      portalEventDlqCounter.add(1, {
+        topic: Topics.portal.notify,
+        code: dlqCode,
+      });
+      await this.publishDlq(envelope, idempotencyKey, request, lastError).catch((dlqError) => {
+        logger.error('portal.notify.dlq_publish_failed', {
+          practiceId: request.practiceId,
+          state: request.state,
+          correlationId,
+          reason: this.errorMessage(dlqError),
+        });
+      });
+    }
   }
 
   private buildHeaders(correlationId: string | undefined, idempotencyKey: string): Record<string, string> {

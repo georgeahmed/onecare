@@ -1,0 +1,34 @@
+[
+  {
+    "resourceType": "Patient",
+    "id": "patient-alpha",
+    "name": [
+      {
+        "use": "official",
+        "family": "Alpha",
+        "given": ["Alex"]
+      }
+    ],
+    "gender": "female",
+    "birthDate": "1989-04-02",
+    "generalPractitioner": [
+      { "reference": "Organization/org-demo-001" }
+    ]
+  },
+  {
+    "resourceType": "Patient",
+    "id": "patient-bravo",
+    "name": [
+      {
+        "use": "official",
+        "family": "Bravo",
+        "given": ["Ben"]
+      }
+    ],
+    "gender": "male",
+    "birthDate": "2016-08-18",
+    "generalPractitioner": [
+      { "reference": "Organization/org-demo-002" }
+    ]
+  }
+]

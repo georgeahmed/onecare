@@ -267,6 +267,85 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  mock-safety-gate:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-safety-gate.mjs"]
+    environment:
+      - PORT=5011
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=safety-gate
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "5011:5011"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5011/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  mock-scribe:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-scribe.mjs"]
+    environment:
+      - PORT=5012
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=scribe
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "5012:5012"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5012/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  mock-fhir:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-fhir.mjs"]
+    environment:
+      - PORT=9500
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=fhir
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "9500:9500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9500/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  qa-test-env:
+    profiles: ['test']
+    image: alpine:3.20
+    command: ["tail", "-f", "/dev/null"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-safety-gate:
+        condition: service_healthy
+      mock-scribe:
+        condition: service_healthy
+      mock-fhir:
+        condition: service_healthy
+    volumes:
+      - ./qa/env/mock-data:/data:ro
+
 volumes:
   nats-data:
   analytics-metrics:

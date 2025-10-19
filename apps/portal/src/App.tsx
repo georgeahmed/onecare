@@ -7,6 +7,8 @@ import LocaleSwitcher from './components/LocaleSwitcher';
 import ThemeSwitcher from './components/ThemeSwitcher';
 import { ThemeProvider } from './theme';
 import useZoomFallback from './hooks/useZoomFallback';
+import OfflineNotice from './components/OfflineNotice';
+import LocaleNotice from './components/LocaleNotice';
 
 const App = () => (
   <ThemeProvider>
@@ -43,6 +45,8 @@ const AppLayout = () => {
           <ThemeSwitcher />
         </div>
       </header>
+      <OfflineNotice />
+      <LocaleNotice />
       <Routes>
         <Route path="/intake" element={<IntakePage />} />
         <Route path="/booking" element={<BookingPage />} />

@@ -5,6 +5,7 @@ import type {
   OnlineFeatureRecord,
   OnlineFeatureStore,
 } from '@onecare/ports';
+import { createCounter, createGauge, createHistogram } from '@onecare/observability';
 
 const clone = <T>(value: T): T => {
   if (typeof globalThis.structuredClone === 'function') {
@@ -34,6 +35,12 @@ export interface InMemoryOnlineFeatureStoreOptions {
   clock?: () => number;
 }
 
+const getLatencyHistogram = createHistogram('features.online.get_latency_ms');
+const getCounter = createCounter('features.online.get_total');
+const getHitCounter = createCounter('features.online.get_hit');
+const getMissCounter = createCounter('features.online.get_miss');
+const cacheHitGauge = createGauge('features.online.hit_ratio');
+
 export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
   private readonly clock: () => number;
 
@@ -48,6 +55,9 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
     ready: true,
     checkedAt: new Date().toISOString(),
   };
+
+  private hitCount = 0;
+  private missCount = 0;
 
   constructor(options: InMemoryOnlineFeatureStoreOptions = {}) {
     this.clock = options.clock ?? Date.now;
@@ -85,9 +95,13 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
   }
 
   async get(query: OnlineFeatureQuery): Promise<Record<string, unknown> | null> {
+    const start = Date.now();
+    getCounter.add(1, { featureSet: query.featureSet });
     const key = makeKey(query.featureSet, query.entityId);
     const versions = this.store.get(key);
     if (!versions) {
+      this.recordMiss(query.featureSet);
+      getLatencyHistogram.record(Date.now() - start, { featureSet: query.featureSet, hit: 'false' });
       return null;
     }
 
@@ -97,11 +111,15 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
       this.store.set(key, cleaned);
     }
     if (cleaned.length === 0) {
+      this.recordMiss(query.featureSet);
+      getLatencyHistogram.record(Date.now() - start, { featureSet: query.featureSet, hit: 'false' });
       return null;
     }
 
     if (!query.asOf) {
       const latest = cleaned[cleaned.length - 1]!;
+      this.recordHit(query.featureSet);
+      getLatencyHistogram.record(Date.now() - start, { featureSet: query.featureSet, hit: 'true' });
       return clone(latest.payload);
     }
 
@@ -113,9 +131,13 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
     for (let idx = cleaned.length - 1; idx >= 0; idx -= 1) {
       const candidate = cleaned[idx]!;
       if (candidate.asOf <= asOfTs) {
+        this.recordHit(query.featureSet);
+        getLatencyHistogram.record(Date.now() - start, { featureSet: query.featureSet, hit: 'true' });
         return clone(candidate.payload);
       }
     }
+    this.recordMiss(query.featureSet);
+    getLatencyHistogram.record(Date.now() - start, { featureSet: query.featureSet, hit: 'false' });
     return null;
   }
 
@@ -151,9 +173,12 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
   }
 
   async health(): Promise<FeatureStoreHealth> {
+    const total = this.hitCount + this.missCount;
+    const hitRatio = total > 0 ? this.hitCount / total : 1;
     this.lastHealth = {
       status: 'ok',
       checkedAt: new Date(this.clock()).toISOString(),
+      details: `hitRatio=${hitRatio.toFixed(3)}`,
     };
     return this.lastHealth;
   }
@@ -164,5 +189,27 @@ export class InMemoryOnlineFeatureStore implements OnlineFeatureStore {
       checkedAt: new Date(this.clock()).toISOString(),
     };
     return this.lastReadiness;
+  }
+
+  private recordHit(featureSet: string): void {
+    this.hitCount += 1;
+    getHitCounter.add(1, { featureSet });
+    this.updateHitGauge();
+  }
+
+  private recordMiss(featureSet: string): void {
+    this.missCount += 1;
+    getMissCounter.add(1, { featureSet });
+    this.updateHitGauge();
+  }
+
+  private updateHitGauge(): void {
+    const total = this.hitCount + this.missCount;
+    if (total === 0) {
+      cacheHitGauge.set(1, { store: 'in-memory' });
+      return;
+    }
+    const ratio = this.hitCount / total;
+    cacheHitGauge.set(ratio, { store: 'in-memory' });
   }
 }

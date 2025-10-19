@@ -1,0 +1,12 @@
+[
+  {
+    "referralId": "ics-ref-001",
+    "accepted": true,
+    "note": "Booked with ICS triage nurse for next business day"
+  },
+  {
+    "referralId": "ics-ref-002",
+    "accepted": false,
+    "note": "Redirect to urgent care partner due to capacity"
+  }
+]

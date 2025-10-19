@@ -13,7 +13,7 @@ spec:
           expr: |
             (
               sum(rate(http_server_requests_total{route="/safety-check",status=~"5.."}[5m])) /
-              max(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
+              clamp_min(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
             ) > 0.005
           for: 10m
           labels:
@@ -29,7 +29,7 @@ spec:
           expr: |
             (
               sum(rate(http_server_requests_total{route="/safety-check",status=~"5.."}[5m])) /
-              max(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
+              clamp_min(sum(rate(http_server_requests_total{route="/safety-check"}[5m])), 1)
             ) > 0.01
           for: 10m
           labels:

@@ -1,6 +1,12 @@
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
-import SchemaForm, { type JsonSchema, type SchemaFormHandle } from '../features/schemaForm/SchemaForm';
+import SchemaForm, {
+  collectValidationIssues,
+  type JsonSchema,
+  type ObjectJsonSchema,
+  type SchemaFormHandle,
+  type ValidationIssue
+} from '../features/schemaForm/SchemaForm';
 import { submitIntake } from '../lib/api';
 import {
   clearInterpreterPreferences,
@@ -9,6 +15,8 @@ import {
 } from '../lib/interpreterPreferencesStorage';
 import type { ErrorEnvelope, PortalSubmission, PortalSubmissionAttachment, SafetyDecision } from '../lib/types';
 import type { ErrorObject } from '@onecare/events/src/contracts/error-envelope';
+import { classNames } from '../lib/classNames';
+import StepIndicator from './StepIndicator';
 import ErrorAlert from './ErrorAlert';
 import ErrorSummary from './ErrorSummary';
 import RetryNotice from './RetryNotice';
@@ -17,6 +25,16 @@ import { useLocale, supportedLocales } from '../i18n';
 import InterpreterPreferences, { type InterpreterPreferencesValue } from './InterpreterPreferences';
 import { useAccessibilityConfig } from '../hooks/useAccessibilityConfig';
 import Button from './ui/Button';
+import {
+  DEFAULT_WIZARD_META,
+  createIntakeWizardSteps,
+  findStepIndex,
+  getNextStepId,
+  getPreviousStepId,
+  type IntakeWizardMeta,
+  type IntakeWizardStepId
+} from '../application/wizard/intakeWizard';
+import { ensureHttpsUrl, sanitizeMultilineText, sanitizeText } from '../lib/security';
 // Import JSON Schema directly (tsconfig resolves JSON modules)
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
@@ -55,18 +73,6 @@ const buildInitialSubmission = (): PortalSubmission => ({
   attachments: []
 });
 
-const isSafeAttachmentUrl = (candidate: string): string | null => {
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== 'https:') {
-      return null;
-    }
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-};
-
 type SupportedLocale = (typeof supportedLocales)[number];
 
 const isSupportedPortalLocale = (value: string | null | undefined): value is SupportedLocale =>
@@ -87,7 +93,7 @@ const sanitizeAttachments = (
     if (!ALLOWED_ATTACHMENT_TYPES.test(contentType)) {
       return acc;
     }
-    const safeUrl = isSafeAttachmentUrl(rawUrl);
+    const safeUrl = ensureHttpsUrl(rawUrl);
     if (!safeUrl) {
       return acc;
     }
@@ -104,10 +110,10 @@ const toContractAttachments = (
   attachments as unknown as PortalSubmission['attachments'];
 
 export const sanitizeSubmission = (submission: PortalSubmission): PortalSubmission => {
-  const practiceId = submission.practiceId.trim();
-  const narrative = submission.narrative.trim();
-  const patientId = submission.patient.id.trim();
-  const dob = submission.patient.dob?.trim();
+  const practiceId = sanitizeText(submission.practiceId, 120);
+  const narrative = sanitizeMultilineText(submission.narrative ?? '', 1_200);
+  const patientId = sanitizeText(submission.patient.id, 120);
+  const dob = submission.patient.dob ? sanitizeText(submission.patient.dob, 40) : undefined;
   const locale = submission.patient.locale?.trim();
   const attachments = sanitizeAttachments(submission.attachments);
 
@@ -170,8 +176,11 @@ export const sanitizeInterpreterPreferences = (
     .filter((item) => allowedLanguages.includes(item))
     .slice(0, MAX_INTERPRETER_LANGUAGES);
 
-  const notesRaw = preferences.notes?.trim() ?? '';
-  const notes = notesRaw.length > 0 ? notesRaw.slice(0, MAX_INTERPRETER_NOTES_LENGTH) : undefined;
+  const notesRaw = preferences.notes ?? '';
+  const notesSanitized = notesRaw
+    ? sanitizeMultilineText(notesRaw, MAX_INTERPRETER_NOTES_LENGTH)
+    : '';
+  const notes = notesSanitized.length > 0 ? notesSanitized : undefined;
 
   const payload: PortalSubmission['interpreterPreferences'] = {
     requiresInterpreter: true
@@ -195,14 +204,37 @@ export const sanitizeInterpreterPreferences = (
 
 const INTAKE_DRAFT_STORAGE_KEY = 'onecare.portal.intakeDraft';
 const AUTOSAVE_DEBOUNCE_MS = 750;
+const WIZARD_STEP_IDS: IntakeWizardStepId[] = [
+  'practice',
+  'patient',
+  'details',
+  'attachments',
+  'review'
+];
 
 type IntakeDraftEnvelope = {
   submission: PortalSubmission;
   updatedAt: number;
+  stepId?: IntakeWizardStepId;
+  wizard?: IntakeWizardMeta;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const isWizardStepId = (value: unknown): value is IntakeWizardStepId =>
+  typeof value === 'string' && (WIZARD_STEP_IDS as readonly string[]).includes(value as string);
+
+const coerceWizardMeta = (candidate: unknown): IntakeWizardMeta | null => {
+  if (!isPlainObject(candidate)) {
+    return null;
+  }
+  const includeAttachments =
+    typeof candidate.includeAttachments === 'boolean'
+      ? candidate.includeAttachments
+      : DEFAULT_WIZARD_META.includeAttachments;
+  return { includeAttachments };
+};
 
 const coercePortalSubmission = (candidate: unknown): PortalSubmission | null => {
   if (!isPlainObject(candidate)) {
@@ -252,7 +284,12 @@ const readDraftEnvelope = (): IntakeDraftEnvelope | null => {
   try {
     const raw = window.localStorage.getItem(INTAKE_DRAFT_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { submission?: unknown; updatedAt?: unknown };
+    const parsed = JSON.parse(raw) as {
+      submission?: unknown;
+      updatedAt?: unknown;
+      stepId?: unknown;
+      wizard?: unknown;
+    };
     if (!parsed.submission || typeof parsed.updatedAt !== 'number') {
       return null;
     }
@@ -260,7 +297,9 @@ const readDraftEnvelope = (): IntakeDraftEnvelope | null => {
     if (!submission) {
       return null;
     }
-    return { submission, updatedAt: parsed.updatedAt };
+    const stepId = isWizardStepId(parsed.stepId) ? parsed.stepId : undefined;
+    const wizard = coerceWizardMeta(parsed.wizard) ?? DEFAULT_WIZARD_META;
+    return { submission, updatedAt: parsed.updatedAt, stepId, wizard };
   } catch {
     return null;
   }
@@ -271,7 +310,13 @@ const writeDraftEnvelope = (envelope: IntakeDraftEnvelope): void => {
     return;
   }
   try {
-    window.localStorage.setItem(INTAKE_DRAFT_STORAGE_KEY, JSON.stringify(envelope));
+    window.localStorage.setItem(
+      INTAKE_DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        ...envelope,
+        wizard: envelope.wizard ?? DEFAULT_WIZARD_META
+      })
+    );
   } catch {
     // ignore failures to avoid blocking the UI
   }
@@ -314,6 +359,9 @@ const IntakeForm = () => {
     requiresInterpreter: false,
     preferredLanguages: []
   });
+  const [wizardMeta, setWizardMeta] = useState<IntakeWizardMeta>(DEFAULT_WIZARD_META);
+  const [currentStepId, setCurrentStepId] = useState<IntakeWizardStepId>('practice');
+  const restoredStepIdRef = useRef<IntakeWizardStepId | null>(null);
   const interpreterPreferredLanguagesSignature = useMemo(
     () => (interpreterPreferences.preferredLanguages ?? []).join('|'),
     [interpreterPreferences.preferredLanguages]
@@ -370,16 +418,74 @@ const IntakeForm = () => {
   }, [autosaveStatus, intl, lastSavedAt]);
 
   const statusMessageId = useId();
+  const attachmentsChoiceId = useId();
+  const attachmentsHelpId = useId();
+
+  const wizardSteps = useMemo(
+    () =>
+      createIntakeWizardSteps(intakeSchema as ObjectJsonSchema, {
+        accessibilityEnabled: accessibilityConfig.enabled,
+        includeAttachments: wizardMeta.includeAttachments
+      }),
+    [accessibilityConfig.enabled, wizardMeta.includeAttachments]
+  );
+
+  const currentStep = useMemo(
+    () => wizardSteps.find((step) => step.id === currentStepId) ?? wizardSteps[0],
+    [wizardSteps, currentStepId]
+  );
+
+  const currentStepIndex = useMemo(
+    () => findStepIndex(wizardSteps, currentStep?.id ?? currentStepId),
+    [wizardSteps, currentStep, currentStepId]
+  );
+
+  const previousStepId = useMemo(
+    () => getPreviousStepId(wizardSteps, currentStep?.id ?? currentStepId),
+    [wizardSteps, currentStep, currentStepId]
+  );
+
+  const nextStepId = useMemo(
+    () => getNextStepId(wizardSteps, currentStep?.id ?? currentStepId),
+    [wizardSteps, currentStep, currentStepId]
+  );
+
+  useEffect(() => {
+    if (!wizardSteps.length) {
+      return;
+    }
+    if (restoredStepIdRef.current) {
+      const desired = restoredStepIdRef.current;
+      restoredStepIdRef.current = null;
+      if (findStepIndex(wizardSteps, desired) !== -1) {
+        setCurrentStepId(desired);
+        return;
+      }
+    }
+    if (findStepIndex(wizardSteps, currentStepId) === -1) {
+      setCurrentStepId(wizardSteps[wizardSteps.length - 1].id);
+    }
+  }, [wizardSteps, currentStepId]);
 
   useEffect(() => {
     const envelope = readDraftEnvelope();
     if (!envelope) return;
     setFormData(envelope.submission);
+    setWizardMeta(envelope.wizard ?? DEFAULT_WIZARD_META);
+    if (envelope.stepId) {
+      restoredStepIdRef.current = envelope.stepId;
+    }
     setFormResetKey((previous) => previous + 1);
     setAutosaveStatus('restored');
     setLastSavedAt(envelope.updatedAt);
     skipNextAutosaveRef.current = true;
   }, []);
+
+  useEffect(() => {
+    setFormErrors({});
+    setShowValidationSummary(false);
+    setShouldFocusErrorSummary(false);
+  }, [currentStepId]);
 
   useEffect(() => {
     if (accessibilityConfig.enabled) {
@@ -561,7 +667,9 @@ const IntakeForm = () => {
     const timeout = window.setTimeout(() => {
       const envelope: IntakeDraftEnvelope = {
         submission: formData,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        stepId: currentStepId,
+        wizard: wizardMeta
       };
       writeDraftEnvelope(envelope);
       setAutosaveStatus('saved');
@@ -572,11 +680,14 @@ const IntakeForm = () => {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [formData, hasSubmitted]);
+  }, [formData, hasSubmitted, currentStepId, wizardMeta]);
 
   const handleReset = () => {
     setFormData(buildInitialSubmission());
     setFormResetKey((previous) => previous + 1);
+    setWizardMeta(DEFAULT_WIZARD_META);
+    setCurrentStepId('practice');
+    restoredStepIdRef.current = null;
     setHasSubmitted(false);
     setSubmitError(null);
     setDecision(null);
@@ -596,6 +707,129 @@ const IntakeForm = () => {
     setLastSavedAt(null);
     skipNextAutosaveRef.current = true;
   };
+
+  const mapIssuesToErrors = useCallback(
+    (issues: ValidationIssue[]): Record<string, string> => {
+      const next: Record<string, string> = {};
+      issues.forEach((issue) => {
+        const path = issue.path ?? '';
+        if (!path) {
+          return;
+        }
+        let messageId: string;
+        switch (issue.kind) {
+          case 'required':
+            messageId = 'schemaForm.error.required';
+            break;
+          case 'enum':
+            messageId = 'schemaForm.error.invalidOption';
+            break;
+          case 'format-date':
+            messageId = 'schemaForm.error.invalidDate';
+            break;
+          case 'format-uri':
+            messageId = 'schemaForm.error.invalidUrl';
+            break;
+          case 'type':
+            messageId = 'schemaForm.error.invalidValue';
+            break;
+          case 'min-items':
+            messageId = 'schemaForm.error.minItems';
+            break;
+          case 'minimum':
+            messageId = 'schemaForm.error.minValue';
+            break;
+          case 'maximum':
+            messageId = 'schemaForm.error.maxValue';
+            break;
+          case 'multiple-of':
+            messageId = 'schemaForm.error.multipleOf';
+            break;
+          default:
+            messageId = 'schemaForm.error.required';
+        }
+        next[path] = intl.formatMessage({ id: messageId });
+      });
+      return next;
+    },
+    [intl]
+  );
+
+  const resolveStepForPath = useCallback(
+    (path: string): IntakeWizardStepId => {
+      if (path.startsWith('practiceId') || path.startsWith('channel')) {
+        return 'practice';
+      }
+      if (path.startsWith('patient') || path.startsWith('interpreterPreferences')) {
+        return 'patient';
+      }
+      if (path.startsWith('narrative')) {
+        return 'details';
+      }
+      if (path.startsWith('attachments')) {
+        return findStepIndex(wizardSteps, 'attachments') === -1 ? 'details' : 'attachments';
+      }
+      return 'practice';
+    },
+    [wizardSteps]
+  );
+
+  const handleStepSelect = useCallback(
+    (stepId: string) => {
+      if (!isWizardStepId(stepId)) {
+        return;
+      }
+      setCurrentStepId(stepId);
+      setShowValidationSummary(false);
+      setShouldFocusErrorSummary(false);
+    },
+    []
+  );
+
+  const handleNextStep = useCallback(() => {
+    if (currentStep?.schema && schemaFormRef.current) {
+      const valid = schemaFormRef.current.validateAll();
+      if (!valid) {
+        setShowValidationSummary(true);
+        setShouldFocusErrorSummary(true);
+        return;
+      }
+    }
+    setFormErrors({});
+    setShowValidationSummary(false);
+    setShouldFocusErrorSummary(false);
+    const nextStepId = getNextStepId(wizardSteps, currentStep?.id ?? currentStepId);
+    if (nextStepId) {
+      setCurrentStepId(nextStepId);
+    }
+  }, [currentStep, currentStepId, wizardSteps]);
+
+  const handlePreviousStep = useCallback(() => {
+    const previousStepId = getPreviousStepId(wizardSteps, currentStep?.id ?? currentStepId);
+    if (previousStepId) {
+      setCurrentStepId(previousStepId);
+      setShowValidationSummary(false);
+      setShouldFocusErrorSummary(false);
+    }
+  }, [currentStep, currentStepId, wizardSteps]);
+
+  const handleAttachmentIntent = useCallback(
+    (shouldInclude: boolean) => {
+      setWizardMeta((prev) =>
+        prev.includeAttachments === shouldInclude ? prev : { includeAttachments: shouldInclude }
+      );
+      if (!shouldInclude) {
+        setFormData((prev) => ({ ...prev, attachments: [] }));
+      }
+    },
+    []
+  );
+
+  const handleSkipAttachments = useCallback(() => {
+    handleAttachmentIntent(false);
+    const nextStepId = getNextStepId(wizardSteps, 'attachments') ?? 'review';
+    setCurrentStepId(nextStepId);
+  }, [handleAttachmentIntent, wizardSteps]);
 
   const normalizeErrorEnvelope = async (error: unknown): Promise<ErrorEnvelope> => {
     const fallbackMessage = intl.formatMessage({ id: 'error.description.internal_error' });
@@ -684,22 +918,36 @@ const IntakeForm = () => {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (currentStep?.id !== 'review') {
+      handleNextStep();
+      return;
+    }
+
     if (isSubmitting) {
       return;
     }
 
-    const schemaValid = schemaFormRef.current?.validateAll() ?? true;
-    if (!schemaValid) {
+    const baseSubmission = sanitizeSubmission(formData);
+    const validationIssues = collectValidationIssues(intakeSchema, baseSubmission);
+    if (validationIssues.length > 0) {
+      const nextErrors = mapIssuesToErrors(validationIssues);
+      setFormErrors(nextErrors);
       setShowValidationSummary(true);
       setShouldFocusErrorSummary(true);
-      setSubmitError({
-        error: {
-          code: 'invalid_input',
-          message: intl.formatMessage({ id: 'error.description.invalid_input' })
+      const firstPath = Object.keys(nextErrors)[0];
+      if (firstPath) {
+        const nextStep = resolveStepForPath(firstPath);
+        if (nextStep !== currentStepId) {
+          setCurrentStepId(nextStep);
         }
-      });
+      }
       return;
     }
+
+    setFormErrors({});
+    setShowValidationSummary(false);
+    setShouldFocusErrorSummary(false);
 
     setSubmitError(null);
     setDecision(null);
@@ -713,7 +961,6 @@ const IntakeForm = () => {
     abortControllerRef.current = controller;
 
     try {
-      const baseSubmission = sanitizeSubmission(formData);
       const interpreterPayload = sanitizeInterpreterPreferences(
         interpreterPreferences,
         interpreterLanguages
@@ -755,6 +1002,155 @@ const IntakeForm = () => {
       setIsSubmitting(false);
       abortControllerRef.current = null;
     }
+  };
+
+  const renderReview = () => {
+    const emptyValue = intl.formatMessage({ id: 'intake.wizard.review.empty' });
+    const sanitizedAttachments = sanitizeAttachments(formData.attachments);
+    const attachmentsStepTarget =
+      findStepIndex(wizardSteps, 'attachments') === -1 ? 'details' : 'attachments';
+    const patientLocaleLabel = formData.patient.locale
+      ? intl.formatMessage({
+          id: `locale.name.${formData.patient.locale}`,
+          defaultMessage: formData.patient.locale
+        })
+      : emptyValue;
+    const interpreterLanguagesList = (interpreterPreferences.preferredLanguages ?? []).map((lang) =>
+      intl.formatMessage({ id: `locale.name.${lang}`, defaultMessage: lang })
+    );
+    const interpreterLanguageText = interpreterLanguagesList.length
+      ? intl.formatList(interpreterLanguagesList, { type: 'conjunction' })
+      : intl.formatMessage({ id: 'intake.wizard.review.interpreter.anyLanguage' });
+
+    return (
+      <section
+        className="wizard-review"
+        aria-label={intl.formatMessage({ id: 'intake.wizard.review.title' })}
+      >
+        <article className="wizard-review__section">
+          <header className="wizard-review__header">
+            <h3>{intl.formatMessage({ id: 'intake.wizard.review.practice' })}</h3>
+            <button
+              type="button"
+              className="wizard-review__edit"
+              onClick={() => handleStepSelect('practice')}
+            >
+              {intl.formatMessage({ id: 'intake.wizard.review.change' })}
+            </button>
+          </header>
+          <dl className="wizard-review__list">
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.practiceId.label' })}</dt>
+              <dd>{formData.practiceId || emptyValue}</dd>
+            </div>
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.channel.legend' })}</dt>
+              <dd>
+                {intl.formatMessage({
+                  id:
+                    formData.channel === 'ivr'
+                      ? 'intake.channel.option.ivr'
+                      : 'intake.channel.option.web'
+                })}
+              </dd>
+            </div>
+          </dl>
+        </article>
+
+        <article className="wizard-review__section">
+          <header className="wizard-review__header">
+            <h3>{intl.formatMessage({ id: 'intake.wizard.review.patient' })}</h3>
+            <button
+              type="button"
+              className="wizard-review__edit"
+              onClick={() => handleStepSelect('patient')}
+            >
+              {intl.formatMessage({ id: 'intake.wizard.review.change' })}
+            </button>
+          </header>
+          <dl className="wizard-review__list">
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.patientId.label' })}</dt>
+              <dd>{formData.patient.id || emptyValue}</dd>
+            </div>
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.patient.dob.label' })}</dt>
+              <dd>
+                {formData.patient.dob
+                  ? intl.formatDate(new Date(formData.patient.dob))
+                  : emptyValue}
+              </dd>
+            </div>
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.patient.locale.label' })}</dt>
+              <dd>{patientLocaleLabel}</dd>
+            </div>
+            <div>
+              <dt>{intl.formatMessage({ id: 'intake.interpreter.checkbox' })}</dt>
+              <dd>
+                {interpreterPreferences.requiresInterpreter
+                  ? intl.formatMessage(
+                      { id: 'intake.wizard.review.interpreter.required' },
+                      { languages: interpreterLanguageText }
+                    )
+                  : intl.formatMessage({ id: 'intake.wizard.review.interpreter.notRequired' })}
+                {interpreterPreferences.notes ? (
+                  <span className="wizard-review__note">
+                    {intl.formatMessage(
+                      { id: 'intake.wizard.review.interpreter.notes' },
+                      { notes: interpreterPreferences.notes }
+                    )}
+                  </span>
+                ) : null}
+              </dd>
+            </div>
+          </dl>
+        </article>
+
+        <article className="wizard-review__section">
+          <header className="wizard-review__header">
+            <h3>{intl.formatMessage({ id: 'intake.wizard.review.details' })}</h3>
+            <button
+              type="button"
+              className="wizard-review__edit"
+              onClick={() => handleStepSelect('details')}
+            >
+              {intl.formatMessage({ id: 'intake.wizard.review.change' })}
+            </button>
+          </header>
+          <p className="wizard-review__narrative">{formData.narrative || emptyValue}</p>
+        </article>
+
+        {(wizardMeta.includeAttachments || sanitizedAttachments.length > 0) && (
+          <article className="wizard-review__section">
+            <header className="wizard-review__header">
+              <h3>{intl.formatMessage({ id: 'intake.wizard.review.attachments' })}</h3>
+              <button
+                type="button"
+                className="wizard-review__edit"
+                onClick={() => handleStepSelect(attachmentsStepTarget)}
+              >
+                {intl.formatMessage({ id: 'intake.wizard.review.change' })}
+              </button>
+            </header>
+            {sanitizedAttachments.length > 0 ? (
+              <ul className="wizard-review__attachments">
+                {sanitizedAttachments.map((attachment, index) => (
+                  <li key={`${attachment.url}-${index}`}>
+                    <span>{attachment.contentType}</span>
+                    <a href={attachment.url} target="_blank" rel="noopener noreferrer">
+                      {attachment.url}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>{intl.formatMessage({ id: 'intake.wizard.review.none' })}</p>
+            )}
+          </article>
+        )}
+      </section>
+    );
   };
 
   useEffect(() => {
@@ -809,28 +1205,76 @@ const IntakeForm = () => {
 
   return (
     <form onSubmit={handleSubmit} aria-describedby={submitError ? statusMessageId : undefined}>
+      <StepIndicator
+        steps={wizardSteps}
+        currentStepId={currentStep?.id ?? currentStepId}
+        onStepSelect={handleStepSelect}
+      />
+
+      <header className="wizard-header">
+        <h2>{intl.formatMessage({ id: currentStep?.titleId ?? 'intake.wizard.review.title' })}</h2>
+        {currentStep?.descriptionId ? (
+          <p>{intl.formatMessage({ id: currentStep.descriptionId })}</p>
+        ) : null}
+      </header>
+
       <ErrorSummary errors={showValidationSummary ? errorSummaryItems : []} autoFocus={shouldFocusErrorSummary} />
+
       {autosaveMessage ? (
         <div className="autosave-status" role="status" aria-live="polite">
           {autosaveMessage}
         </div>
       ) : null}
-      <SchemaForm
-        key={formResetKey}
-        ref={schemaFormRef}
-        schema={intakeSchema}
-        value={formData}
-        onChange={(next) => setFormData(next)}
-        onErrorsChange={setFormErrors}
-      />
 
-      {accessibilityConfig.enabled ? (
+      {currentStep?.schema ? (
+        <SchemaForm
+          key={`${formResetKey}-${currentStep.id}`}
+          ref={schemaFormRef}
+          schema={currentStep.schema}
+          value={formData}
+          onChange={(next) => setFormData(next)}
+          onErrorsChange={setFormErrors}
+        />
+      ) : (
+        renderReview()
+      )}
+
+      {currentStep?.id === 'patient' && accessibilityConfig.enabled ? (
         <InterpreterPreferences
           config={accessibilityConfig}
           value={interpreterPreferences}
           onChange={handleInterpreterPreferencesChange}
           allowPersistence={allowInterpreterPersistence}
         />
+      ) : null}
+
+      {currentStep?.id === 'details' ? (
+        <section
+          className="wizard-panel"
+          aria-labelledby={attachmentsChoiceId}
+          aria-describedby={attachmentsHelpId}
+        >
+          <h3 id={attachmentsChoiceId}>{intl.formatMessage({ id: 'intake.wizard.attachments.prompt' })}</h3>
+          <p id={attachmentsHelpId}>{intl.formatMessage({ id: 'intake.wizard.attachments.help' })}</p>
+          <div className="wizard-panel__choices">
+            <button
+              type="button"
+              className={classNames('wizard-choice', wizardMeta.includeAttachments ? 'wizard-choice--active' : '')}
+              aria-pressed={wizardMeta.includeAttachments}
+              onClick={() => handleAttachmentIntent(true)}
+            >
+              {intl.formatMessage({ id: 'intake.wizard.attachments.toggle.add' })}
+            </button>
+            <button
+              type="button"
+              className={classNames('wizard-choice', !wizardMeta.includeAttachments ? 'wizard-choice--active' : '')}
+              aria-pressed={!wizardMeta.includeAttachments}
+              onClick={() => handleAttachmentIntent(false)}
+            >
+              {intl.formatMessage({ id: 'intake.wizard.attachments.toggle.skip' })}
+            </button>
+          </div>
+        </section>
       ) : null}
 
       {submitError ? (
@@ -853,7 +1297,23 @@ const IntakeForm = () => {
         }}
       />
 
-      <SubmitButton disabled={isSubmitting} />
+      <div className="wizard-actions">
+        <Button type="button" variant="subtle" onClick={handlePreviousStep} disabled={!previousStepId}>
+          {intl.formatMessage({ id: 'intake.wizard.back' })}
+        </Button>
+        {currentStep?.id === 'attachments' && currentStep.optional ? (
+          <Button type="button" variant="subtle" onClick={handleSkipAttachments}>
+            {intl.formatMessage({ id: 'intake.wizard.skipAttachments' })}
+          </Button>
+        ) : null}
+        {currentStep?.id === 'review' ? (
+          <SubmitButton disabled={isSubmitting} />
+        ) : (
+          <Button type="button" onClick={handleNextStep} disabled={isSubmitting || !nextStepId}>
+            {intl.formatMessage({ id: 'intake.wizard.next' })}
+          </Button>
+        )}
+      </div>
     </form>
   );
 };

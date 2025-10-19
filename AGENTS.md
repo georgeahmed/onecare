@@ -61,6 +61,8 @@ Security & Privacy Checklist
 - Validate and sanitize all inputs, including filenames/URLs.
 - Respect retention and minimization policies in `config/`.
 - Apply the subject/action scopes in `docs/SECURITY_AUTHZ.md`; capture consent + audit evidence as defined.
+- Follow secure coding guides (`docs/security/SECURE_CODING_NODE.md`, `docs/security/SECURE_CODING_PY.md`) and Secure SDLC checklist (`docs/security/SECURE_SDLC.md`).
+- Ensure SAST/DAST findings are triaged and no secrets are introduced (see `docs/security/APPLICATION_SECURITY.md`, `docs/security/SECRETS_PREVENTION.md`).
 
 Data Handling & FHIR Guidance
 - Never publish PHI-rich resources on the broker; share IDs/refs, not full `Patient` resources.
@@ -124,7 +126,8 @@ Review Checklist (paste into PR)
 - Code: [ ] Typed (TS), hinted (Py); small functions; no `any`
 - Tests: [ ] Unit tests added/updated; no network
 - Docs: [ ] README updated; USAGE updated; ADR added/updated if design change
-- Security: [ ] No sensitive logs; auth/consent enforced; timeouts/retries
+- Security: [ ] Validations + SSRF guardrails; timeouts/retries; no PHI/secrets in logs
+- Secure Coding: [ ] Checklist in `SECURE_SDLC.md` satisfied; SAST/DAST findings triaged; secrets sourced from Vault
 - Build: [ ] TS project references valid; CI green
 - Performance: [ ] Timeouts set; no CPU-bound code in Node; backpressure considered
 - Observability: [ ] Correlation IDs propagated; key spans/logs present

@@ -40,9 +40,44 @@ const SAFE_ID_PARTS = [
   'service-request-id',
 ];
 
+const COMPONENT_FIELD_ALLOWLIST: Record<string, Set<string>> = {
+  triage: new Set([
+    'component',
+    'correlationid',
+    'topic',
+    'decision',
+    'score',
+    'priority',
+    'taskid',
+    'taskref',
+    'patientref',
+    'reason',
+    'reasons',
+    'status',
+    'code',
+    'outcome',
+    'attempt',
+    'idempotencykey',
+    'event',
+    'audit',
+  ]),
+};
+
+function isAllowedForComponent(component: string | undefined, key: string): boolean {
+  if (!component) return true;
+  const normalizedComponent = component.toLowerCase();
+  const allowlist = COMPONENT_FIELD_ALLOWLIST[normalizedComponent];
+  if (!allowlist) return true;
+  if (allowlist.has(key.toLowerCase())) return true;
+  if (SAFE_ID_KEYS.has(key.toLowerCase())) return true;
+  if (SAFE_ID_PARTS.some((part) => key.toLowerCase().includes(part))) return true;
+  return false;
+}
+
 function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (lower === 'cookie' || lower === 'set-cookie') return true;
+  if (lower.includes('transcript') || lower.includes('transcription')) return true;
   if (SAFE_ID_KEYS.has(lower)) return false;
   if (SAFE_ID_PARTS.some((part) => lower.includes(part))) return false;
   if (lower === 'id') return true;
@@ -130,7 +165,12 @@ export function log(level: Level, msg: string, fields?: Record<string, unknown>)
   const sanitizedMsg = redact(msg);
   const entry: Record<string, unknown> = { ts: now(), level, msg: sanitizedMsg };
   if (fields) {
+    const component = typeof fields.component === 'string' ? fields.component : undefined;
     for (const [k, v] of Object.entries(fields)) {
+      if (!isAllowedForComponent(component, k)) {
+        entry[k] = REDACTED_TEXT;
+        continue;
+      }
       if (shouldRedactKey(k)) {
         entry[k] = REDACTED_TEXT;
         continue;

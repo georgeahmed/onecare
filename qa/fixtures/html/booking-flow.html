@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Booking Flow</title>
+  </head>
+  <body>
+    <nav aria-label="Primary">
+      <ul>
+        <li><a href="#search">Find appointments</a></li>
+        <li><a href="#review">Review details</a></li>
+      </ul>
+    </nav>
+    <main>
+      <section id="search">
+        <h1>Appointment availability</h1>
+        <table>
+          <caption>Next available slots</caption>
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <th scope="col">Time</th>
+              <th scope="col">Location</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">15 Jan</th>
+              <td>09:00</td>
+              <td>Demo Clinic</td>
+              <td><button type="button">Select slot</button></td>
+            </tr>
+            <tr>
+              <th scope="row">15 Jan</th>
+              <td>09:30</td>
+              <td>Demo Clinic</td>
+              <td><button type="button">Select slot</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <section id="review" aria-live="polite">
+        <h2>Review and confirm</h2>
+        <p>No slot selected yet.</p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -11,6 +11,8 @@ from typing import Any, Mapping, MutableMapping, Optional
 import anyio
 from anyio import to_thread
 
+from common.otel import span
+
 from .decision import DEFAULT_RED_FLAG_SET, DecisionResult, decide
 
 LOGGER = logging.getLogger("safety_gate_service.analyzer")
@@ -60,7 +62,14 @@ async def analyze_submission(
 
     try:
         with anyio.fail_after(timeout_ms / 1000.0):
-            decision, artifacts = await _run_pipeline(narrative, classifier, ner, acuity_model, config)
+            decision, artifacts = await _run_pipeline(
+                narrative,
+                classifier,
+                ner,
+                acuity_model,
+                config,
+                correlation_id=correlation_id,
+            )
         LOGGER.info(
             "safety_gate.analysis.success correlation_id=%s outcome=%s reason=%s",
             correlation_id,
@@ -91,8 +100,12 @@ async def _run_pipeline(
     ner,
     acuity_model,
     config: Mapping[str, Any],
+    correlation_id: Optional[str] = None,
 ) -> tuple[DecisionResult, dict[str, Any]]:
-    nlp_analysis = await to_thread.run_sync(ner.analyze, narrative)
+    span_attrs = {"correlation_id": correlation_id}
+
+    with span("safety_gate.ner.analyze", span_attrs):
+        nlp_analysis = await to_thread.run_sync(ner.analyze, narrative)
     symptom_mentions = _resolve_symptom_mentions(nlp_analysis)
     lexical_hits = _derive_lexical_hits(narrative, config)
     nlp_payload = {
@@ -101,21 +114,28 @@ async def _run_pipeline(
         "severity": nlp_analysis.get("severity", []),
         "temporal": nlp_analysis.get("temporal", []),
     }
-    classification = await to_thread.run_sync(classifier.classify, narrative)
-    acuity_estimate = await to_thread.run_sync(
-        lambda: acuity_model.predict(
-            narrative=narrative,
+    classifier_attrs = dict(span_attrs)
+    model_version = getattr(classifier, "_model_version", None)
+    if model_version:
+        classifier_attrs["model_version"] = model_version
+    with span("safety_gate.classifier.classify", classifier_attrs):
+        classification = await to_thread.run_sync(classifier.classify, narrative)
+    with span("safety_gate.acuity.predict", span_attrs):
+        acuity_estimate = await to_thread.run_sync(
+            lambda: acuity_model.predict(
+                narrative=narrative,
+                nlp_results=nlp_payload,
+                classifier_result=classification,
+            )
+        )
+    patient_payload = {"acuity": acuity_estimate}
+    with span("safety_gate.decision.evaluate", span_attrs):
+        decision = decide(
             nlp_results=nlp_payload,
             classifier_result=classification,
+            patient=patient_payload,
+            config=config,
         )
-    )
-    patient_payload = {"acuity": acuity_estimate}
-    decision = decide(
-        nlp_results=nlp_payload,
-        classifier_result=classification,
-        patient=patient_payload,
-        config=config,
-    )
     artifacts = {
         "nlp": nlp_payload,
         "classification": classification,

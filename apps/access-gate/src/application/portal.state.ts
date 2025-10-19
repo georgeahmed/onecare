@@ -1,4 +1,4 @@
-import { createCounter, logger } from '@onecare/observability';
+import { createCounter, createHistogram, logger, setCorrelationId, startSpan } from '@onecare/observability';
 import type { DeferralRecord, DeferralStore } from '@onecare/ports';
 import type { ResolvedConfig } from '@onecare/config';
 
@@ -67,17 +67,30 @@ const TIME_PARTS_FORMATTER = new Intl.DateTimeFormat('en-GB', {
   day: '2-digit',
 });
 
+const portalDecisionCounter = createCounter('portal.state.changed');
+
 export function ensurePortalState(context: EnsurePortalContext): PortalDecision {
+  const span = startSpan('portal.ensure');
   const timeZone = normaliseTimeZone(context.timeZone);
   const parsedCoreHours = parseCoreHours(context.coreHours);
   if (!parsedCoreHours) {
-    return {
-      reason: context.coreHours ? 'config_invalid' : 'config_missing',
+    const decision: PortalDecision = {
+      reason: (context.coreHours ? 'config_invalid' : 'config_missing') as PortalDecisionReason,
       desiredState: cloneState(context.currentState ?? DEFAULT_PORTAL_STATE),
       intents: [],
       changed: false,
       localDateTime: getZonedDateTime(context.now, timeZone),
     };
+    portalDecisionCounter.add(1, {
+      reason: decision.reason,
+      changed: 'false',
+    });
+    if (span.isRecording()) {
+      span.setAttribute('portal.reason', decision.reason);
+      span.setAttribute('portal.changed', decision.changed);
+    }
+    span.end();
+    return decision;
   }
 
   const localDateTime = getZonedDateTime(context.now, timeZone);
@@ -86,13 +99,23 @@ export function ensurePortalState(context: EnsurePortalContext): PortalDecision 
   const currentState = context.currentState ?? DEFAULT_PORTAL_STATE;
   const intents = computeIntents(currentState, desiredState);
 
-  return {
-    reason: withinHours ? 'within_hours' : 'outside_hours',
+  const decision: PortalDecision = {
+    reason: (withinHours ? 'within_hours' : 'outside_hours') as PortalDecisionReason,
     desiredState,
     intents,
     changed: intents.length > 0,
     localDateTime,
   };
+  portalDecisionCounter.add(1, {
+    reason: decision.reason,
+    changed: String(decision.changed),
+  });
+  if (span.isRecording()) {
+    span.setAttribute('portal.reason', decision.reason);
+    span.setAttribute('portal.changed', decision.changed);
+  }
+  span.end();
+  return decision;
 }
 
 function buildDesiredState(withinHours: boolean, policy?: OohPolicy): PortalState {
@@ -211,6 +234,8 @@ function cloneState(state: PortalState): PortalState {
 }
 
 const deferralEnqueueCounter = createCounter('deferral.enqueue');
+const deferralFlushCounter = createCounter('deferral.flush.count');
+const deferralFlushDuration = createHistogram('deferral.flush.duration_ms');
 
 export interface OutOfHoursSubmission {
   practiceId: string;
@@ -258,6 +283,7 @@ export async function enqueueOutOfHoursSubmission(ctx: OutOfHoursSubmission): Pr
   await ctx.store.enqueue(record, ttlMs);
   deferralEnqueueCounter.add(1, { practiceId: ctx.practiceId });
   logger.info('portal.deferral.enqueued', {
+    component: 'access-gate',
     practiceId: ctx.practiceId,
     submissionId: ctx.submissionId,
     correlationId: ctx.correlationId,
@@ -298,4 +324,36 @@ export interface DeferralFlushContext {
   practiceId: string;
   correlationId: string;
   records: DeferralRecord[];
+}
+
+export async function flushDeferrals(ctx: DeferralFlushContext, notifier: (record: DeferralRecord) => Promise<void>): Promise<void> {
+  if (!ctx.records.length) return;
+  const span = startSpan('portal.deferral.flush');
+  span.setAttributes({
+    'portal.practice_id': ctx.practiceId,
+    'portal.deferral.count': ctx.records.length,
+  });
+  const startedAt = Date.now();
+  try {
+    for (const record of ctx.records) {
+      await notifier(record);
+    }
+    deferralFlushCounter.add(1, {
+      practiceId: ctx.practiceId,
+      count: ctx.records.length,
+    });
+    logger.info('portal.deferral.flushed', {
+      component: 'access-gate',
+      practiceId: ctx.practiceId,
+      correlationId: ctx.correlationId,
+      count: ctx.records.length,
+    });
+  } finally {
+    const duration = Date.now() - startedAt;
+    deferralFlushDuration.record(duration, {
+      practiceId: ctx.practiceId,
+      count: ctx.records.length,
+    });
+    span.end();
+  }
 }

@@ -1,3 +1,5 @@
+declare const process: { env?: Record<string, string | undefined> } | undefined;
+
 interface TelemetryDetail {
   event: string;
   correlationId?: string;
@@ -5,9 +7,11 @@ interface TelemetryDetail {
   [key: string]: unknown;
 }
 
-const SENSITIVE_KEYS = ['patient', 'token', 'auth', 'password', 'secret', 'idempotency'];
+const SESSION_CORRELATION_STORAGE_KEY = 'onecare.portal.sessionCorrelationId';
 
 const hasWindow = (): boolean => typeof window !== 'undefined';
+
+let cachedSessionCorrelationId: string | null = null;
 
 export const createCorrelationId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -15,6 +19,44 @@ export const createCorrelationId = (): string => {
   }
   const random = Math.random().toString(36).slice(2, 10);
   return `corr-${Date.now().toString(36)}-${random}`;
+};
+
+const readStoredSessionCorrelationId = (): string | null => {
+  if (!hasWindow() || !window.localStorage) {
+    return null;
+  }
+  try {
+    const stored = window.localStorage.getItem(SESSION_CORRELATION_STORAGE_KEY);
+    return typeof stored === 'string' && stored.trim().length > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistSessionCorrelationId = (value: string): void => {
+  if (!hasWindow() || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(SESSION_CORRELATION_STORAGE_KEY, value);
+  } catch {
+    // ignore persistence failures
+  }
+};
+
+export const getSessionCorrelationId = (): string => {
+  if (cachedSessionCorrelationId) {
+    return cachedSessionCorrelationId;
+  }
+  const stored = readStoredSessionCorrelationId();
+  if (stored) {
+    cachedSessionCorrelationId = stored;
+    return stored;
+  }
+  const generated = createCorrelationId();
+  cachedSessionCorrelationId = generated;
+  persistSessionCorrelationId(generated);
+  return generated;
 };
 
 export const startTimer = (): (() => number) => {
@@ -25,39 +67,43 @@ export const startTimer = (): (() => number) => {
   };
 };
 
-const sanitize = (value: unknown): unknown => {
-  if (!value || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(sanitize);
-  const result: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (SENSITIVE_KEYS.some((token) => key.toLowerCase().includes(token))) {
-      result[key] = '[redacted]';
-      continue;
-    }
-    if (typeof raw === 'string' && raw.length > 128) {
-      result[key] = `${raw.slice(0, 125)}…`;
-      continue;
-    }
-    result[key] = sanitize(raw);
-  }
-  return result;
-};
-
 export const recordRumEvent = (event: string, detail: Record<string, unknown> = {}): void => {
   if (!hasWindow()) return;
   const payload: TelemetryDetail = {
     event,
+    correlationId: getSessionCorrelationId(),
     ...detail,
   };
   window.dispatchEvent(
     new CustomEvent<TelemetryDetail>('onecare:rum', {
-      detail: sanitize(payload) as TelemetryDetail,
+      detail: redactForLog(payload) as TelemetryDetail,
     }),
   );
 };
 
 export const safeLog = (message: string, context: Record<string, unknown> = {}): void => {
-  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production') return;
+  const isProductionEnv =
+    (typeof process !== 'undefined' && process?.env?.NODE_ENV === 'production') ||
+    (typeof import.meta !== 'undefined' && (import.meta as { env?: { PROD?: boolean } }).env?.PROD === true);
+  if (isProductionEnv) return;
   // eslint-disable-next-line no-console
-  console.debug(`[onecare] ${message}`, sanitize(context));
+  console.debug(`[onecare] ${message}`, redactForLog(context));
 };
+
+export const reportPerformanceMetric = (
+  metric: string,
+  value: number,
+  rating: 'good' | 'needs-improvement' | 'poor',
+  extra: Record<string, unknown> = {}
+): void => {
+  recordRumEvent('performance.metric', {
+    metric,
+    value,
+    rating,
+    ...extra
+  });
+  if (rating !== 'good') {
+    safeLog('performance.metric', { metric, value, rating, ...extra });
+  }
+};
+import { redactForLog } from './security';

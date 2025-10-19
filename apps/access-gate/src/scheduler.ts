@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { ResolvedConfig } from '@onecare/config';
-import { createCounter, logger } from '@onecare/observability';
+import { createCounter, createGauge, createHistogram, logger, setCorrelationId, startSpan } from '@onecare/observability';
 import {
   ensurePortalState,
   type CoreHours,
@@ -27,6 +27,20 @@ export interface ScheduleOptions {
 export interface ScheduledTask {
   cancel(): void;
   __trigger?(): Promise<void>;
+}
+
+export interface PortalGuardStatus {
+  ready: boolean;
+  inflight: number;
+  draining: boolean;
+  consecutiveFailures: number;
+  lastSuccessAt?: number;
+  lastErrorAt?: number;
+}
+
+export interface PortalGuardHandle extends ScheduledTask {
+  status(): PortalGuardStatus;
+  drain(options?: { timeoutMs?: number }): Promise<'completed' | 'timeout'>;
 }
 
 export function every(intervalMs: number, task: Task): ScheduledTask {
@@ -65,6 +79,9 @@ const deferralExpiredCounter = createCounter('deferral.expired');
 const schedulerTickCounter = createCounter('scheduler.tick');
 const schedulerSkipCounter = createCounter('scheduler.skip.singleflight');
 const schedulerNoopCounter = createCounter('scheduler.idempotent.noop');
+const portalTickLatency = createHistogram('portal.tick.duration_ms');
+const deferralProcessDuration = createHistogram('portal.deferral.process.duration_ms');
+const schedulerInflightGauge = createGauge('inflight.ticks');
 
 const DEFAULT_SINGLEFLIGHT_TTL_MS = 15_000;
 
@@ -93,18 +110,50 @@ export interface PortalGuardDependencies {
   monotonicNow?: () => number;
 }
 
-export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDependencies): ScheduledTask {
+const MAX_CONSECUTIVE_FAILURES_FOR_READINESS = 3;
+const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+
+export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDependencies): PortalGuardHandle {
   const nowFn = deps.now ?? (() => new Date());
   const correlationFactory = deps.correlationIdFactory ?? defaultCorrelationId;
   const ttl = deps.singleflightTtlMs ?? DEFAULT_SINGLEFLIGHT_TTL_MS;
   const intervalMs = 60_000;
   const jitterMs = 5_000;
-  let inFlight = false;
   let lastRunCompletedAtMonotonic = 0;
   let timer: NodeJS.Timeout | undefined;
   const monotonicNow = deps.monotonicNow ?? (() => performance.now());
+  const state: PortalGuardStatus & { lastSuccessAt?: number; lastErrorAt?: number } = {
+    ready: false,
+    inflight: 0,
+    draining: false,
+    consecutiveFailures: 0,
+    lastSuccessAt: undefined,
+    lastErrorAt: undefined,
+  };
+  let draining = false;
+  let drainWaiter: (() => void) | undefined;
+  let drainTimeout: NodeJS.Timeout | undefined;
+
+  const updateGauge = () => {
+    schedulerInflightGauge.set(state.inflight, { practiceId });
+  };
+
+  const notifyDrainIfIdle = () => {
+    if (state.inflight === 0 && drainWaiter) {
+      const callback = drainWaiter;
+      drainWaiter = undefined;
+      if (drainTimeout) {
+        clearTimeout(drainTimeout);
+        drainTimeout = undefined;
+      }
+      callback();
+    }
+  };
 
   const schedule = (baseDelay: number, opts: { applyJitter?: boolean } = {}): void => {
+    if (draining) {
+      return;
+    }
     const applyJitter = opts.applyJitter ?? true;
     const jitter = applyJitter && jitterMs > 0
       ? Math.floor((Math.random() * 2 - 1) * jitterMs)
@@ -119,26 +168,40 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
   };
 
   const tick = async (): Promise<void> => {
-    if (inFlight) {
+    if (draining) {
+      return;
+    }
+
+    if (state.inflight > 0) {
       schedulerSkipCounter.add(1, { practiceId, reason: 'in_flight' });
       schedule(intervalMs);
       return;
     }
 
     const now = nowFn();
+    const correlationId = correlationFactory();
+    setCorrelationId(correlationId);
+    const span = startSpan('portal.tick');
+    if (span.isRecording()) {
+      span.setAttribute('portal.practice_id', practiceId);
+    }
+    const startedAt = monotonicNow();
     const nowMonotonic = monotonicNow();
     if (lastRunCompletedAtMonotonic > 0) {
       const elapsed = nowMonotonic - lastRunCompletedAtMonotonic;
       if (elapsed < ttl) {
         schedulerSkipCounter.add(1, { practiceId, reason: 'lease_active' });
+        span.end();
+        setCorrelationId(undefined);
         schedule(ttl - elapsed, { applyJitter: false });
         return;
       }
     }
 
-    inFlight = true;
+    state.inflight += 1;
+    state.draining = draining;
+    updateGauge();
     let ran = false;
-    const correlationId = correlationFactory();
     try {
       schedulerTickCounter.add(1, { practiceId });
       portalTickCounter.add(1, { practiceId });
@@ -155,8 +218,17 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
         portalStateUnchangedCounter.add(1, attributes);
       }
       ran = true;
+      state.ready = true;
+      state.consecutiveFailures = 0;
+      state.lastSuccessAt = monotonicNow();
     } catch (error) {
+      state.consecutiveFailures += 1;
+      state.lastErrorAt = monotonicNow();
+      if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES_FOR_READINESS) {
+        state.ready = false;
+      }
       logger.error('portal.guard.tick_failed', {
+        component: 'access-gate',
         practiceId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -164,21 +236,71 @@ export function startPortalUptimeGuard(practiceId: string, deps: PortalGuardDepe
       if (ran) {
         lastRunCompletedAtMonotonic = monotonicNow();
       }
-      inFlight = false;
-      schedule(intervalMs);
+      portalTickLatency.record(monotonicNow() - startedAt, { practiceId, ran: String(ran) });
+      span.end();
+      setCorrelationId(undefined);
+      state.inflight = Math.max(0, state.inflight - 1);
+      state.draining = draining;
+      updateGauge();
+      if (!draining) {
+        schedule(intervalMs);
+      }
+      notifyDrainIfIdle();
     }
   };
 
   schedule(0, { applyJitter: false });
+  updateGauge();
+
+  const drain = async (options?: { timeoutMs?: number }): Promise<'completed' | 'timeout'> => {
+    draining = true;
+    state.draining = true;
+    state.ready = false;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (state.inflight === 0) {
+      updateGauge();
+      return 'completed';
+    }
+    const timeoutMs = Math.max(0, options?.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS);
+    return await new Promise<'completed' | 'timeout'>((resolve) => {
+      let settled = false;
+      const finish = (result: 'completed' | 'timeout') => {
+        if (settled) return;
+        settled = true;
+        if (drainTimeout) {
+          clearTimeout(drainTimeout);
+          drainTimeout = undefined;
+        }
+        drainWaiter = undefined;
+        resolve(result);
+      };
+      drainWaiter = () => finish('completed');
+      drainTimeout = setTimeout(() => finish('timeout'), timeoutMs);
+    });
+  };
 
   return {
     cancel: () => {
+      draining = true;
+      state.draining = true;
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
       }
     },
     __trigger: tick,
+    status: () => ({
+      ready: state.ready,
+      inflight: state.inflight,
+      draining: state.draining,
+      consecutiveFailures: state.consecutiveFailures,
+      lastSuccessAt: state.lastSuccessAt,
+      lastErrorAt: state.lastErrorAt,
+    }),
+    drain,
   };
 }
 
@@ -274,7 +396,7 @@ export interface DeferralPublisher {
   publish(record: DeferralRecord, context: DeferralFlushContext): Promise<void>;
 }
 
-async function processDeferrals(
+export async function processDeferrals(
   practiceId: string,
   now: Date,
   correlationId: string,
@@ -283,6 +405,13 @@ async function processDeferrals(
 ): Promise<void> {
   const store = deps.deferralStore;
   if (!store) return;
+
+  const span = startSpan('portal.deferral.process');
+  if (span.isRecording()) {
+    span.setAttribute('portal.practice_id', practiceId);
+    span.setAttribute('portal.correlation_id', correlationId);
+  }
+  const startedAt = performance.now();
 
   const nowIso = now.toISOString();
   try {
@@ -298,7 +427,11 @@ async function processDeferrals(
     });
   }
 
-  if (decision.reason !== 'within_hours') return;
+  if (decision.reason !== 'within_hours') {
+    deferralProcessDuration.record(performance.now() - startedAt, { practiceId, reason: decision.reason });
+    span.end();
+    return;
+  }
 
   try {
     const flush = await store.flushReady(practiceId, nowIso);
@@ -306,6 +439,7 @@ async function processDeferrals(
 
     deferralFlushCounter.add(flush.records.length, { practiceId });
     logger.info('portal.deferral.flushed', {
+      component: 'access-gate',
       practiceId,
       correlationId,
       count: flush.records.length,
@@ -327,6 +461,9 @@ async function processDeferrals(
       correlationId,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    deferralProcessDuration.record(performance.now() - startedAt, { practiceId, reason: decision.reason });
+    span.end();
   }
 }
 

@@ -1,0 +1,16 @@
+[
+  {
+    "appointmentId": "appt-alpha-001",
+    "patientId": "patient-alpha",
+    "start": "2025-01-15T09:00:00.000Z",
+    "end": "2025-01-15T09:20:00.000Z",
+    "location": "Demo Clinic - Room 3"
+  },
+  {
+    "appointmentId": "appt-bravo-001",
+    "patientId": "patient-bravo",
+    "start": "2025-01-16T14:30:00.000Z",
+    "end": "2025-01-16T14:50:00.000Z",
+    "location": "Demo Clinic - Pediatrics"
+  }
+]

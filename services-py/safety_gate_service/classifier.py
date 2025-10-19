@@ -17,6 +17,26 @@ _MODEL_VERSION_ENV = "SAFETY_GATE_MODEL_VERSION"
 _MODEL_VARIANT_ENV = "SAFETY_GATE_MODEL_VARIANT"
 _MODE_ENV = "SAFETY_GATE_CLASSIFIER_MODE"
 _THRESHOLD_ENV = "SAFETY_GATE_EMERGENCY_CONFIDENCE"
+_DEVICE_ENV = "SAFETY_GATE_DEVICE"
+_QUANTIZATION_ENV = "SAFETY_GATE_ENABLE_QUANTIZATION"
+_MODEL_MAX_BYTES_ENV = "SAFETY_GATE_MAX_MODEL_BYTES"
+_REMOTE_MODELS_ENV = "SAFETY_GATE_ALLOW_REMOTE_MODELS"
+
+
+def _env_flag(env: Mapping[str, str], name: str) -> bool:
+    value = env.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_int(value: Optional[str], default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _sigmoid(x: float) -> float:
@@ -120,6 +140,13 @@ class EmergencyClassifier:
         self._override_threshold = self._read_env_threshold_override()
         self._model_lock = threading.Lock()
         self._model: Optional[Callable[[str], float]] = None
+        self._device = (self._env.get(_DEVICE_ENV) or "cpu").strip().lower() or "cpu"
+        if self._device not in {"cpu", "cuda"}:
+            LOGGER.debug("Classifier received unsupported device '%s'; falling back to cpu", self._device)
+            self._device = "cpu"
+        self._enable_quantization = _env_flag(self._env, _QUANTIZATION_ENV)
+        self._max_model_bytes = max(0, _parse_int(self._env.get(_MODEL_MAX_BYTES_ENV)))
+        self._allow_remote_models = _env_flag(self._env, _REMOTE_MODELS_ENV)
 
     def classify(self, text: str) -> dict[str, Any]:
         if not isinstance(text, str):
@@ -304,6 +331,10 @@ class EmergencyClassifier:
         return _StubEmergencyModel()
 
     def _load_transformer_model(self, model_name: str) -> Callable[[str], float]:
+        if not self._allow_remote_models:
+            candidate_path = Path(model_name)
+            if not candidate_path.exists():
+                raise RuntimeError("remote model downloads disabled; bundle must exist locally")
         try:
             from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
         except ImportError as err:
@@ -311,7 +342,31 @@ class EmergencyClassifier:
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        clf = pipeline("text-classification", model=model, tokenizer=tokenizer, return_all_scores=True)
+        self._enforce_memory_budget(model)
+        model = self._maybe_quantize_model(model)
+
+        device_index = -1
+        target_device = self._device
+        if target_device == "cuda":
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    device_index = 0
+                else:
+                    LOGGER.warning("CUDA requested for classifier but not available; using cpu")
+                    target_device = "cpu"
+            except ImportError:
+                LOGGER.warning("CUDA requested but torch is unavailable; falling back to cpu")
+                target_device = "cpu"
+
+        clf = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer,
+            return_all_scores=True,
+            device=device_index,
+        )
 
         def _predict(text: str) -> float:
             outputs = clf(text)
@@ -336,11 +391,57 @@ class EmergencyClassifier:
 
         return _predict
 
+    def _enforce_memory_budget(self, model: Any) -> None:
+        if self._max_model_bytes <= 0:
+            return
+        try:
+            import torch
+        except ImportError:
+            LOGGER.debug("Skipping classifier memory budget check; torch unavailable")
+            return
+        try:
+            total = 0
+            for param in model.parameters():
+                total += param.nelement() * param.element_size()
+            for buffer in model.buffers():
+                total += buffer.nelement() * buffer.element_size()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.debug("Unable to estimate classifier model size: %s", exc)
+            return
+        if total > self._max_model_bytes:
+            raise RuntimeError(
+                f"classifier model exceeds memory budget ({total} bytes > {self._max_model_bytes})"
+            )
+
+    def _maybe_quantize_model(self, model: Any) -> Any:
+        if not self._enable_quantization or self._device != "cpu":
+            return model
+        try:
+            import torch
+        except ImportError:
+            LOGGER.debug("Quantization skipped for classifier; torch unavailable")
+            return model
+
+        try:
+            quantized = torch.quantization.quantize_dynamic(  # type: ignore[attr-defined]
+                model,
+                {torch.nn.Linear},
+                dtype=torch.qint8,
+            )
+        except Exception as exc:  # pragma: no cover - quantization optional
+            LOGGER.debug("Classifier quantization failed: %s", exc)
+            return model
+        LOGGER.info("Applied dynamic quantization to classifier model")
+        return quantized
+
     def _score_text(self, text: str) -> float:
         model = self._get_model()
         return float(model(text))
 
     def _resolve_preferred_model_name(self) -> Optional[str]:
+        env_override = self._env.get("SAFETY_GATE_CLASSIFIER_MODEL")
+        if env_override:
+            return env_override
         model_threshold = self._model_thresholds.get(self._model_version)
         if model_threshold and model_threshold.huggingface_model:
             return str(model_threshold.huggingface_model)

@@ -1,5 +1,5 @@
 import { BaseState } from '@onecare/statekit';
-import { logger } from '@onecare/observability';
+import { createCounter, createHistogram, logger, startSpan } from '@onecare/observability';
 import { executeWithIdempotency } from '@onecare/ports';
 import { forecastNeedVsSupply } from './forecast';
 import { collectTelemetrySnapshot } from './telemetry';
@@ -147,7 +147,14 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
   }
 
   async handle(ctx: CapacityContext): Promise<string> {
+    const span = startSpan('capacity.shape');
+    span.setAttributes({
+      'capacity.practice_id': ctx.practiceId,
+      'capacity.run_id': ctx.id,
+    });
+    const startedAt = Date.now();
     if (!ctx.forecast) {
+      span.end();
       throw new Error('forecast_missing');
     }
     const settings = resolveCapacitySettings(ctx);
@@ -177,6 +184,7 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
       };
       ctx.decision = decision;
       logger.warn('capacity.micro_release.decision', {
+        component: 'capacity',
         practiceId: ctx.practiceId,
         runId: ctx.id,
         outcome: decision.outcome,
@@ -187,6 +195,11 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
         dryRun: Boolean(ctx.dryRun),
         correlationId: ctx.correlationId,
       });
+      span.setAttributes({
+        'capacity.decision.outcome': decision.outcome,
+        'capacity.decision.reason': decision.reason,
+      });
+      span.end();
       return 'Applied';
     }
 
@@ -256,6 +269,7 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
     ctx.decision = decision;
 
     logger.info('capacity.micro_release.decision', {
+      component: 'capacity',
       practiceId: ctx.practiceId,
       runId: ctx.id,
       outcome,
@@ -266,6 +280,22 @@ export class ShapedState extends BaseState<CapacityContext, CapacityEvent> {
       dryRun: Boolean(ctx.dryRun),
       correlationId: ctx.correlationId,
     });
+    releaseDecidedCounter.add(1, {
+      practiceId: ctx.practiceId,
+      outcome,
+      reason,
+    });
+    releaseDurationHistogram.record(Date.now() - startedAt, {
+      practiceId: ctx.practiceId,
+      outcome,
+      reason,
+    });
+    span.setAttributes({
+      'capacity.decision.outcome': outcome,
+      'capacity.decision.reason': reason,
+      'capacity.decision.release_slots': releaseSlots,
+    });
+    span.end();
 
     return 'Applied';
   }
@@ -292,6 +322,15 @@ export class AppliedState extends BaseState<CapacityContext, CapacityEvent> {
       correlationId: ctx.correlationId,
       dryRun: Boolean(ctx.dryRun),
     };
+
+    if (ctx.shutdownSignal?.aborted) {
+      logger.info('capacity.micro_release.shutdown_skip', {
+        practiceId: ctx.practiceId,
+        runId: ctx.id,
+        correlationId: ctx.correlationId,
+      });
+      return 'Applied';
+    }
 
     if (decision.outcome === 'release' && plan.slotsToRelease > 0) {
       if (ctx.dryRun) {
@@ -602,3 +641,5 @@ function normalizeErrorReason(error: unknown): string {
 function defaultClock(): Date {
   return new Date();
 }
+const releaseDecidedCounter = createCounter('capacity.release.decided');
+const releaseDurationHistogram = createHistogram('capacity.release.duration_ms');

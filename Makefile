@@ -1,4 +1,4 @@
-.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav
+.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav perf-smoke
  .PHONY: dev-run dev-stop
 
 install:
@@ -108,6 +108,22 @@ ci-local:
 .PHONY: perf-orchestrator
 perf-orchestrator:
 	bash scripts/perf/orchestrator.sh 10
+
+.PHONY: perf-smoke
+perf-smoke:
+	@echo "[perf] safety-check smoke (k6)"
+	k6 run qa/perf/k6_safety_check.js
+	@if [ -z "$${BOOKING_BASE_URL}" ]; then \
+	  echo "BOOKING_BASE_URL must be set (e.g., http://localhost:4000)"; \
+	  exit 1; \
+	fi
+	@echo "[perf] booking smoke (newman)"
+	newman run qa/perf/newman_collection.json \
+	  --reporters cli \
+	  --env-var baseUrl=$${BOOKING_BASE_URL} \
+	  --env-var correlationPrefix=$${BOOKING_CORRELATION_PREFIX:-perf-smoke} \
+	  --env-var serviceType=$${BOOKING_SERVICE_TYPE:-GP} \
+	  --env-var location=$${BOOKING_LOCATION:-org-demo}
 
 stack-up:
 	docker-compose up -d --build

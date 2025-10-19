@@ -3,44 +3,69 @@ ICS Hub (Cross-Org Broker)
 
 Purpose
 -------
-- Cross-organisation referral exchange, automation, and acknowledgements.
+- Cross-organisation referral exchange, automation, and acknowledgements. Accepts upstream referral envelopes, routes to destination providers, and fans out automation/audit outputs.
 
 State Flow
 ----------
 - Inbound → Validated → Routed → Acked (`apps/ics-hub/src/application/ics.state.ts`).
 
-Key adapters
-------------
-- `IcsHttpClient` – HTTPS client with endpoint allowlists, retries, circuit breaker, rate limiting, and
-  runtime credential rotation via `refreshRouteCredentials()`.
-- `publishWithGuard` (bus adapter) – guarded publishing with retries, bounded timeouts, and DLQ fallback
-  (`apps/ics-hub/src/adapters/bus.adapter.ts`).
-- `createSandboxHarness()` – deterministic fixture loader for offline playback (`apps/ics-hub/src/dev/sandbox.ts`).
+- Key adapters and helpers:
+  - `IcsHttpClient` — HTTPS client with endpoint allowlists, bounded retries, rate limiting, and runtime credential rotation via `refreshRouteCredentials()`.
+  - `publishWithGuard` — guarded message bus publisher (timeouts, retries, circuit breaker, DLQ fallback).
+  - `ProcessingLimiter` — concurrency + queue limiter with retry-after support.
+  - `AuditSpool` — buffered audit dispatcher with bounded retries before DLQ.
+  - `createSandboxHarness()` — deterministic fixture loader for offline playback (`src/dev/sandbox.ts`).
 
-Recent integration updates
---------------------------
-- Endpoints are validated with the same SSRF guardrails as CPCS: HTTPS only, no credentials, and
-  private/loopback hosts are rejected.
-- Accept headers default to `application/json` for both referral and acknowledgement flows, aligning with
-  upstream schema negotiation.
-- `refreshRouteCredentials()` lets operators rotate route-specific API keys, TLS bundles, and correlation
-  headers without rebuilding the client.
-- Performance harnesses (`test/ics.perf.test.ts`) enforce a ≤20 ms average call budget for referrals and
-  ≤15 ms for acknowledgements while ensuring latency histograms remain populated.
-- Sandbox fixtures (`src/dev/fixtures/*.json`) cover ICS referral requests/acks and CPCS referral outcomes,
-  enabling deterministic playback in tests and local tooling.
-- Backpressure + audit resiliency: a shared `ProcessingLimiter` caps concurrent message handling (emitting
-  `ics.backpressure.*` metrics) while the bounded `AuditSpool` retries audit events before publishing via
-  the guarded bus adapter.
+Routing Policies
+----------------
+- `InboundState` loads organisation policies from `@onecare/config` and normalises org IDs. Policies define destination endpoints, authentication headers, rate limits, and automation feature flags.
+- Token bucket rate limiting enforces per-organisation throughput; when depleted, responses return HTTP 429 with `Retry-After` while logging `ics.routing.rate_limited_total`.
+- SSRF guardrails reject non-HTTPS, loopback, or credential-bearing endpoints before invocation.
+- Route decisions capture both policy metadata and dynamic overrides (priority, tenancy). They are logged, metered (`ics.routing.decisions_total`), and piped into automation if enabled.
+- Fallback routing (`policy: 'fallback'`) keeps the service operating if the policy cache is stale; operators must refresh configuration to restore precise routing (see ADR `2025-10-20-ics-routing.md`).
 
-Runtime knobs
+Acknowledgement Semantics
+-------------------------
+- Referrals are acknowledged via `IcsClient.sendReferral` with per-route timeouts and retries. Successful acks emit `ics.referral.ack_published` logs and increment `ics.ack.published_total`.
+- Ack publishing wraps `publishReferralAck` with idempotency. Keys follow `ics:ack:{orgId}:{referralId}:{envelopeId}` and reuse `IdempotencyStore` to dedupe retries; duplicates add `ics.ack.duplicate_total`.
+- Failures fall back to guarded retries and DLQ emission with summarised payload (`Topics.broker.deadLetter`). `ics.ack.failed_total` increments alongside failure logs; audit entries capture rationale for replay.
+- Ack latency histograms (`ics.ack.latency_ms`) and structured traces identify slow downstreams. Correlation IDs propagate end-to-end so providers and auditors can reconcile acknowledgements.
+
+Automation Bridge
+-----------------
+- When policies enable automation, routed referrals hydrate automation events which are evaluated by `automation.rules.ts`. Rules filter on topics/status/tags and emit intents with explicit reasons.
+- Intents convert to `TaskCreated` envelopes via `buildAutomationTaskCreations`; debounce windows are honoured so rules can suppress flapping events.
+- Automation publishes leverage the same guarded bus adapter, optional audit fan-out (`automation.task.created`), and idempotent keys to avoid duplicate task creation. ADR `2025-10-20-automation-design.md` captures the trigger/debounce strategy.
+
+Backpressure, DLQ, and Reprocessing
+-----------------------------------
+- `ProcessingLimiter` caps concurrent referrals (`ICS_PROCESSING_MAX_CONCURRENCY`) and queues (size `ICS_PROCESSING_QUEUE_LIMIT`). High-watermarks emit `ics.backpressure.overload_total` and return `Retry-After` headers derived from configuration.
+- `AuditSpool` absorbs transient publish failures. It retries up to `ICS_AUDIT_SPOOL_ATTEMPTS` with delay `ICS_AUDIT_SPOOL_DELAY_MS` before DLQ routing, ensuring audit trails are durable without stalling referrals.
+- All DLQ events contain correlation IDs, attempt counts, and summarised payload pointers for safe replay. Operators can use `src/dev/replay.ts` to drain DLQs back through the state machine once issues are resolved.
+
+Configuration
 -------------
-- `ICS_PROCESSING_MAX_CONCURRENCY` (default `16`) — permits concurrently processed envelopes.
-- `ICS_PROCESSING_QUEUE_LIMIT` (default `64`) — maximum queued requests awaiting a processing slot.
-- `ICS_PROCESSING_HIGH_WATERMARK` (default `32`) — queue depth that triggers immediate 429 backpressure.
-- `ICS_PROCESSING_RETRY_AFTER` (default `2` seconds) — `Retry-After` header returned when overloaded.
-- `ICS_AUDIT_SPOOL_MAX` (default `512`) — bounded audit queue size before events are dropped (drops are metered).
-- `ICS_AUDIT_SPOOL_ATTEMPTS` (default `5`) and `ICS_AUDIT_SPOOL_DELAY_MS` (default `250`) — retry tuning for audit publishes.
+- Processing & Backpressure
+  - `ICS_PROCESSING_MAX_CONCURRENCY` (default `16`)
+  - `ICS_PROCESSING_QUEUE_LIMIT` (default `64`)
+  - `ICS_PROCESSING_HIGH_WATERMARK` (default `32`)
+  - `ICS_PROCESSING_RETRY_AFTER` (seconds, default `2`)
+- Audit Spool
+  - `ICS_AUDIT_SPOOL_MAX` (default `512`)
+  - `ICS_AUDIT_SPOOL_ATTEMPTS` (default `5`)
+  - `ICS_AUDIT_SPOOL_DELAY_MS` (default `250`)
+- Automation
+  - `ICS_AUTOMATION_TRIGGERS` or `ICS_AUTOMATION_TRIGGERS_FILE` — JSON ruleset (`automation.rules.ts` normalises the config).
+  - `ICS_AUTOMATION_MAX_TASKS`, debounce and audit overrides (see automation ADR for details).
+- Client Credentials
+  - Route-specific credentials and headers derive from organisation policy configuration (`@onecare/config`); rotation happens via `refreshRouteCredentials()`.
+
+Operational Notes
+-----------------
+- Metrics: `ics.routing.*`, `ics.ack.*`, `ics.backpressure.*`, and automation counters feed SLO dashboards.
+- Replay: `src/dev/sandbox.ts` + deterministic fixtures underpin contract tests and offline debugging (`npm run test -- apps/ics-hub/test`).
+- Performance harness `test/ics.perf.test.ts` enforces ≤ 20 ms referral calls and ≤ 15 ms ack latency under load.
+- Refer to ADRs `2025-10-20-ics-routing.md` and `2025-10-20-automation-design.md` for rationale, failure modes, and reprocessing playbooks.
 
 Local commands
 --------------

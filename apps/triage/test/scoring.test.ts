@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ResolvedConfig } from '@onecare/config';
-import { computeTriageScore } from '../src/application/scoring';
+import { computeRulesFallback, computeTriageScore, resolvePriorityThresholds } from '../src/application/scoring';
 import { determinePriority } from '../src/application/triage.state';
 import type { TriageFeatureVector } from '../src/application/scoring';
 
@@ -143,5 +143,102 @@ describe('determinePriority', () => {
 
     const priority = determinePriority(config, 0.39, { acuity: 0.92 });
     expect(priority).toBe('SOON');
+  });
+});
+
+describe('computeRulesFallback', () => {
+  const baseFallback = {
+    enabled: true,
+    timeBudgetMs: 60,
+    scoreDeltaTolerance: 0.2,
+    maxReasons: 5,
+  };
+
+  function buildFallbackConfig(): ResolvedConfig {
+    return {
+      practiceId: 'demo',
+      triage: {
+        score_weights: { acuity: 1 },
+        score_calibration: { slope: 1, intercept: 0, min: 0, max: 1 },
+        fallback: { enabled: true, time_budget_ms: baseFallback.timeBudgetMs, score_delta_tolerance: baseFallback.scoreDeltaTolerance, max_reasons: baseFallback.maxReasons },
+      },
+      triageFallback: { ...baseFallback },
+      priority_thresholds: { stat: 0.9, urgent: 0.7, soon: 0.4, routine: 0 },
+      red_flag_set: ['chest pain', 'shortness of breath'],
+    };
+  }
+
+  it('escalates to STAT when red flag keywords are detected', () => {
+    const config = buildFallbackConfig();
+    const result = computeRulesFallback({
+      config,
+      features: { acuity: 0.2 },
+      narrative: 'Patient reports chest pain overnight',
+      cause: 'ml_timeout',
+    });
+
+    expect(result.applied).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(0.9);
+    expect(result.reasons).toContain('rule:fallback:ml_timeout');
+    expect(result.reasons).toContain('rule:red_flag:chest_pain');
+    expect(result.redFlagHits).toEqual(['chest_pain']);
+  });
+
+  it('respects disabled fallback configuration', () => {
+    const config = buildFallbackConfig();
+    config.triageFallback = { ...config.triageFallback!, enabled: false };
+    (config.triage as Record<string, unknown>).fallback = { enabled: false };
+
+    const baseline = computeTriageScore(config, { acuity: 0.3 });
+    const result = computeRulesFallback({
+      config,
+      features: { acuity: 0.3 },
+      narrative: 'Chest discomfort reported',
+      cause: 'ml_timeout',
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.reasons).toHaveLength(0);
+    expect(result.score).toBeCloseTo(baseline, 6);
+  });
+
+  it('limits recorded reasons to the configured maximum', () => {
+    const config = buildFallbackConfig();
+    config.triageFallback = { ...config.triageFallback!, maxReasons: 1 };
+    (config.triage as Record<string, unknown>).fallback = {
+      enabled: true,
+      time_budget_ms: config.triageFallback.timeBudgetMs,
+      score_delta_tolerance: config.triageFallback.scoreDeltaTolerance,
+      max_reasons: 1,
+    };
+
+    const result = computeRulesFallback({
+      config,
+      features: { acuity: 0.2 },
+      narrative: 'Chest pain and shortness of breath reported together',
+      cause: 'ml_timeout',
+    });
+
+    expect(result.reasons).toHaveLength(1);
+    expect(result.reasons[0]).toBe('rule:fallback:ml_timeout');
+    expect(result.redFlagHits).toContain('chest_pain');
+  });
+
+  it('normalizes priority thresholds to a monotonic sequence', () => {
+    const config: ResolvedConfig = {
+      practiceId: 'demo',
+      priority_thresholds: {
+        stat: 1.4,
+        urgent: 1.1,
+        soon: 0.8,
+        routine: 0.6,
+      },
+    };
+
+    const thresholds = resolvePriorityThresholds(config);
+    expect(thresholds.STAT).toBeLessThanOrEqual(1);
+    expect(thresholds.URGENT).toBeLessThanOrEqual(thresholds.STAT);
+    expect(thresholds.SOON).toBeLessThanOrEqual(thresholds.URGENT);
+    expect(thresholds.ROUTINE).toBeLessThanOrEqual(thresholds.SOON);
   });
 });

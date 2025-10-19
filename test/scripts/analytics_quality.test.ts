@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -12,6 +12,15 @@ beforeEach(() => {
 afterEach(() => {
   resetMetrics();
 });
+
+function readLineageEvents(filePath: string) {
+  if (!existsSync(filePath)) return [];
+  return readFileSync(filePath, 'utf8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
 
 describe('analytics_quality instrumentation', () => {
   it('records metrics and emits outputs', async () => {
@@ -38,6 +47,12 @@ describe('analytics_quality instrumentation', () => {
     expect(getHistogramRecords('analytics.quality.duration_ms').length).toBe(1);
     expect(existsSync(outputPath)).toBe(true);
     expect(existsSync(quarantinePath)).toBe(true);
+
+    const lineagePath = path.join(tempDir, 'lineage', 'analytics_quality.jsonl');
+    const lineageEvents = readLineageEvents(lineagePath);
+    const completeEvent = lineageEvents.find((event) => event.eventType === 'COMPLETE');
+    expect(completeEvent?.status).toBe('COMPLETED');
+    expect(completeEvent?.result?.totalRecords).toBe(3);
 
     rmSync(tempDir, { recursive: true, force: true });
   });

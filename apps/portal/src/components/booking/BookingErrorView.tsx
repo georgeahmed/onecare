@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { BookingFilterState, BookingSlot } from '../../lib/booking';
 import type { BookingConfirmationError } from './ConfirmBooking';
+import { formatDate, formatTime, resolveLocalePreferences } from '../../lib/format';
 
 export interface BookingErrorViewProps {
   slot: BookingSlot;
@@ -10,6 +11,7 @@ export interface BookingErrorViewProps {
   retryUntil?: number;
   onRetry: () => void;
   onResetSelection: () => void;
+  timezone?: string;
 }
 
 const RETRY_CODES = new Set(['rate_limited', 'over_capacity']);
@@ -21,18 +23,30 @@ const computeRemainingSeconds = (retryUntil?: number): number | null => {
   return Math.ceil(deltaMs / 1_000);
 };
 
-const formatSuggestion = (intl: ReturnType<typeof useIntl>, date: Date) => {
-  return intl.formatMessage(
+const formatSuggestion = (intl: ReturnType<typeof useIntl>, date: Date, timeZone: string) =>
+  intl.formatMessage(
     { id: 'booking.error.conflict.suggestion' },
     {
-      date: intl.formatDate(date, { dateStyle: 'long' }),
-      time: intl.formatTime(date, { timeStyle: 'short' })
-    }
+      date: formatDate(date, { locale: intl.locale, timeZone, dateStyle: 'long' }),
+      time: formatTime(date, { locale: intl.locale, timeZone, timeStyle: 'short' }),
+    },
   );
-};
 
-const BookingErrorView = ({ slot, filters, error, retryUntil, onRetry, onResetSelection }: BookingErrorViewProps) => {
+const BookingErrorView = ({
+  slot,
+  filters,
+  error,
+  retryUntil,
+  onRetry,
+  onResetSelection,
+  timezone,
+}: BookingErrorViewProps) => {
   const intl = useIntl();
+  const locale = intl.locale;
+  const resolvedTimeZone = useMemo(
+    () => timezone ?? resolveLocalePreferences(locale).timeZone,
+    [timezone, locale],
+  );
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(() => computeRemainingSeconds(retryUntil));
 
@@ -69,10 +83,10 @@ const BookingErrorView = ({ slot, filters, error, retryUntil, onRetry, onResetSe
         if (minutes < 0 && candidate.getTime() < Date.now()) {
           return null;
         }
-        return formatSuggestion(intl, candidate);
+        return formatSuggestion(intl, candidate, resolvedTimeZone);
       })
       .filter((value): value is string => Boolean(value));
-  }, [intl, isConflict, slot.start]);
+  }, [intl, isConflict, slot.start, resolvedTimeZone]);
 
   const filterSummaries = useMemo(() => {
     const items: string[] = [];
@@ -93,7 +107,9 @@ const BookingErrorView = ({ slot, filters, error, retryUntil, onRetry, onResetSe
       items.push(
         intl.formatMessage(
           { id: 'booking.error.filters.from' },
-          { date: intl.formatDate(new Date(filters.from), { dateStyle: 'medium' }) }
+          {
+            date: formatDate(filters.from, { locale, timeZone: resolvedTimeZone, dateStyle: 'medium' }),
+          }
         )
       );
     }
@@ -102,13 +118,15 @@ const BookingErrorView = ({ slot, filters, error, retryUntil, onRetry, onResetSe
       items.push(
         intl.formatMessage(
           { id: 'booking.error.filters.to' },
-          { date: intl.formatDate(new Date(filters.to), { dateStyle: 'medium' }) }
+          {
+            date: formatDate(filters.to, { locale, timeZone: resolvedTimeZone, dateStyle: 'medium' }),
+          }
         )
       );
     }
 
     return items;
-  }, [filters, intl]);
+  }, [filters, intl, locale, resolvedTimeZone]);
 
   const primaryActionLabel = isConflict
     ? intl.formatMessage({ id: 'booking.error.action.search' })
@@ -195,4 +213,3 @@ const BookingErrorView = ({ slot, filters, error, retryUntil, onRetry, onResetSe
 };
 
 export default BookingErrorView;
-

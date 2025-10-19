@@ -1,0 +1,49 @@
+groups:
+  - name: features.ingestion
+    interval: 1m
+    rules:
+      - alert: FeatureFreshnessBreach
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(features_freshness_lag_ms_bucket[5m])) by (featureSet, le)
+          )
+          > on(featureSet) group_left
+          (
+            label_replace(vector(120), "featureSet", "triage-core", "__name__", ".*")
+            or label_replace(vector(180), "featureSet", "acuity-signal", "__name__", ".*")
+          )
+        for: 15m
+        labels:
+          severity: page
+          team: mlops
+        annotations:
+          summary: "Feature freshness breach (featureSet={{ $labels.featureSet }})"
+          description: "p95 freshness lag exceeded SLO for 15 minutes. Investigate ingestion backlog or upstream outages."
+          runbook: "https://onecare/internal/docs/FEATURE_FRESHNESS"
+
+      - alert: FeatureIngestFailures
+        expr: |
+          increase(features_ingest_error_total[10m]) > 10
+          or increase(features_ingest_dlq_total[10m]) > 5
+        for: 10m
+        labels:
+          severity: ticket
+          team: mlops
+        annotations:
+          summary: "Feature ingestion failure spike"
+          description: "High number of ingestion errors/DLQ publishes detected. Check DLQ queue and ingestion worker logs."
+          runbook: "https://onecare/internal/docs/MLOPS_RUNBOOKS"
+
+      - alert: FeatureSkewDetected
+        expr: |
+          max_over_time(features_skw_psi[1h]) > 0.3
+          or max_over_time(features_skw_js[1h]) > 0.2
+        for: 1h
+        labels:
+          severity: ticket
+          team: mlops
+        annotations:
+          summary: "Feature skew detected ({{ $labels.featureSet }})"
+          description: "Training vs serving distribution skew exceeded thresholds. Investigate pipelines and recent deployments."
+          runbook: "https://onecare/internal/docs/FEATURE_SKEW"

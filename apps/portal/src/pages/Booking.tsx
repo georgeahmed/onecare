@@ -4,15 +4,24 @@ import SearchSlots from '../components/booking/SearchSlots';
 import BookingCalendar from '../components/booking/Calendar';
 import ConfirmBooking from '../components/booking/ConfirmBooking';
 import BookingErrorView from '../components/booking/BookingErrorView';
+import ConfettiBurst from '../components/ui/ConfettiBurst';
 import { fetchBookingSlots, type ConfirmBookingResult } from '../lib/api';
 import type { BookingFilterState, BookingSlot } from '../lib/booking';
 import { createBookingIdempotencyKey, filtersEqual } from '../lib/booking';
 import type { BookingConfirmationError } from '../components/booking/ConfirmBooking';
 import { getEnhancedAccessConfig } from '../lib/enhancedAccess';
 import { getFairnessConfig } from '../lib/fairness';
+import { buildGoogleCalendarUrl, buildIcsDataUri } from '../lib/calendar';
 import { createCorrelationId, recordRumEvent, safeLog, startTimer } from '../lib/telemetry';
 import { BookingFlowProvider, useBookingFlow } from '../hooks/useBookingFlow';
 import { useLocale } from '../i18n';
+import {
+  formatAccessibleDateTime,
+  formatDate,
+  formatDateTime,
+  formatTimeRange,
+  formatTimeZoneName,
+} from '../lib/format';
 
 interface BookingErrorState {
   slot: BookingSlot;
@@ -194,23 +203,88 @@ const BookingScreen = () => {
   };
 
   if (confirmationResult) {
+    const calendarTitle = intl.formatMessage({ id: 'booking.confirm.success.calendarTitle' });
+    const calendarDescription = intl.formatMessage(
+      { id: 'booking.confirm.success.calendarDescription' },
+      {
+        appointmentId: confirmationResult.appointmentId,
+        correlationId: confirmationResult.correlationId ?? '',
+        hasCorrelation: confirmationResult.correlationId ? 'yes' : 'no'
+      }
+    );
+    const googleCalendarUrl = buildGoogleCalendarUrl(confirmationResult, {
+      title: calendarTitle,
+      description: calendarDescription
+    });
+    const icsUrl = buildIcsDataUri(confirmationResult, {
+      title: calendarTitle,
+      description: calendarDescription
+    });
+    const scheduleDate = formatDate(confirmationResult.start, {
+      locale: intl.locale,
+      timeZone: enhancedAccessConfig.timezone,
+      dateStyle: 'long'
+    });
+    const scheduleTime = formatTimeRange(confirmationResult.start, confirmationResult.end, {
+      locale: intl.locale,
+      timeZone: enhancedAccessConfig.timezone
+    });
+    const scheduleTimeZone = formatTimeZoneName(enhancedAccessConfig.timezone, { locale: intl.locale });
+    const accessibleSchedule = `${formatAccessibleDateTime(confirmationResult.start, {
+      locale: intl.locale,
+      timeZone: enhancedAccessConfig.timezone
+    })} – ${formatAccessibleDateTime(confirmationResult.end, {
+      locale: intl.locale,
+      timeZone: enhancedAccessConfig.timezone
+    })}`;
+
     return (
       <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction}>
-        <section role="status" aria-labelledby={successStatusId}>
+        <section role="status" aria-labelledby={successStatusId} className="booking-success">
+          <ConfettiBurst />
           <h1 id={successStatusId}>{intl.formatMessage({ id: 'booking.confirm.success.title' })}</h1>
           <p>
             {intl.formatMessage(
               { id: 'booking.confirm.success.body' },
-              { appointmentId: confirmationResult.appointmentId },
+              { appointmentId: confirmationResult.appointmentId }
             )}
           </p>
+          <p className="booking-success__schedule">
+            <span aria-hidden="true">
+              {intl.formatMessage(
+                { id: 'booking.confirm.success.schedule' },
+                { date: scheduleDate, time: scheduleTime, timeZone: scheduleTimeZone }
+              )}
+            </span>
+            <span className="visually-hidden">{accessibleSchedule}</span>
+          </p>
+          <p className="booking-success__hint">
+            {intl.formatMessage({ id: 'booking.confirm.success.calendarHint' })}
+          </p>
+          <div className="booking-success__actions">
+            <a
+              className="ui-button"
+              href={googleCalendarUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {intl.formatMessage({ id: 'booking.confirm.success.googleCalendar' })}
+            </a>
+            <a
+              className="ui-button ui-button--subtle"
+              href={icsUrl}
+              download={`onecare-${confirmationResult.appointmentId}.ics`}
+            >
+              {intl.formatMessage({ id: 'booking.confirm.success.downloadIcs' })}
+            </a>
+          </div>
           {confirmationResult.correlationId ? (
             <p>
               {intl.formatMessage({ id: 'booking.confirm.success.correlation' })}{' '}
               <code>{confirmationResult.correlationId}</code>
             </p>
           ) : null}
-          <button type="button" onClick={resetFlow}>
+          <button type="button" className="ui-button ui-button--subtle" onClick={resetFlow}>
             {intl.formatMessage({ id: 'booking.confirm.success.cta' })}
           </button>
         </section>
@@ -228,6 +302,7 @@ const BookingScreen = () => {
           retryUntil={confirmationError.retryUntil}
           onRetry={() => setConfirmationError(null)}
           onResetSelection={clearSelection}
+          timezone={enhancedAccessConfig.timezone}
         />
       </main>
     );
@@ -240,6 +315,7 @@ const BookingScreen = () => {
           slot={selectedSlot}
           patientId={patientId}
           idempotencyKey={idempotencyKey}
+          timezone={enhancedAccessConfig.timezone}
           onBack={clearSelection}
           onSuccess={handleConfirmationSuccess}
           onError={handleConfirmationError}
@@ -248,7 +324,14 @@ const BookingScreen = () => {
           <p className="booking-selection-timestamp">
             {intl.formatMessage(
               { id: 'booking.confirm.selectionTimestamp' },
-              { timestamp: intl.formatDate(new Date(selectionTimestamp), { dateStyle: 'medium', timeStyle: 'short' }) },
+              {
+                timestamp: formatDateTime(selectionTimestamp, {
+                  locale: intl.locale,
+                  timeZone: enhancedAccessConfig.timezone,
+                  dateStyle: 'medium',
+                  timeStyle: 'short'
+                })
+              },
             )}
           </p>
         ) : null}
@@ -276,6 +359,7 @@ const BookingScreen = () => {
         selectedSlotId={selectedSlot?.id ?? null}
         onSelect={handleSelectSlot}
         fairnessNote={fairnessNote}
+        timezone={enhancedAccessConfig.timezone}
       />
     </main>
   );

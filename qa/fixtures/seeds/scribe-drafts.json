@@ -1,0 +1,26 @@
+[
+  {
+    "callId": "call-alpha-001",
+    "summary": "Patient reports dry cough for three days with low-grade fever. No breathing difficulty. Callback requested same day.",
+    "highlights": [
+      {
+        "label": "symptoms",
+        "text": "Dry cough, low fever for three days"
+      },
+      {
+        "label": "plan",
+        "text": "Clinician callback scheduled"
+      }
+    ]
+  },
+  {
+    "callId": "call-bravo-001",
+    "summary": "Parent describes new rash on child, itching controlled with cream. No swelling or respiratory symptoms.",
+    "highlights": [
+      {
+        "label": "symptoms",
+        "text": "Localized rash, itching improving"
+      }
+    ]
+  }
+]

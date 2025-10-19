@@ -7,11 +7,13 @@ const path = require('node:path');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 const { logger, createCounter, createHistogram } = require('@onecare/observability');
+const { createLineageEmitter, resolveGitCommit } = require('./analytics/lineage.js');
 
 const DEFAULT_INPUT = process.env.ANALYTICS_SINK_PATH || 'var/analytics/metrics.jsonl';
 const DEFAULT_OUTPUT = process.env.ANALYTICS_ROLLUP_PATH || 'var/analytics/rollup.jsonl';
 const DEFAULT_WINDOW_NAMES = ['1m', '5m', '1h', '1d'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ROLLUP_SCHEMA_ID = 'analytics_rollup_v1';
 
 const rollupRunCounter = createCounter('analytics.rollup.run');
 const rollupMetricCounter = createCounter('analytics.rollup.metrics_processed');
@@ -489,56 +491,124 @@ async function run(argv = process.argv.slice(2)) {
   const windows = resolveWindows(windowsRaw);
   const mode = inputDir || backfill ? 'backfill' : 'incremental';
   const outputPath = path.resolve(output || DEFAULT_OUTPUT);
+  const resolvedInputDir = typeof inputDir === 'string' ? path.resolve(inputDir) : null;
+  const resolvedInputPath = path.resolve(input || DEFAULT_INPUT);
+  const inputDescriptor = resolvedInputDir ?? resolvedInputPath;
   const defaultDate = normalizeDate(date) || new Date().toISOString().slice(0, 10);
-  const runAttributes = { runId, mode };
+  const gitCommit = resolveGitCommit();
+  const lineage = createLineageEmitter({
+    jobName: 'analytics.metrics_rollup',
+    runId,
+    inputs: [
+      {
+        name: resolvedInputDir ? 'analytics.metrics.directory' : 'analytics.metrics.jsonl',
+        uri: inputDescriptor,
+        facets: {
+          mode,
+        },
+      },
+    ],
+    outputs: [
+      {
+        name: 'analytics.rollups.jsonl',
+        uri: outputPath,
+      },
+    ],
+    dataset: {
+      name: 'analytics.rollups',
+      version: 'v1',
+      schema: {
+        id: ROLLUP_SCHEMA_ID,
+        format: 'jsonl',
+      },
+    },
+    lineagePath: path.join(path.dirname(outputPath), 'lineage', 'metrics_rollup.jsonl'),
+    gitCommit,
+  });
+
+  const runAttributes = { runId, mode, gitCommit };
+  const windowNames = windows.map((spec) => spec.name);
 
   rollupRunCounter.add(1, runAttributes);
-  logger.info('metrics-rollup run started', {
-    ...runAttributes,
-    windows: windows.map((spec) => spec.name),
-    outputPath,
-  });
 
-  let metrics = [];
-  if (inputDir) {
-    metrics = await readMetricsFromDir(inputDir, runAttributes);
-  } else {
-    const inputPath = path.resolve(input || DEFAULT_INPUT);
-    metrics = await readMetrics(inputPath, runAttributes);
+  try {
+    await lineage.emitStart({
+      mode,
+      windows: windowNames,
+      defaultDate,
+    });
+    logger.info('metrics-rollup run started', {
+      ...runAttributes,
+      windows: windowNames,
+      outputPath,
+      input: inputDescriptor,
+      lineagePath: lineage.lineagePath,
+    });
+
+    let metrics = [];
+    if (resolvedInputDir) {
+      metrics = await readMetricsFromDir(resolvedInputDir, runAttributes);
+    } else {
+      metrics = await readMetrics(resolvedInputPath, runAttributes);
+    }
+    rollupMetricCounter.add(metrics.length, runAttributes);
+
+    if (!metrics.length) {
+      logger.info('metrics-rollup no metrics found', runAttributes);
+      rollupDurationHistogram.record(Date.now() - startedAt, runAttributes);
+      await lineage.emitComplete('SKIPPED', {
+        reason: 'no_metrics',
+        mode,
+        windows: windowNames,
+      });
+      return;
+    }
+
+    const rollups = aggregateMetrics(metrics, {
+      windows,
+      defaultDate,
+      generatedAt: new Date().toISOString(),
+    });
+    rollupWindowCounter.add(rollups.length, runAttributes);
+
+    if (!rollups.length) {
+      logger.warn('metrics-rollup generated an empty rollup set', runAttributes);
+      rollupErrorCounter.add(1, { ...runAttributes, reason: 'no_rollups_generated' });
+      rollupDurationHistogram.record(Date.now() - startedAt, runAttributes);
+      await lineage.emitFailure(new Error('no_rollups_generated'), {
+        mode,
+        windows: windowNames,
+        reason: 'no_rollups_generated',
+      });
+      return;
+    }
+
+    await writeRollups(outputPath, rollups, runAttributes);
+    const durationMs = Date.now() - startedAt;
+    rollupDurationHistogram.record(durationMs, runAttributes);
+    await lineage.emitComplete('COMPLETED', {
+      mode,
+      windows: windowNames,
+      metricsProcessed: metrics.length,
+      rollupsWritten: rollups.length,
+      durationMs,
+    });
+    logger.info('metrics-rollup completed', {
+      ...runAttributes,
+      processed: metrics.length,
+      rollups: rollups.length,
+      outputPath,
+      windows: windowNames,
+      durationMs,
+    });
+  } catch (err) {
+    await lineage.emitFailure(err, {
+      mode,
+      windows: windowNames,
+      reason: 'unhandled_error',
+    });
+    throw err;
   }
-  rollupMetricCounter.add(metrics.length, runAttributes);
-
-  if (!metrics.length) {
-    logger.info('metrics-rollup no metrics found', runAttributes);
-    rollupDurationHistogram.record(Date.now() - startedAt, runAttributes);
-    return;
-  }
-
-  const rollups = aggregateMetrics(metrics, {
-    windows,
-    defaultDate,
-    generatedAt: new Date().toISOString(),
-  });
-  rollupWindowCounter.add(rollups.length, runAttributes);
-
-  if (!rollups.length) {
-    logger.warn('metrics-rollup generated an empty rollup set', runAttributes);
-    rollupErrorCounter.add(1, { ...runAttributes, reason: 'no_rollups_generated' });
-    rollupDurationHistogram.record(Date.now() - startedAt, runAttributes);
-    return;
-  }
-
-  await writeRollups(outputPath, rollups, runAttributes);
-  const durationMs = Date.now() - startedAt;
-  rollupDurationHistogram.record(durationMs, runAttributes);
-  logger.info('metrics-rollup completed', {
-    ...runAttributes,
-    processed: metrics.length,
-    rollups: rollups.length,
-    outputPath,
-    windows: windows.map((spec) => spec.name),
-    durationMs,
-  });
 }
 
 if (require.main === module) {

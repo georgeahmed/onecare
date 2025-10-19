@@ -22,6 +22,8 @@ Localization Authoring Guide
   - Write plainly at an 8th-grade reading level; avoid idioms and clinical jargon.
   - Prefer active voice and short sentences (20 words or fewer).
   - Provide actionable guidance first, then optional background context.
+  - Acknowledge constraints empathetically (“Hang tight while we retry.”) without blaming the user.
+  - Replace medical shorthand with inclusive alternatives (“person seeking care”, “support team”).
 - Key Naming Conventions
   - Keys follow `domain.section.message` (e.g. `intake.interpreter.notes.label`).
   - Shared UI affordances use `ui.*`; error envelope strings map to codes in `docs/ERRORS.md`.
@@ -42,12 +44,27 @@ Localization Authoring Guide
   - Exercise the QA matrix in `docs/USAGE.md` (screen reader + browser/device combos) for new flows.
   - Capture updates in the localization glossary and notify translators via shared channel.
 
+Booking Microcopy Patterns
+- Use action-led headings (“Confirm appointment”) and surface the next step before context.
+- Summaries should restate the slot, modality, and time zone; confirmations must include the booking reference and correlation ID.
+- Conflict or retry notices always present an option (“Try again now”) before explanation.
+- Offline copy explains what the system is doing (“We queued your confirmation…”) and reassures the user that data is safe.
+- Avoid panic words (“critical failure”, “fatal error”)—keep tone calm and solution-oriented.
+
+UI Component Guidelines
+- Buttons: `ui-button` for primary actions, `ui-button--subtle` for safe exits. Keep focus order logical and never disable without showing progress.
+- Inputs: pair with explicit `<label>` text, keep helper text concise, and render errors directly below the control.
+- Alerts/Banners: use `ui-alert` for persistent notices; reserve toast-style banners for passive confirmations.
+- Layout: constrain key forms to `max-width: 720px`, leverage the spacing tokens (`--space-*`) instead of pixel constants.
+- Dialogs: mirror `booking` confirm dialog semantics (`aria-labelledby`, `aria-describedby`, focus trap). Close on `Escape` only when safe.
+
 Media & Alt Text Guidelines
 - Provide descriptive, task-oriented alt text for informative imagery (who/what/action). Keep it under 125 characters when possible.
 - Mark purely decorative icons with `aria-hidden="true"` and empty `alt=""`; avoid redundant phrasing already expressed in adjacent text.
 - Supply captions or transcripts for audio/video content before publication; reference the transcript location in release notes.
 - Record ownership for captions/alt text in the Content Reviewer checklist and link updates in `apps/portal/README.md`.
 - Coordinate with Design when updating illustrations to ensure colour usage remains WCAG AA compliant (contrast verified via `npm run a11y:portal`).
+- Follow the detailed checklist in `docs/UX/ALT_TEXT_GUIDE.md`; reference it in PR descriptions whenever new media ships.
 
 Service Platform Checklist Template
 - Broker & Topics
@@ -71,6 +88,12 @@ Service Platform Checklist Template
   - Redaction helpers; PHI minimization in payloads; retention windows documented and enforced.
 - Performance & Fault Injection
   - Perf scripts (autocannon) for p50/p95 baselines; fault-injection tests for timeouts/retries/CB/DLQ; budgets documented.
+
+Web Security Baseline
+- CSP is shipped via `<meta http-equiv="Content-Security-Policy">` (see `apps/portal/index.html`). Do not introduce inline scripts/styles; if a framework requires it, add a nonce and document the review.
+- Sanitize all user-provided text with `lib/security.ts` before storing or rendering; `ensureHttpsUrl` validates attachment links and `redactForLog` removes secrets from telemetry/logs.
+- The portal service worker caches the shell and queues background submissions. When touching offline code, ensure headers and payloads exclude PHI and reuse the existing retry/backoff logic.
+- Console logging is disabled in production builds. Never log PII/PHI in development—lean on correlation IDs for debugging.
 
 Usage
 - Copy this checklist into each service’s engineer file under “Platform Checklist (pre-flight)” and tailor specifics (endpoints, creds, topics).

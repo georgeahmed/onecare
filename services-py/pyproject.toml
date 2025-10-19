@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "ONECARE ML-oriented microservices (safety gate, scribe)"
 requires-python = ">=3.10"
 dependencies = [
-  "fastapi",
-  "uvicorn",
-  "pydantic>=2.0"
+  "fastapi==0.109.2",
+  "uvicorn==0.37.0",
+  "pydantic==1.10.24",
+  "prometheus-client==0.20.0",
+  "langdetect==1.0.9"
 ]
 
 [tool.uvicorn]

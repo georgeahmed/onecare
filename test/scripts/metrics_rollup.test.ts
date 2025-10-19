@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -12,6 +12,15 @@ beforeEach(() => {
 afterEach(() => {
   resetMetrics();
 });
+
+function readLineageEvents(filePath: string) {
+  if (!existsSync(filePath)) return [];
+  return readFileSync(filePath, 'utf8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
 
 describe('metrics_rollup aggregateMetrics', () => {
   it('produces sliding-window rollups with label hashes', () => {
@@ -145,8 +154,13 @@ describe('metrics_rollup run backfill', () => {
       .map((line) => JSON.parse(line));
 
     expect(lines.length).toBeGreaterThan(0);
-    expect(lines.some((entry) => entry.windowSize === '1d')).toBe(true);
-    expect(lines.some((entry) => entry.windowSize === '1m')).toBe(true);
+   expect(lines.some((entry) => entry.windowSize === '1d')).toBe(true);
+   expect(lines.some((entry) => entry.windowSize === '1m')).toBe(true);
+
+    const lineagePath = path.join(path.dirname(outputPath), 'lineage', 'metrics_rollup.jsonl');
+    const lineageEvents = readLineageEvents(lineagePath);
+    const startEvent = lineageEvents.find((event) => event.eventType === 'START');
+    expect(startEvent?.attributes?.mode).toBe('backfill');
 
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -181,6 +195,11 @@ describe('metrics_rollup instrumentation', () => {
     expect(getCounterTotal('analytics.rollup.metrics_processed')).toBe(2);
     expect(getCounterTotal('analytics.rollup.windows_emitted')).toBeGreaterThan(0);
     expect(getHistogramRecords('analytics.rollup.duration_ms').length).toBe(1);
+
+    const lineagePath = path.join(path.dirname(outputPath), 'lineage', 'metrics_rollup.jsonl');
+    const lineageEvents = readLineageEvents(lineagePath);
+    const completeEvent = lineageEvents.find((event) => event.eventType === 'COMPLETE');
+    expect(completeEvent?.status).toBe('COMPLETED');
 
     rmSync(tempDir, { recursive: true, force: true });
   });

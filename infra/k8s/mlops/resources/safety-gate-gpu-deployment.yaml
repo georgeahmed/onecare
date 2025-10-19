@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-gate-gpu
+  labels:
+    app: safety-gate
+    workload.onecare.io/profile: gpu-light
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safety-gate
+      version: vnext
+  template:
+    metadata:
+      labels:
+        app: safety-gate
+        version: vnext
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        accelerator: nvidia-t4
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: safety-gate
+          image: ghcr.io/onecare/safety-gate:1.12.0-gpu
+          ports:
+            - containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "6Gi"
+              nvidia.com/gpu: "1"
+          env:
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: TORCH_CUDNN_V8_API_ENABLED
+              value: "1"
+          volumeMounts:
+            - name: tmpfs
+              mountPath: /tmp
+              readOnly: false
+      volumes:
+        - name: tmpfs
+          emptyDir:
+            medium: Memory

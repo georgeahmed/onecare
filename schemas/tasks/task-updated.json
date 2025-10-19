@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://onecare/schemas/tasks/task-updated/2024-12-01",
+  "title": "TaskUpdated",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "priority": {
+      "type": "string",
+      "enum": ["STAT", "URGENT", "SOON", "ROUTINE"]
+    },
+    "previousPriority": {
+      "type": "string",
+      "enum": ["STAT", "URGENT", "SOON", "ROUTINE"]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "breached": { "type": "boolean" }
+  },
+  "required": ["taskId", "patientId", "priority", "reason"],
+  "additionalProperties": false
+}

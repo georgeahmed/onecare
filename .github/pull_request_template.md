@@ -18,8 +18,11 @@ Briefly describe the change and its intent.
   - [ ] docs/USAGE.md updated if commands/scripts changed
   - [ ] ADR added/updated if design decision changed
 - Security:
-  - [ ] No PHI/secrets in logs; timeouts + bounded retries on outbound calls
-  - [ ] AuthZ/consent enforced (where applicable)
+  - [ ] Input validation & SSRF guardrails applied; timeouts + bounded retries on outbound calls
+  - [ ] AuthZ/consent enforced; audit events added when required
+- Secure Coding:
+  - [ ] Checklist in `docs/security/SECURE_SDLC.md` complete (secure coding guide followed, tests cover security cases)
+  - [ ] SAST/DAST findings triaged or suppressed with justification; no new secrets introduced
 - Build:
   - [ ] TS project references valid; CI green
 
