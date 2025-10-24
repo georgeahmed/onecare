@@ -1,0 +1,33 @@
+groups:
+  - name: orchestrator-slo
+    rules:
+      - alert: OrchestratorLatencyBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[10m])) by (le)
+          ) > 1500
+        for: 15m
+        labels:
+          severity: warning
+          slo: orchestrator-latency
+          team: devops-sre
+          service: orchestrator
+        annotations:
+          summary: "Orchestrator p95 latency >1.5s"
+          description: "Orchestrator /safety-check latency breached 1.5s for 15 minutes."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
+      - alert: OrchestratorAvailabilityBudget
+        expr: |
+          sum(rate(http_server_errors_total{service="orchestrator"}[5m])) /
+          clamp_min(sum(rate(http_server_requests_total{service="orchestrator"}[5m])), 1) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+          slo: orchestrator-availability
+          team: devops-sre
+          service: orchestrator
+        annotations:
+          summary: "Orchestrator failure rate >1%"
+          description: "Error rate exceeded 1% for 10 minutes."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency

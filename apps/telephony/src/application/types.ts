@@ -6,6 +6,7 @@ import type {
   AsrClient,
   CallTranscribedBuilder,
   TranscriptionResponse,
+  DiarizationSegment,
 } from '../adapters/asr.client';
 import type {
   IntentClassificationInput,
@@ -28,6 +29,7 @@ export interface TelephonyContext extends MachineContext {
   callTranscribed?: CallTranscribed;
   callTranscribedEnvelope?: TypedEnvelope<CallTranscribed>;
   callTranscribedPublishedAt?: number;
+  diarizationSummary?: DiarizationSegment[];
   intentClassificationInput?: IntentClassificationInput;
   intentClassifier?: IntentClassifier;
   intentClassificationResult?: IntentClassificationResult;
@@ -45,6 +47,7 @@ export interface TelephonyContext extends MachineContext {
   triageInputEnvelope?: TypedEnvelope<TriageInput>;
   triageInputPublishedAt?: number;
   callbackWindowOptions?: CallbackWindowOptions;
+  callbackWindowChoices?: CallbackWindowOptions[];
   emergencyTransferEnabled?: boolean;
   emergencyTransferTriggered?: boolean;
   emergencyTransferAt?: number;
@@ -59,6 +62,10 @@ export interface TelephonyContext extends MachineContext {
   callTranscribedIdempotencyKey?: string;
   intentClassifiedIdempotencyKey?: string;
   triagePublishIdempotencyKey?: string;
+  pipelineIdempotencyKey?: string;
+  pipelineIdempotencyReserved?: boolean;
+  pipelineDuplicate?: boolean;
+  pipelineStartedAt?: number;
 }
 
 export interface TelephonyEvent extends MachineEvent {

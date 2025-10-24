@@ -19,6 +19,7 @@ export interface IntentClassificationInput {
   lang?: string | null;
   patientId?: string | null;
   correlationId?: string;
+  practiceId?: string;
 }
 
 export interface IntentClassificationResult {

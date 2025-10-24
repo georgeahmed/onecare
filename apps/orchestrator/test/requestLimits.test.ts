@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { createHmac } from 'node:crypto';
 import type { PortalSubmission } from '@onecare/events';
@@ -9,6 +10,7 @@ import {
   getMessageBusForTest,
   setIdempotencyStoreForTest,
   resetIdempotencyStoreForTest,
+  resetShutdownStateForTest,
 } from '../src/index';
 import { resetSecurityServices } from '../src/adapters/security';
 import { setConsentFixtureEnv } from './consentFixture';
@@ -57,13 +59,142 @@ async function post(endpoint: string, payload: PortalSubmission, requestId: stri
   });
 }
 
+async function postWithContentType(
+  endpoint: string,
+  payload: PortalSubmission,
+  requestId: string,
+  contentType: string,
+): Promise<Response> {
+  const actorId = payload.patient.id;
+  const idemKey = deriveIdempotencyKey(payload, actorId);
+  const fingerprint = `${requestId}:${idemKey}`;
+  const signature = createHmac('sha256', SHARED_SECRET).update(fingerprint).digest('base64url');
+  return fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${signature}`,
+      'content-type': contentType,
+      'x-actor-type': 'patient',
+      'x-actor-id': actorId,
+      'x-request-id': requestId,
+      'x-auth-scope': 'submit',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+function decodeChunkedBody(raw: string): string {
+  let remainder = raw;
+  let result = '';
+
+  while (remainder.length > 0) {
+    const chunkEnd = remainder.indexOf('\r\n');
+    if (chunkEnd === -1) break;
+    const lengthHex = remainder.slice(0, chunkEnd);
+    const length = parseInt(lengthHex, 16);
+    if (!Number.isFinite(length)) break;
+    if (length === 0) {
+      return result;
+    }
+    const chunkStart = chunkEnd + 2;
+    const chunkContent = remainder.slice(chunkStart, chunkStart + length);
+    result += chunkContent;
+    remainder = remainder.slice(chunkStart + length + 2);
+  }
+  return result;
+}
+
+async function postRawWithHeaderOverride(
+  payload: PortalSubmission,
+  requestId: string,
+  headerName: string,
+  headerValue: string,
+): Promise<{ status: number; headers: Map<string, string>; bodyText: string }> {
+  const actorId = payload.patient.id;
+  const idemKey = deriveIdempotencyKey(payload, actorId);
+  const fingerprint = `${requestId}:${idemKey}`;
+  const signature = createHmac('sha256', SHARED_SECRET).update(fingerprint).digest('base64url');
+  const body = JSON.stringify(payload);
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('server not listening');
+  const port = (address as AddressInfo).port;
+
+  const headerLines = [
+    `Host: 127.0.0.1:${port}`,
+    'Connection: close',
+    'content-type: application/json',
+    'x-actor-type: patient',
+    `x-actor-id: ${actorId}`,
+    `x-request-id: ${requestId}`,
+    'x-auth-scope: submit',
+    `authorization: Bearer ${signature}`,
+    `${headerName}: ${headerValue}`,
+    `Content-Length: ${Buffer.byteLength(body, 'utf8')}`,
+  ];
+
+  const request = `POST /safety-check HTTP/1.1\r\n${headerLines.join('\r\n')}\r\n\r\n${body}`;
+
+  return new Promise((resolve, reject) => {
+    const socket = connect({ port, host: '127.0.0.1' });
+    let response = '';
+
+    socket.setTimeout(5_000);
+
+    socket.on('connect', () => {
+      socket.write(request);
+    });
+
+    socket.on('data', (chunk) => {
+      response += chunk.toString('utf8');
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy(new Error('request timeout'));
+    });
+
+    socket.on('error', (err) => {
+      socket.destroy();
+      reject(err);
+    });
+
+    socket.on('end', () => {
+      try {
+        const separator = response.indexOf('\r\n\r\n');
+        if (separator === -1) {
+          reject(new Error('invalid HTTP response'));
+          return;
+        }
+        const headerSection = response.slice(0, separator);
+        const bodySection = response.slice(separator + 4);
+        const [statusLine, ...rawHeaderLines] = headerSection.split('\r\n');
+        const status = Number(statusLine.split(' ')[1]);
+        const headers = new Map<string, string>();
+        for (const line of rawHeaderLines) {
+          const idx = line.indexOf(':');
+          if (idx === -1) continue;
+          const name = line.slice(0, idx).toLowerCase();
+          const value = line.slice(idx + 1).trim();
+          headers.set(name, value);
+        }
+        let bodyText = bodySection;
+        if ((headers.get('transfer-encoding') ?? '').toLowerCase() === 'chunked') {
+          bodyText = decodeChunkedBody(bodySection);
+        }
+        resolve({ status, headers, bodyText });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 describe('request limits', () => {
   beforeAll(async () => {
     delete process.env.NATS_URL;
     process.env.BUS_IMPL = 'memory';
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
     await new Promise<void>((resolve) => {
-      server.listen(0, resolve);
+      server.listen(0, '127.0.0.1', resolve);
     });
     getMessageBusForTest(); // ensure bus initialised
   });
@@ -91,6 +222,7 @@ describe('request limits', () => {
 
   beforeEach(() => {
     baseUrl = '';
+    resetShutdownStateForTest();
     setBusReadyForTest(true);
     setIdempotencyStoreForTest(new InMemoryIdempotencyStore());
     process.env.SECURITY_SHARED_SECRET = SHARED_SECRET;
@@ -138,5 +270,62 @@ describe('request limits', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body?.outcome).toBe('SAFE_TO_CONTINUE');
+  });
+
+  it('enforces pre-auth rate limiting', async () => {
+    const buildSubmission = (suffix: number): PortalSubmission => ({
+      practiceId: 'p1',
+      patient: { id: 'patient-rate' },
+      narrative: `check rate limiter ${suffix}`,
+      channel: 'web' as const,
+    });
+
+    for (let i = 0; i < 40; i += 1) {
+      const res = await post(`${url()}/safety-check`, buildSubmission(i), `req-rate-${i}`);
+      expect(res.status).toBe(200);
+      await res.json();
+    }
+
+    const blocked = await post(`${url()}/safety-check`, buildSubmission(100), 'req-rate-block');
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('retry-after')).not.toBeNull();
+    const body = await blocked.json();
+    expect(body?.error?.code).toBe('too_many_requests');
+  });
+
+  it('rejects unsupported content-type before reading body', async () => {
+    process.env.MAX_BODY_BYTES = '1024';
+    const submission: PortalSubmission = {
+      practiceId: 'p1',
+      patient: { id: 'patient-unsupported' },
+      narrative: 'x'.repeat(200_000),
+      channel: 'web' as const,
+    };
+
+    const res = await postWithContentType(`${url()}/safety-check`, submission, 'req-wrong-ctype', 'text/plain');
+
+    expect(res.status).toBe(415);
+    const body = await res.json();
+    expect(body?.error?.code).toBe('unsupported_media_type');
+  });
+
+  it('rejects requests containing control characters in headers', async () => {
+    const submission: PortalSubmission = {
+      practiceId: 'p1',
+      patient: { id: 'patient-headers' },
+      narrative: 'invalid header test',
+      channel: 'web' as const,
+    };
+
+    const { status, bodyText } = await postRawWithHeaderOverride(
+      submission,
+      'req-invalid-header',
+      'x-bad-header',
+      'value\u0007with-bell',
+    );
+
+    expect(status).toBe(400);
+    const parsed = JSON.parse(bodyText);
+    expect(parsed?.error?.code).toBe('invalid_input');
   });
 });

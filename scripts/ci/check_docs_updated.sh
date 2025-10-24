@@ -11,8 +11,8 @@ fi
 
 CHANGED=$(git diff --name-only "$BASE_REF" "$HEAD_REF")
 
-# If package.json files or scripts/ changed, require docs/USAGE.md to be touched.
-if echo "$CHANGED" | grep -qE '(^|/)package.json$|^scripts/'; then
+# If package manifests or scripts/ changed, require docs/USAGE.md to be touched.
+if echo "$CHANGED" | grep -qE '(^|/)package\.json$|(^|/)package-lock\.json$|^scripts/'; then
   if ! echo "$CHANGED" | grep -qE '^docs/USAGE.md$'; then
     echo "ERROR: Command/scripts changed but docs/USAGE.md not updated." >&2
     exit 1

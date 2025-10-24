@@ -15,6 +15,18 @@ Data Sources
   - `numericCount` (subset of `count` where `value` parsed as a number)
   - `p95` (95th percentile across numeric values; `null` if insufficient numeric data)
   - `generatedAt` (ISO timestamp when the rollup was produced)
+- **Runtime ingest metrics** — The TypeScript consumer emits counters/histograms (see `apps/analytics/src/consumer.ts`):
+  - `analytics_ingest_ok_total` — Successful writes (attributes: `metricName`, `attempt`, `duplicate`, `result`)
+  - `analytics_ingest_error_total` — Failures after retries (attributes include `metricName`, `reason`)
+  - `analytics_ingest_retry_total` — Retry attempts (attributes: `metricName`, `attempt`)
+  - `analytics_ingest_duplicate_total` — Duplicates suppressed before persisting (`metricName`)
+  - `analytics_ingest_dlq_total` — Messages routed to DLQ (`metricName`, `cause`, optional `reason`)
+  - `analytics_ingest_lag_ms` — Histogram of clock skew between payload timestamp and persistence time
+  - `analytics_sink_latency_ms` — Histogram of sink write duration
+- **Offline ETL metrics** — Command-line jobs emit structured counters/histograms via `@onecare/observability`:
+  - Rollups: `analytics.rollup.run`, `analytics.rollup.metrics_processed`, `analytics.rollup.windows_emitted`, `analytics.rollup.duration_ms`, `analytics.rollup.errors`
+  - Data quality: `analytics.quality.run`, `analytics.quality.records_processed`, `analytics.quality.missing_fields`, `analytics.quality.quarantine_records`, `analytics.quality.duration_ms`, `analytics.quality.errors`
+  - Quarantine export: `analytics.quarantine_export.run`, `analytics.quarantine_export.files_archived`, `analytics.quarantine_export.duration_ms`, `analytics.quarantine_export.retention_deleted`, `analytics.quarantine_export.errors`
 - **Raw sink (`metrics.jsonl`)** — Optional for drill-down. Each line mirrors the analytics metric contract (`name`, `value`, `labels`, `timestamp`).
 - **Dead-letter queue (`broker.dlq`)** — Optional for error investigation. Surface as a secondary panel when DLQ metrics are published.
 
@@ -43,8 +55,17 @@ Dashboard Layout
    - Query: pivot latest 7 days of rollups by `metric` and label (requires label extraction pipeline or derived tables).
    - Visual: table listing `metric`, `label`, `count`, `p95`. Useful for spotting hotspots (e.g., specific services spiking latency).
 
-5. **DLQ Intake (Bar)**
-   - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day.
+5. **Pipeline Health (Lag & Reliability)**
+   - Charts:
+    - Histogram/percentiles of `analytics_ingest_lag_ms` to monitor end-to-end ingest latency.
+    - Line chart of `analytics_ingest_ok_total` vs `analytics_ingest_error_total`/`analytics_ingest_dlq_total` (stacked or side-by-side) to gauge reliability.
+    - Bar chart or sparkline of `analytics_ingest_retry_total` to uncover flapping sinks.
+     - Offline job summary table tracking `analytics.rollup.run`, `analytics.quality.run`, and `analytics.quarantine_export.run` counts per day to prove jobs executed.
+     - Duration trend panels for `analytics.rollup.duration_ms`, `analytics.quality.duration_ms`, and `analytics.quarantine_export.duration_ms` with thresholds for timeouts/SLOs.
+   - Notes: break down by `metricName` attribute where volumes justify it; alert when errors or DLQ counts exceed agreed thresholds.
+
+6. **DLQ Intake (Bar)**
+  - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day (combine with `analytics_ingest_dlq_total` for cross-check).
    - Visual: bar chart to highlight ingestion failures. Use the same color palette as error rate for correlation.
 
 Recommended Queries
@@ -83,6 +104,26 @@ Recommended Queries
   FROM <ROLLUP_TABLE>
   WHERE metric = 'latency_ms'
   ORDER BY date DESC;
+  ```
+
+- **Ingest Reliability (PromQL style example)**
+  ```promql
+  sum by (metricName) (increase(analytics_ingest_ok_total[1d]))
+  /
+  clamp_min(
+    sum by (metricName) (
+      increase(analytics_ingest_ok_total[1d]) + increase(analytics_ingest_error_total[1d])
+    ),
+    1
+  )
+  ```
+
+- **Ingest Lag Percentiles**
+  ```promql
+  histogram_quantile(
+    0.95,
+    sum by (le) (rate(analytics_ingest_lag_ms_bucket[5m]))
+  )
   ```
 
 Ops Checklist

@@ -1,15 +1,14 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://onecare/schemas/telephony/call-transcribed.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://onecare/schemas/telephony/call-transcribed/2025-02-16",
   "title": "CallTranscribed",
   "type": "object",
   "properties": {
-    "callId": { "type": "string" },
-    "patientId": { "type": ["string", "null"] },
-    "transcript": { "type": "string" },
-    "lang": { "type": ["string", "null"] }
+    "callId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": ["string", "null"], "minLength": 1 },
+    "transcript": { "type": "string", "minLength": 1 },
+    "lang": { "type": ["string", "null"], "minLength": 2 }
   },
   "required": ["callId", "transcript"],
   "additionalProperties": false
 }
-

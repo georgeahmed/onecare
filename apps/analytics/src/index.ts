@@ -11,5 +11,8 @@ export {
   AnalyticsConsumer,
   AnalyticsMetricSinkError,
   AnalyticsMetricValidationError,
+  AnalyticsMetricDlqPublishError,
   startAnalyticsConsumer,
 } from './consumer';
+export { TriageDecisionObserver, startTriageDecisionObserver } from './triageDecisionObserver';
+export { createInMemoryIdempotencyStore } from './idempotencyStore';

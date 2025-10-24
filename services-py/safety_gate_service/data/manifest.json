@@ -1,0 +1,9 @@
+{
+  "datasetVersion": "2025-10-21",
+  "artifacts": {
+    "goldenSet": {
+      "path": "golden_set.v1.jsonl",
+      "checksum": "sha256-78b57f4c3d4e0d9dad53603553136908597a86efdc12c58a7b7958fc074be3a8"
+    }
+  }
+}

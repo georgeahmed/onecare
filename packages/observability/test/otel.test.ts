@@ -1,13 +1,15 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@opentelemetry/sdk-node', () => {
-  const startSpy = vi.fn<[], Promise<void>>();
+  const startSpy = vi.fn<[], void | Promise<void>>();
+  const shutdownSpy = vi.fn<[], Promise<void>>();
   class FakeNodeSDK {
     public start = startSpy;
+    public shutdown = shutdownSpy;
   }
   return {
     NodeSDK: vi.fn(() => new FakeNodeSDK()),
-    __mock: { startSpy },
+    __mock: { startSpy, shutdownSpy },
   };
 });
 
@@ -61,6 +63,7 @@ describe('initTracing', () => {
     const sdkModule = await import('@opentelemetry/sdk-node');
     const startSpy = sdkModule.__mock.startSpy as ReturnType<typeof vi.fn>;
     startSpy.mockReset();
+    (sdkModule.NodeSDK as ReturnType<typeof vi.fn>).mockClear();
     startSpy.mockResolvedValue(undefined);
 
     const { initTracing } = await import('../src/otel');
@@ -69,5 +72,46 @@ describe('initTracing', () => {
     const p2 = initTracing('svc');
     await Promise.all([p1, p2]);
     expect(startSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries initialization after failure', async () => {
+    const sdkModule = await import('@opentelemetry/sdk-node');
+    const startSpy = sdkModule.__mock.startSpy as ReturnType<typeof vi.fn>;
+    const NodeSDK = sdkModule.NodeSDK as ReturnType<typeof vi.fn>;
+    startSpy.mockReset();
+    NodeSDK.mockClear();
+    startSpy.mockRejectedValueOnce(new Error('boom'));
+    startSpy.mockResolvedValue(undefined);
+
+    const { initTracing } = await import('../src/otel');
+
+    await expect(initTracing('svc')).rejects.toThrow('boom');
+    await expect(initTracing('svc')).resolves.toBeUndefined();
+
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(NodeSDK).toHaveBeenCalledTimes(2);
+  });
+
+  it('shuts down the SDK and allows reinitialisation', async () => {
+    const sdkModule = await import('@opentelemetry/sdk-node');
+    const startSpy = sdkModule.__mock.startSpy as ReturnType<typeof vi.fn>;
+    const shutdownSpy = sdkModule.__mock.shutdownSpy as ReturnType<typeof vi.fn>;
+    const NodeSDK = sdkModule.NodeSDK as ReturnType<typeof vi.fn>;
+    startSpy.mockReset();
+    shutdownSpy.mockReset();
+    NodeSDK.mockClear();
+    startSpy.mockResolvedValue(undefined);
+    shutdownSpy.mockResolvedValue(undefined);
+
+    const { initTracing, shutdownTracing } = await import('../src/otel');
+
+    await initTracing('svc');
+    await shutdownTracing();
+
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
+
+    await initTracing('svc');
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(NodeSDK).toHaveBeenCalledTimes(2);
   });
 });

@@ -37,4 +37,7 @@ export interface OrchestratorConfig {
       fields?: string[];
     };
   };
+  booking?: {
+    availabilityTimeoutMs?: number;
+  };
 }

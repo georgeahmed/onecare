@@ -73,8 +73,9 @@ function buildContext(overrides: Partial<PharmacyContext> = {}): PharmacyContext
 
   const context: PharmacyContext = {
     id: 'ctx-1',
+    patientId: 'patient-ctx',
     document: { conditionCode: 'UTI', severity: 'mild' },
-    patient: { ageYears: 25, sex: 'female' },
+    patient: { id: 'patient-ctx', ageYears: 25, sex: 'female' },
     ruleset,
     cpcsClient,
     fhirRepository,
@@ -255,7 +256,13 @@ describe('ReferredState', () => {
     });
     expect(logCall?.[1]).not.toHaveProperty('serviceRequestId');
     expect((ctx.notifier as PatientNotifier).notifyReferral).toHaveBeenCalledWith(
-      expect.objectContaining({ serviceRequestId: ctx.serviceRequest?.id, status: 'accepted' }),
+      expect.objectContaining({
+        serviceRequestId: ctx.serviceRequest?.id,
+        status: 'accepted',
+        idempotencyKey: expect.stringContaining('pharmacy:notify:ORG1'),
+        channel: 'unknown',
+        metadata: { template: 'pharmacy_referral_status' },
+      }),
     );
   });
 
@@ -297,6 +304,7 @@ describe('ReferredState', () => {
 
     await state.handle(ctx, baseEvent);
     expect(notifyReferral).toHaveBeenCalledTimes(1);
+    expect(notifyReferral.mock.calls[0]?.[0]?.idempotencyKey).toBe('pharmacy:notify:test');
 
     const duplicateCtx = buildContext({
       notifier: { notifyReferral } as PatientNotifier,
@@ -334,6 +342,12 @@ describe('OutcomeRecordedState', () => {
     expect(repo.upsertBundle).toHaveBeenCalled();
     expect(repo.createTask).not.toHaveBeenCalled();
     expect(ctx.outcomeBundle).toBeDefined();
+    expect(ctx.outcomePayload).toMatchObject({
+      serviceRequestId: ctx.serviceRequest?.id,
+      organisationId: 'ORG1',
+      status: 'queued',
+      referralReference: 'ref',
+    });
   });
 
   it('creates escalation task when referral rejected', async () => {
@@ -344,6 +358,7 @@ describe('OutcomeRecordedState', () => {
     });
     await state.handle(ctx, baseEvent);
     expect((ctx.fhirRepository as FhirRepository).createTask).toHaveBeenCalled();
+    expect(ctx.outcomePayload?.escalated).toBe(true);
   });
 
   it('avoids duplicate outcome persistence when idempotency key matches', async () => {
@@ -375,5 +390,12 @@ describe('OutcomeRecordedState', () => {
 
     await state.handle(duplicateCtx, baseEvent);
     expect(upsertBundle).toHaveBeenCalledTimes(1);
+    expect(ctx.outcomePayload).toBeDefined();
+    expect(duplicateCtx.outcomePayload).toMatchObject({
+      serviceRequestId: ctx.serviceRequest?.id,
+      organisationId: 'ORG1',
+      status: 'accepted',
+      referralReference: 'ref',
+    });
   });
 });

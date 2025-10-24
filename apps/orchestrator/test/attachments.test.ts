@@ -29,15 +29,18 @@ function installAllowAllSecurity(): void {
   setConsentFixtureEnv();
   const verify = vi.fn<SecurityServices['verifySignatureAndReplayGuard']>().mockResolvedValue(true);
   const authorize = vi.fn<SecurityServices['authorize']>().mockResolvedValue(true);
-  const consent = vi.fn<SecurityServices['checkConsent']>().mockImplementation(async (patientId, purpose, resources) => {
-    const refPurpose = purpose === 'analytics-lite' ? 'analytics-lite' : 'care';
-    setConsentEvidenceForTest(patientId, purpose, {
-      reference: consentReference(patientId, refPurpose),
-      purpose,
-      resources,
-    });
-    return true;
-  });
+  const consent = vi.fn<SecurityServices['checkConsent']>().mockImplementation(
+    async (patientId, purpose, resources) => {
+      const refPurpose = purpose === 'analytics-lite' ? 'analytics-lite' : 'care';
+      const evidence = {
+        reference: consentReference(patientId, refPurpose),
+        purpose,
+        resources,
+      };
+      setConsentEvidenceForTest(patientId, purpose, evidence);
+      return { allowed: true, reason: 'granted', evidence };
+    },
+  );
   setSecurityServices({ verifySignatureAndReplayGuard: verify, authorize, checkConsent: consent });
 }
 

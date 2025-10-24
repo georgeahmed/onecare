@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+import threading
 
 try:
     import yaml  # type: ignore
@@ -34,6 +35,7 @@ class AudioStore:
     def __init__(self, config: AudioRetentionConfig) -> None:
         self._config = config
         self._records: list[AudioReference] = []
+        self._lock = threading.Lock()
 
     @property
     def config(self) -> AudioRetentionConfig:
@@ -45,6 +47,8 @@ class AudioStore:
     def record(self, *, encounter_id: str, audio_url: str, stored_at: Optional[datetime] = None) -> Optional[AudioReference]:
         if not self.should_store():
             return None
+        if self._config.retention_days <= 0:
+            return None
 
         encounter = encounter_id.strip()
         location = audio_url.strip()
@@ -53,23 +57,27 @@ class AudioStore:
 
         timestamp = stored_at or datetime.now(timezone.utc)
         reference = AudioReference(encounter_id=encounter, audio_url=location, stored_at=timestamp)
-        self._records.append(reference)
-        self.purge_expired(now=timestamp)
+        with self._lock:
+            self._records.append(reference)
+            self._purge_expired_locked(now=timestamp)
         return reference
 
     def list_references(self) -> list[AudioReference]:
-        return list(self._records)
+        with self._lock:
+            return list(self._records)
 
     def purge_expired(self, *, now: Optional[datetime] = None) -> int:
         """Remove references older than the configured retention window."""
 
+        with self._lock:
+            return self._purge_expired_locked(now=now or datetime.now(timezone.utc))
+
+    def _purge_expired_locked(self, *, now: datetime) -> int:
         retention = max(self._config.retention_days, 0)
         if retention == 0:
             removed = len(self._records)
             self._records = []
             return removed
-
-        now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(days=retention)
         before = len(self._records)
         self._records = [record for record in self._records if record.stored_at >= cutoff]

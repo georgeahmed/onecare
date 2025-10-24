@@ -1,143 +1,116 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
-import { log } from '../src/logger';
-import { getCorrelationId, setCorrelationId, withCorrelationContext } from '../src/otel';
-
-const consoleSpy = vi.spyOn(console, 'log');
-
-function getLastPayload() {
-  const lastCall = consoleSpy.mock.calls.at(-1);
-  if (!lastCall) throw new Error('Expected console.log to be called');
-  const [argument] = lastCall;
-  if (typeof argument !== 'string') throw new Error('Expected console.log to receive a JSON string');
-  return JSON.parse(argument) as Record<string, unknown>;
-}
+import { logger, redact } from '../src/logger';
 
 describe('logger redaction', () => {
-  beforeEach(() => {
-    consoleSpy.mockImplementation(() => {});
-    consoleSpy.mockClear();
+  it('redacts transcript fields', () => {
+    const payload = {
+      transcript: 'patient described chest pain',
+      transcriptionText: 'raw text',
+      other: 'safe-value',
+    };
+
+    const redacted = redact(payload);
+    expect(redacted.transcript).toBe('[REDACTED]');
+    expect(redacted.transcriptionText).toBe('[REDACTED]');
+    expect(redacted.other).toBe('safe-value');
   });
 
-  afterEach(() => {
-    consoleSpy.mockReset();
-  });
-
-  afterAll(() => {
-    consoleSpy.mockRestore();
-  });
-
-  it('redacts email addresses in fields', () => {
-    log('info', 'testing email', { email: 'alice@example.com' });
-
-    const payload = getLastPayload();
-    expect(payload.email).toBe('[REDACTED]');
-  });
-
-  it('redacts phone numbers in fields', () => {
-    log('info', 'testing phone', { phone: '(555) 123-4567' });
-
-    const payload = getLastPayload();
-    expect(payload.phone).toBe('[REDACTED]');
-  });
-
-  it('redacts tokens in both messages and fields', () => {
-    log('info', 'token=super-secret-token', { token: 'sk_live_123456789' });
-
-    const payload = getLastPayload();
-    expect(payload.token).toBe('[REDACTED]');
-    expect(payload.msg).toBe('token=[REDACTED]');
-  });
-
-  it('retains correlation identifiers in top-level and nested fields', () => {
-    log('info', 'incoming request', {
-      'x-correlation-id': 'corr-123',
-      headers: { 'X-Request-Id': 'req-999', Authorization: 'Bearer abc' },
-    });
-
-    const payload = getLastPayload();
-    expect(payload['x-correlation-id']).toBe('corr-123');
-    expect((payload.headers as Record<string, unknown>)['X-Request-Id']).toBe('req-999');
-    expect((payload.headers as Record<string, unknown>).Authorization).toBe('[REDACTED]');
-  });
-
-  it('preserves structured objects after redaction', () => {
-    log('info', 'object field', { details: { safe: 'value', secretToken: 'abc', nested: { email: 'user@example.com' } } });
-
-    const payload = getLastPayload();
-    expect(payload.details).toMatchObject({
-      safe: 'value',
-      secretToken: '[REDACTED]',
-      nested: { email: '[REDACTED]' },
-    });
-  });
-
-  it('keeps practice identifiers for operational visibility', () => {
-    log('info', 'practice config applied', { practiceId: 'demo-practice' });
-
-    const payload = getLastPayload();
-    expect(payload.practiceId).toBe('demo-practice');
-  });
-
-  it('does not redact non-identifier fields that contain id as a suffix', () => {
-    log('info', 'flag valid status', { valid: true, invalid: false });
-
-    const payload = getLastPayload();
-    expect(payload.valid).toBe(true);
-    expect(payload.invalid).toBe(false);
-  });
-
-  it('preserves structured fields after redaction', () => {
-    log('info', 'structured payload', {
-      portal: {
-        practiceId: 'demo-practice',
-        token: 'sk_live_123',
-        slots: [1, 2, 3],
+  it('redacts secrets, identifiers, and header-like data', () => {
+    const payload = {
+      apiKey: 'live-api-key',
+      clientSecret: 'super-secret',
+      metadata: {
+        contactNumber: '+44 7700 900123',
+        nhsNumber: '123 456 7890',
+        nested: {
+          sessionToken: 'session-abc',
+          refreshToken: 'refresh-xyz',
+          note: 'Call back on 0208 555 1234',
+        },
       },
-    });
+      headers: {
+        Authorization: 'Bearer token-value',
+        'Proxy-Authorization': 'Basic Zm9vOmJhcg==',
+      },
+      rawJson: '{"token":"abc","nested":{"refreshToken":"xyz"}}',
+    };
 
-    const payload = getLastPayload();
-    expect(payload.portal).toEqual({
-      practiceId: 'demo-practice',
-      token: '[REDACTED]',
-      slots: [1, 2, 3],
-    });
+    const redacted = redact(payload) as Record<string, unknown>;
+    const metadata = redacted.metadata as Record<string, unknown>;
+    const nested = metadata.nested as Record<string, unknown>;
+    const headers = redacted.headers as Record<string, unknown>;
+
+    expect(redacted.apiKey).toBe('[REDACTED]');
+    expect(redacted.clientSecret).toBe('[REDACTED]');
+    expect(metadata.contactNumber).toBe('[REDACTED]');
+    expect(metadata.nhsNumber).toBe('[REDACTED]');
+    expect(nested.sessionToken).toBe('[REDACTED]');
+    expect(nested.refreshToken).toBe('[REDACTED]');
+    expect(nested.note).not.toMatch(/\d{3}/);
+    expect(headers.Authorization).toBe('[REDACTED]');
+    expect(headers['Proxy-Authorization']).toBe('[REDACTED]');
+    expect(String(redacted.rawJson)).toContain('[REDACTED]');
+    expect(String(redacted.rawJson)).not.toContain('token-value');
+
+    expect(redact('Authorization: Bearer some-token')).toBe('Authorization: [REDACTED]');
+    expect(redact('apiKey="secret123"')).toBe('apiKey="[REDACTED]"');
+    expect(redact('sessionToken=abc')).toBe('sessionToken=[REDACTED]');
+  });
+
+  it('handles Map and Set values without leaking sensitive data', () => {
+    const payload = {
+      payloadMap: new Map([
+        ['sessionToken', 'map-token'],
+        ['safeKey', 'safe'],
+      ]),
+      payloadSet: new Set(['+44 7700 900111', 'ok']),
+    };
+
+    const redacted = redact(payload) as Record<string, unknown>;
+    const map = redacted.payloadMap as Record<string, unknown>;
+    const set = redacted.payloadSet as unknown[];
+
+    expect(map.sessionToken).toBe('[REDACTED]');
+    expect(map.safeKey).toBe('safe');
+    expect(set).toContain('[REDACTED]');
+    expect(set).toContain('ok');
   });
 });
 
-describe('correlation context', () => {
-  beforeEach(() => {
-    setCorrelationId(undefined);
+describe('logger output', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('does not leak correlation ids between contexts', () => {
-    withCorrelationContext(() => {
-      setCorrelationId('corr-a');
-      expect(getCorrelationId()).toBe('corr-a');
-    });
-    expect(getCorrelationId()).toBeUndefined();
+  it('handles circular references safely', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const payload: Record<string, unknown> = {};
+    payload.self = payload;
+    const loop: unknown[] = [];
+    loop.push(loop);
+    payload.loop = loop;
+
+    logger.info('circular payload', { payload });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(logged.payload.self).toBe('[REDACTED]');
+    expect(logged.payload.loop).toEqual(['[REDACTED]']);
   });
 
-  it('propagates correlation id within async operations', async () => {
-    await withCorrelationContext(async () => {
-      setCorrelationId('corr-b');
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          expect(getCorrelationId()).toBe('corr-b');
-          resolve();
-        }, 0);
-      });
-    });
-    expect(getCorrelationId()).toBeUndefined();
-  });
+  it('redacts binary-like values', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-  it('preserves existing context when nesting withCorrelationContext', () => {
-    withCorrelationContext(() => {
-      setCorrelationId('outer');
-      withCorrelationContext(() => {
-        expect(getCorrelationId()).toBe('outer');
-      });
-      expect(getCorrelationId()).toBe('outer');
-    });
+    const buffer = Buffer.from('sensitive');
+    const view = new Uint8Array([1, 2, 3]);
+
+    logger.info('binary payload', { buffer, view });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(logged.buffer).toBe('[REDACTED]');
+    expect(logged.view).toBe('[REDACTED]');
   });
 });

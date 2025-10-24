@@ -9,6 +9,7 @@
     "correlationId": { "type": "string" },
     "errorCode": { "type": "string" },
     "errorMessage": { "type": "string" },
+    "attempts": { "type": "integer", "minimum": 1 },
     "payloadRef": {
       "description": "Opaque reference or small safe context; avoid PHI.",
       "type": ["object", "string" ]
@@ -17,4 +18,3 @@
   },
   "required": ["originalTopic", "ts" ]
 }
-

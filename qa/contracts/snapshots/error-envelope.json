@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "too_many_requests",
+    "message": "Rate limit exceeded",
+    "details": {
+      "retryAfterSeconds": 60,
+      "route": "/booking/confirm"
+    },
+    "correlationId": "corr-snapshot-error"
+  }
+}

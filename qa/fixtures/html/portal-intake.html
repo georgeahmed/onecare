@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Portal Intake</title>
+  </head>
+  <body>
+    <main>
+      <h1>Tell us about your symptoms</h1>
+      <form aria-describedby="intake-help">
+        <p id="intake-help">Provide details so our clinicians can help.</p>
+        <label for="symptom-details">What brings you in today?</label>
+        <textarea id="symptom-details" name="symptom-details" rows="6" required></textarea>
+        <fieldset>
+          <legend>Do you have any of the following?</legend>
+          <div>
+            <input type="checkbox" id="breathing" name="flags" value="breathing" />
+            <label for="breathing">Difficulty breathing</label>
+          </div>
+          <div>
+            <input type="checkbox" id="fever" name="flags" value="fever" />
+            <label for="fever">Fever for more than 48 hours</label>
+          </div>
+        </fieldset>
+        <button type="submit">Submit symptoms</button>
+      </form>
+    </main>
+  </body>
+</html>

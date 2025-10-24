@@ -11,6 +11,7 @@ export interface EligibilityDocument {
 }
 
 export interface EligibilityPatient {
+  id?: string;
   ageYears?: number;
   sex?: PharmacyPatientSex;
   exclusionFlags?: string[];
@@ -148,8 +149,14 @@ function mergeRules(
     result.exclusions = Array.from(exclusionSet);
   }
 
-  if (!result.age && !result.sex && !result.severity && !result.exclusions) {
-    return undefined;
+  const hasAnyConstraint =
+    Boolean(result.age) ||
+    Boolean(result.sex && result.sex.length > 0) ||
+    Boolean(result.severity && ((result.severity.allowed && result.severity.allowed.length > 0) || (result.severity.blocked && result.severity.blocked.length > 0))) ||
+    Boolean(result.exclusions && result.exclusions.length > 0);
+
+  if (!hasAnyConstraint) {
+    return base || override ? {} : undefined;
   }
 
   return result;

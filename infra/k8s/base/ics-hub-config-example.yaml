@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ics-hub-config
+  namespace: ics
+data:
+  resolved.yaml: |
+    organisations:
+      example:
+        endpoint: https://partner.example.com/referral
+        rateLimit: 120
+        automation: true

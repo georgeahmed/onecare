@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/messaging/send-document-sent.json",
+  "title": "SendDocumentSent",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "messageId": { "type": "string", "minLength": 1 },
+    "mexTo": { "type": "string", "minLength": 1 },
+    "mexWorkflowId": { "type": "string", "minLength": 1 },
+    "mexLocalId": { "type": "string", "minLength": 1 },
+    "sentAt": { "type": "string", "format": "date-time" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "retryAfter": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "required": ["taskId", "patientId", "messageId", "mexTo", "mexWorkflowId", "mexLocalId", "sentAt", "attempt"],
+  "additionalProperties": false
+}

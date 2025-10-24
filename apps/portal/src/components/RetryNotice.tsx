@@ -1,4 +1,5 @@
 import { useIntl } from 'react-intl';
+import Button from './ui/Button';
 
 export interface RetryNoticeProps {
   attempts: number;
@@ -13,9 +14,9 @@ const RetryNotice = ({ attempts, maxRetries, onCancel }: RetryNoticeProps) => {
     <div role="status" aria-live="polite" className="retry-notice">
       <p>{intl.formatMessage({ id: 'retry.notice' }, { attempts, maxRetries })}</p>
       {onCancel ? (
-        <button type="button" onClick={onCancel}>
+        <Button type="button" variant="subtle" onClick={onCancel}>
           {intl.formatMessage({ id: 'retry.cancel' })}
-        </button>
+        </Button>
       ) : null}
     </div>
   );

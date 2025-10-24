@@ -1,0 +1,72 @@
+groups:
+  - name: mlops.safety-gate
+    interval: 1m
+    rules:
+      - alert: SafetyGateHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(safety_gate_request_latency_seconds_bucket{endpoint="analyze"}[5m])) by (le)
+          ) > 0.9
+        for: 10m
+        labels:
+          severity: page
+          team: mlops
+        annotations:
+          summary: "Safety Gate p95 latency breach"
+          runbook: "https://onecare/internal/docs/MLOPS_ROLLOUTS"
+          dashboard: "https://grafana.onecare/cloud/mlops/safety-gate"
+          description: "p95 latency exceeded 900ms for 10 minutes. Consider aborting the active rollout."
+
+      - alert: SafetyGateHighErrorRate
+        expr: |
+          (
+            sum(rate(safety_gate_requests_total{endpoint="analyze",status=~"server_error|dropped"}[5m])) /
+            clamp_min(sum(rate(safety_gate_requests_total{endpoint="analyze"}[5m])), 1)
+          ) > 0.03
+        for: 5m
+        labels:
+          severity: page
+          team: mlops
+        annotations:
+          summary: "Safety Gate error rate above 3%"
+          runbook: "https://onecare/internal/docs/MLOPS_ROLLOUTS"
+          description: "Server error or drop rate exceeded 3% over the last 5 minutes."
+
+      - alert: SafetyGateThrottleHigh
+        expr: |
+          sum(rate(safety_gate_overload_total{reason=~"timeout|over_capacity"}[10m])) /
+          clamp_min(sum(rate(safety_gate_requests_total{endpoint="analyze"}[10m])), 1)
+          > 0.05
+        for: 15m
+        labels:
+          severity: ticket
+          team: mlops
+        annotations:
+          summary: "Safety Gate throttle rate above 5%"
+          runbook: "https://onecare/internal/docs/MLOPS_AUTOSCALING"
+          description: "Investigate saturation and adjust autoscaling or concurrency caps."
+
+      - alert: SafetyGateShadowDisagreement
+        expr: |
+          shadow_evaluator_agreement_ratio{service="safety-gate"} < 0.97
+        for: 10m
+        labels:
+          severity: ticket
+          team: mlops
+        annotations:
+          summary: "Shadow agreement below 97%"
+          runbook: "https://onecare/internal/docs/MLOPS_SHADOW"
+          description: "Review shadow metrics before promoting the candidate model."
+
+      - alert: SafetyGateOOMRestart
+        expr: |
+          increase(kube_pod_container_status_restarts_total{namespace="ml",pod=~"safety-gate-.*"}[10m]) > 3
+        for: 10m
+        labels:
+          severity: page
+          team: mlops
+        annotations:
+          summary: "Safety Gate experiencing repeated restarts"
+          runbook: "https://onecare/internal/docs/MLOPS_RESOURCES"
+          description: "Check recent rollouts and GPU utilisation. Consider scaling down the candidate."

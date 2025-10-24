@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/booking/booking-search-response.json",
+  "title": "BookingSearchResponse",
+  "description": "Normalized booking slots returned after applying enhanced access policy filters.",
+  "type": "object",
+  "properties": {
+    "slots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SlotView"
+      },
+      "description": "Slots that passed the enhanced access filters."
+    },
+    "rejectedSlots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RejectedSlot"
+      },
+      "description": "Slots rejected by the policy along with reason codes.",
+      "default": []
+    }
+  },
+  "required": ["slots"],
+  "additionalProperties": false,
+  "$defs": {
+    "SlotView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "organisationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "serviceType": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      },
+      "required": ["id", "start", "end", "organisationId"],
+      "additionalProperties": false
+    },
+    "RejectedSlot": {
+      "type": "object",
+      "properties": {
+        "slot": {
+          "$ref": "#/$defs/SlotView"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9_.-]+$"
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["slot", "reasons"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
+import { isIP } from 'node:net';
 import type { ResolvedConfig } from '@onecare/config';
 import { createHistogram, createCounter, logger, startSpan } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -15,7 +16,7 @@ import { SpanStatusCode } from '@opentelemetry/api';
 export interface CpcsSlot {
   start: string;
   end: string;
-  locationOdsCode: string;
+  locationOdsCode?: string;
   reference?: string;
 }
 
@@ -61,6 +62,7 @@ export type CpcsReferralDispatcher = (
 export interface CpcsClientOptions {
   baseUrl: string;
   headers?: Record<string, string>;
+  apiKey?: string;
   timeoutMs?: number;
   dispatcher?: CpcsReferralDispatcher;
   retry?: Partial<RetryPolicy>;
@@ -213,20 +215,24 @@ function logCircuitOpen(operation: string, endpoint: string, correlationId: stri
 
 export class CpcsHttpClient implements CpcsClient {
   private readonly baseUrl: string;
-  private readonly headers: Record<string, string>;
+  private headers: Record<string, string>;
   private readonly timeoutMs: number;
   private readonly dispatcher: CpcsReferralDispatcher;
   private readonly retryPolicy: RetryPolicy;
   private readonly circuitBreaker: CircuitBreaker;
   private readonly slotlessFallbackEnabled: boolean;
-  private readonly correlationHeader: string;
+  private correlationHeader: string;
+  private rawHeaders: Record<string, string>;
+  private apiKey?: string;
 
   constructor(options: CpcsClientOptions) {
     if (!options.baseUrl) {
       throw new Error('cpcs_base_url_missing');
     }
-    this.baseUrl = options.baseUrl;
-    this.headers = { ...options.headers };
+    this.baseUrl = ensureSafeCpcsBaseUrl(options.baseUrl);
+    this.rawHeaders = { ...(options.headers ?? {}) };
+    this.apiKey = options.apiKey?.trim() || undefined;
+    this.headers = buildHeaders(this.rawHeaders, this.apiKey);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.dispatcher = options.dispatcher ?? defaultDispatcher;
     this.retryPolicy = normalizeRetryPolicy(options.retry);
@@ -246,11 +252,17 @@ export class CpcsHttpClient implements CpcsClient {
       slotlessFallback?: { enabled?: boolean };
       correlationHeader?: string;
     };
-    const headers = buildHeaders(cpcs.headers, cpcs.apiKey?.trim());
     const baseUrl = overrides.baseUrl ?? cpcs.endpoint ?? readEnvUrl();
+    const headers: Record<string, string> = { ...(cpcs.headers ?? {}) };
+    if (overrides.headers) {
+      for (const [key, value] of Object.entries(overrides.headers)) {
+        headers[key] = value;
+      }
+    }
     return new CpcsHttpClient({
       baseUrl,
-      headers: { ...headers, ...(overrides.headers ?? {}) },
+      headers,
+      apiKey: overrides.apiKey ?? cpcs.apiKey?.trim(),
       timeoutMs: overrides.timeoutMs ?? cpcs.timeoutMs,
       dispatcher: overrides.dispatcher,
       retry: overrides.retry ?? cpcs.retry,
@@ -263,13 +275,11 @@ export class CpcsHttpClient implements CpcsClient {
 
   static fromEnv(overrides: Partial<CpcsClientOptions> = {}): CpcsHttpClient {
     const baseUrl = overrides.baseUrl ?? readEnvUrl();
-    const headers = buildHeaders(
-      { ...readEnvHeaders(), ...(overrides.headers ?? {}) },
-      process.env.CPCS_API_KEY?.trim(),
-    );
+    const headers = { ...readEnvHeaders(), ...(overrides.headers ?? {}) };
     return new CpcsHttpClient({
       baseUrl,
       headers,
+      apiKey: overrides.apiKey ?? process.env.CPCS_API_KEY?.trim(),
       timeoutMs: overrides.timeoutMs,
       dispatcher: overrides.dispatcher,
       retry: overrides.retry,
@@ -297,10 +307,18 @@ export class CpcsHttpClient implements CpcsClient {
     }
 
     const correlationId = options?.correlationId;
-    const mode: 'slot' | 'slotless' = slot ? 'slot' : 'slotless';
+    const hasSchedulableSlot =
+      slot?.locationOdsCode && slot.locationOdsCode.trim().length > 0;
+    const mode: 'slot' | 'slotless' = hasSchedulableSlot ? 'slot' : 'slotless';
     const payload: CpcsDispatchPayload = { ...serviceRequest, summary };
 
-    const primary = await this.executeWithGuard(mode, organisationId.trim(), payload, slot, correlationId);
+    const primary = await this.executeWithGuard(
+      mode,
+      organisationId.trim(),
+      payload,
+      hasSchedulableSlot ? slot : undefined,
+      correlationId,
+    );
     if (
       slot &&
       this.slotlessFallbackEnabled &&
@@ -325,6 +343,23 @@ export class CpcsHttpClient implements CpcsClient {
 
   getHeaders(): Record<string, string> {
     return { ...this.headers };
+  }
+
+  refreshCredentials(update: { headers?: Record<string, string>; apiKey?: string | null; correlationHeader?: string }): void {
+    if (update.headers) {
+      this.rawHeaders = { ...update.headers };
+    }
+    if (update.apiKey !== undefined) {
+      const trimmed = update.apiKey?.trim();
+      this.apiKey = trimmed && trimmed.length > 0 ? trimmed : undefined;
+    }
+    this.headers = buildHeaders(this.rawHeaders, this.apiKey);
+    if (update.correlationHeader) {
+      const trimmed = update.correlationHeader.trim();
+      if (trimmed.length > 0) {
+        this.correlationHeader = trimmed;
+      }
+    }
   }
 
   getTimeoutMs(): number {
@@ -482,10 +517,13 @@ function buildHeaders(headers: Record<string, string> = {}, apiKey?: string): Re
     }
   }
   if (apiKey && !result.Authorization) {
-    result.Authorization = `Bearer ${apiKey}`;
+    result.Authorization = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
   }
   if (!result['Content-Type']) {
     result['Content-Type'] = 'application/json';
+  }
+  if (!result.Accept) {
+    result.Accept = 'application/json';
   }
   return result;
 }
@@ -677,4 +715,59 @@ class CircuitBreaker {
     this.state = 'open';
     this.openedAt = Date.now();
   }
+}
+
+function ensureSafeCpcsBaseUrl(candidate: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new Error('cpcs_base_url_missing');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('cpcs_base_url_invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('cpcs_base_url_insecure');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('cpcs_base_url_credentials_not_allowed');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('cpcs_base_url_extraneous');
+  }
+  if (isBlockedHostname(parsed.hostname)) {
+    throw new Error('cpcs_base_url_blocked');
+  }
+  const normalisedPath = parsed.pathname.replace(/\/+$/u, '');
+  return `${parsed.origin}${normalisedPath === '' ? '' : normalisedPath}`;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  if (!lower) return true;
+  if (lower === 'localhost' || lower.endsWith('.localhost')) return true;
+  if (lower.endsWith('.local') || lower.endsWith('.internal')) return true;
+  if (lower === '0.0.0.0') return true;
+  if (lower === '::1') return true;
+  const ipType = isIP(lower);
+  if (ipType === 4) {
+    const parts = lower.split('.').map((segment) => Number(segment));
+    if (parts.length !== 4 || parts.some((segment) => Number.isNaN(segment) || segment < 0 || segment > 255)) {
+      return true;
+    }
+    const [a, b] = parts;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 0) return true;
+  } else if (ipType === 6) {
+    if (lower === '::1') return true;
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (lower.startsWith('fe80')) return true;
+  }
+  return false;
 }

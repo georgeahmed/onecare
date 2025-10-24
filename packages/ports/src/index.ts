@@ -7,3 +7,5 @@ export * from './idempotency';
 export * from './idempotency-guard';
 export * from './deferrals';
 export * from './capacity';
+export * from './features';
+export * from './gp-connect';

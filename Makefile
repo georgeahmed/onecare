@@ -1,4 +1,4 @@
-.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav
+.PHONY: install build typecheck lint format test codegen codegen-check py-test py-safety py-scribe docker-up docker-down demo-docker demo-local team-status team-status-write team-status-json team-issues engineer-done engineer-bug engineer-blocked engineer-fix engineer-loop ci-local stack-up stack-smoke docs-nav perf-smoke
  .PHONY: dev-run dev-stop
 
 install:
@@ -20,7 +20,7 @@ test:
 	npm run test
 
 codegen:
-	npm run codegen
+	npm run --workspaces=false codegen
 
 codegen-check:
 	npm run codegen:check
@@ -29,10 +29,10 @@ py-test:
 	./services-py/run-tests.sh
 
 py-safety:
-	uvicorn services-py/safety_gate_service/main:app --reload --port 8081
+	PYTHONPATH=services-py services-py/.venv/bin/uvicorn safety_gate_service.main:app --reload --port 8081
 
 py-scribe:
-	uvicorn services-py/scribe_service/main:app --reload --port 8082
+	PYTHONPATH=services-py services-py/.venv/bin/uvicorn scribe_service.main:app --reload --port 8082
 
 docker-up:
 	docker-compose up --build
@@ -61,10 +61,10 @@ demo-local:
 	@echo "[demo] Building orchestrator..."
 	npm -w @onecare/app-orchestrator run build --silent
 	@echo "[demo] Starting safety gate (requires uvicorn/fastapi installed)..."
-	@bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
+	@bash -c 'PYTHONPATH=services-py services-py/.venv/bin/uvicorn safety_gate_service.main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
 	@bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
 	@echo "[demo] Starting orchestrator..."
-	@bash -c 'PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+	@bash -c 'PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
 	@bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
 	@echo "[demo] Calling orchestrator /safety-check"
 	@curl -s -X POST http://localhost:3001/safety-check \
@@ -85,11 +85,32 @@ dev-run:
 	@echo "[dev] Building orchestrator..."
 	npm -w @onecare/app-orchestrator run build --silent
 	@echo "[dev] Starting Safety Gate..."
-	@bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
-	@bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
+	@bash -c 'PYTHONPATH=services-py services-py/.venv/bin/uvicorn safety_gate_service.main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
+	@scripts/dev/wait-for-ready.sh \
+	  --name "Safety Gate" \
+	  --url http://localhost:8081/docs \
+	  --pid-file .pid_safety \
+	  || { \
+	    make -s dev-stop; \
+	    exit 1; \
+	  }
 	@echo "[dev] Starting Orchestrator..."
-	@bash -c 'PORT=3001 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
-	@bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'
+	@bash -c 'set -a; [ -f ./.env.dev ] && source ./.env.dev; [ -f ./.env ] && source ./.env; set +a; \
+	  export PORT=$${PORT:-3001}; \
+	  export PRACTICE_ID=$${PRACTICE_ID:-demo}; \
+	  export PY_SAFETY_GATE_URL=$${PY_SAFETY_GATE_URL:-http://localhost:8081}; \
+	  export PY_SAFETY_GATE_HOST_ALLOWLIST=$${PY_SAFETY_GATE_HOST_ALLOWLIST:-localhost,127.0.0.1}; \
+	  export BUS_IMPL=$${BUS_IMPL:-memory}; \
+	  export FHIR_BASE_URL="$${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4}"; \
+	  node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
+	@scripts/dev/wait-for-ready.sh \
+	  --name "Orchestrator" \
+	  --url http://localhost:3001/health \
+	  --pid-file .pid_orch \
+	  || { \
+	    make -s dev-stop; \
+	    exit 1; \
+	  }
 	@echo "[dev] Up. Try: curl -s http://localhost:3001/health && echo" 
 	@echo "[dev] Stop with: make dev-stop"
 
@@ -108,6 +129,22 @@ ci-local:
 .PHONY: perf-orchestrator
 perf-orchestrator:
 	bash scripts/perf/orchestrator.sh 10
+
+.PHONY: perf-smoke
+perf-smoke:
+	@echo "[perf] safety-check smoke (k6)"
+	k6 run qa/perf/k6_safety_check.js
+	@if [ -z "$${BOOKING_BASE_URL}" ]; then \
+	  echo "BOOKING_BASE_URL must be set (e.g., http://localhost:4000)"; \
+	  exit 1; \
+	fi
+	@echo "[perf] booking smoke (newman)"
+	newman run qa/perf/newman_collection.json \
+	  --reporters cli \
+	  --env-var baseUrl=$${BOOKING_BASE_URL} \
+	  --env-var correlationPrefix=$${BOOKING_CORRELATION_PREFIX:-perf-smoke} \
+	  --env-var serviceType=$${BOOKING_SERVICE_TYPE:-GP} \
+	  --env-var location=$${BOOKING_LOCATION:-org-demo}
 
 stack-up:
 	docker-compose up -d --build
@@ -135,7 +172,7 @@ docs-nav:
 .PHONY: agent-closeout
 agent-closeout:
 	@echo "[agent] Codegen → typecheck → test → team status write"
-	npm run codegen && npm run typecheck && npm run test && node scripts/team/status.js --write
+	npm run --workspaces=false codegen && npm run typecheck && npm run test && node scripts/team/status.js --write
 
 team-status:
 	node scripts/team/status.js

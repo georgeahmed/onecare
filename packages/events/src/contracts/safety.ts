@@ -1,6 +1,8 @@
 // AUTO-GENERATED from schemas. DO NOT EDIT.
 
+export type SafetyDecisionOutcome = "DIVERTED" | "SAFE_TO_CONTINUE";
+
 export interface SafetyDecision {
-  outcome: "DIVERTED" | "SAFE_TO_CONTINUE";
+  outcome: SafetyDecisionOutcome;
   reason?: string | null;
 }

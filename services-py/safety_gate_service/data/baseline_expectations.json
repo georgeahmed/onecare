@@ -1,0 +1,8 @@
+{
+  "accuracy": 0.97,
+  "recall": {
+    "DIVERTED": 0.95,
+    "SAFE_TO_CONTINUE": 0.90
+  },
+  "ece": 0.05
+}

@@ -17,8 +17,9 @@ if [[ -z "$BASE_REF" ]]; then
 fi
 
 CHANGED_FILES=$(git diff --name-only "$BASE_REF" "$HEAD_REF")
+SCHEMA_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^schemas/.*\.json$' || true)
 
-if ! echo "$CHANGED_FILES" | grep -qE '^schemas/'; then
+if [[ -z "$SCHEMA_CHANGES" ]]; then
   echo "No schema changes detected; contracts sync check skipped."
   exit 0
 fi

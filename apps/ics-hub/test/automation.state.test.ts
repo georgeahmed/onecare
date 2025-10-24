@@ -22,6 +22,7 @@ const baseConfig: AutomationTriggerConfig = {
         priority: 'ROUTINE',
         owner: 'automation',
       },
+      debounceWindowSeconds: 600,
     },
   ],
 };
@@ -62,15 +63,15 @@ function createContext(): IcsContext {
 }
 
 function createIdempotencyStore(): IdempotencyStore {
-  const keys = new Map<string, boolean>();
+  const keys = new Map<string, number>();
   return {
     exists: async (key: string) => keys.has(key),
-    put: async (key: string) => {
-      keys.set(key, true);
+    put: async (key: string, ttlSeconds: number) => {
+      keys.set(key, ttlSeconds);
     },
-    reserve: async (key: string) => {
+    reserve: async (key: string, ttlSeconds: number) => {
       if (keys.has(key)) return 'exists';
-      keys.set(key, true);
+      keys.set(key, ttlSeconds);
       return 'reserved';
     },
     delete: async (key: string) => {
@@ -103,9 +104,11 @@ describe('evaluateAutomation helper', () => {
     });
 
     expect(ctx.automationIntents).toHaveLength(1);
-    expect(ctx.automationTasks).toHaveLength(1);
-    expect(ctx.correlationId).toBe('corr-override');
-    expect(ctx.automationConfig?.rules[0].name).toBe('repeat-followup');
+   expect(ctx.automationTasks).toHaveLength(1);
+   expect(ctx.correlationId).toBe('corr-override');
+   expect(ctx.automationConfig?.rules[0].name).toBe('repeat-followup');
+    expect(ctx.automationPublishIdempotencyKey).toContain('task-123');
+    expect(ctx.idempotencyTtlSeconds).toBeGreaterThanOrEqual(600);
   });
 
   it('returns empty array when rules do not match', () => {

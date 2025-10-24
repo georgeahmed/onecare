@@ -4,5 +4,5 @@ export interface BookingSearchRequest {
   serviceType: string;
   windowStart: string;
   windowEnd: string;
-  location?: string;
+  location: string;
 }

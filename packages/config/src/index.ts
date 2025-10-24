@@ -4,17 +4,45 @@ import { parse as parseYaml } from 'yaml';
 
 export interface CoreHours { start: string; end: string }
 
+export interface SafetyGateShadowConfig {
+  enabled: boolean;
+  endpoint?: string;
+  sampleRate: number;
+  variant?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  auditEvent: string;
+}
+
 export interface SafetyGateConfig {
   red_flag_threshold?: number;
   emergency_confidence?: number;
   acuity_threshold_emergency?: number;
   timeout_ms?: number;
   fallback?: 'rules' | 'none';
+  shadow?: SafetyGateShadowConfig;
   [key: string]: unknown;
 }
 
 export interface IdempotencyConfig {
   ttlSeconds: number;
+}
+
+export interface TokenBucketRateLimitConfig {
+  capacity: number;
+  refillPerSecond: number;
+  ttlSeconds: number;
+  maxEntries: number;
+}
+
+export interface AccessGateRateLimitConfig {
+  tenant: TokenBucketRateLimitConfig;
+  account: TokenBucketRateLimitConfig;
+}
+
+export interface AccessGateConfig {
+  rateLimit: AccessGateRateLimitConfig;
 }
 
 export interface CpcsRetryConfig {
@@ -32,6 +60,10 @@ export interface CpcsCircuitBreakerConfig {
 export interface CpcsSlotlessFallbackConfig {
   enabled?: boolean;
   auditReason?: string;
+}
+
+export interface BookingConfig {
+  availabilityTimeoutMs: number;
 }
 
 export interface IcsTlsConfig {
@@ -115,15 +147,73 @@ export interface CpcsConfig {
   correlationHeader?: string;
 }
 
+export interface TriageFallbackConfig {
+  enabled: boolean;
+  timeBudgetMs: number;
+  scoreDeltaTolerance: number;
+  maxReasons: number;
+}
+
+export interface TelephonyAudioConfig {
+  retention_days?: number;
+  retention_seconds?: number;
+  content_type?: string;
+}
+
+export interface TelephonyAsrConfig {
+  endpoint?: string;
+  timeout_ms?: number;
+  max_retries?: number;
+  base_delay_ms?: number;
+  host_allowlist?: string[];
+  cb_failure_threshold?: number;
+  cb_cooldown_ms?: number;
+  lang_detect?: boolean;
+  diarization?: boolean;
+}
+
+export interface TelephonyCallbackWindow {
+  code: string;
+  label?: string;
+}
+
+export interface TelephonyRateLimitConfig {
+  caller?: TokenBucketRateLimitConfig;
+  practice?: TokenBucketRateLimitConfig;
+}
+
+export interface TelephonyConcurrencyConfig {
+  max_concurrent_transcriptions?: number;
+}
+
+export interface TelephonyConfig {
+  ivr_intent_classifier?: string;
+  max_callback_retries?: number;
+  emergency_transfer_enabled?: boolean;
+  audio?: TelephonyAudioConfig;
+  asr?: TelephonyAsrConfig;
+  callback_windows_by_priority?: Record<string, TelephonyCallbackWindow[]>;
+  rate_limit?: TelephonyRateLimitConfig;
+  concurrency?: TelephonyConcurrencyConfig;
+  [key: string]: unknown;
+}
+
 export interface ResolvedConfig {
   practiceId: string;
   core_hours?: CoreHours;
   safety_gate?: SafetyGateConfig;
   idempotency?: IdempotencyConfig;
+  booking?: BookingConfig;
   cpcs?: CpcsConfig;
   ics?: IcsConfig;
   billing?: BillingConfig;
   pharmacy?: PharmacyConfig;
+  triage?: Record<string, unknown>;
+  red_flag_set?: string[];
+  red_flag_source?: string;
+  triageFallback?: TriageFallbackConfig;
+  access_gate?: AccessGateConfig;
+  telephony?: TelephonyConfig;
   [key: string]: unknown;
 }
 
@@ -159,6 +249,7 @@ const GLOBAL_CONFIG_FILENAME = 'global.yaml';
 const PRACTICES_DIR = 'practices';
 const PCN_DIR = 'pcn';
 const ICS_DIR = 'ics';
+const RED_FLAGS_DIR = 'red_flags';
 const METADATA_KEY = '__meta';
 const ARRAY_MERGE_KEY = 'arrayMerge';
 
@@ -175,10 +266,52 @@ const SAFETY_GATE_ACUITY_EMERGENCY_DEFAULT = 0.75;
 const SAFETY_GATE_ACUITY_EMERGENCY_MIN = 0.6;
 const SAFETY_GATE_ACUITY_EMERGENCY_MAX = 0.97;
 const SAFETY_GATE_FALLBACK_DEFAULT: SafetyGateConfig['fallback'] = 'rules';
+const DEFAULT_RED_FLAG_SOURCE = 'core';
+
+const TRIAGE_FALLBACK_ENABLED_DEFAULT = true;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_DEFAULT = 120;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_MIN = 20;
+const TRIAGE_FALLBACK_TIME_BUDGET_MS_MAX = 1_000;
+const TRIAGE_FALLBACK_SCORE_DELTA_DEFAULT = 0.15;
+const TRIAGE_FALLBACK_SCORE_DELTA_MIN = 0.01;
+const TRIAGE_FALLBACK_SCORE_DELTA_MAX = 0.5;
+const TRIAGE_FALLBACK_MAX_REASONS_DEFAULT = 5;
+const TRIAGE_FALLBACK_MAX_REASONS_MIN = 1;
+const TRIAGE_FALLBACK_MAX_REASONS_MAX = 10;
 
 const IDEMPOTENCY_TTL_DEFAULT = 600;
 const IDEMPOTENCY_TTL_MIN = 30;
 const IDEMPOTENCY_TTL_MAX = 86_400;
+
+const BOOKING_AVAILABILITY_TIMEOUT_DEFAULT = 2_000;
+const BOOKING_AVAILABILITY_TIMEOUT_MIN = 200;
+const BOOKING_AVAILABILITY_TIMEOUT_MAX = 10_000;
+
+const ACCESS_GATE_TENANT_CAPACITY_DEFAULT = 120;
+const ACCESS_GATE_TENANT_CAPACITY_MIN = 10;
+const ACCESS_GATE_TENANT_CAPACITY_MAX = 10_000;
+const ACCESS_GATE_TENANT_REFILL_DEFAULT = 2;
+const ACCESS_GATE_TENANT_REFILL_MIN = 0.1;
+const ACCESS_GATE_TENANT_REFILL_MAX = 1_000;
+const ACCESS_GATE_TENANT_TTL_DEFAULT = 600;
+const ACCESS_GATE_TENANT_TTL_MIN = 60;
+const ACCESS_GATE_TENANT_TTL_MAX = 3_600;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_DEFAULT = 2_000;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_MIN = 10;
+const ACCESS_GATE_TENANT_MAX_ENTRIES_MAX = 200_000;
+
+const ACCESS_GATE_ACCOUNT_CAPACITY_DEFAULT = 12;
+const ACCESS_GATE_ACCOUNT_CAPACITY_MIN = 1;
+const ACCESS_GATE_ACCOUNT_CAPACITY_MAX = 2_000;
+const ACCESS_GATE_ACCOUNT_REFILL_DEFAULT = 0.3;
+const ACCESS_GATE_ACCOUNT_REFILL_MIN = 0.05;
+const ACCESS_GATE_ACCOUNT_REFILL_MAX = 200;
+const ACCESS_GATE_ACCOUNT_TTL_DEFAULT = 600;
+const ACCESS_GATE_ACCOUNT_TTL_MIN = 60;
+const ACCESS_GATE_ACCOUNT_TTL_MAX = 3_600;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_DEFAULT = 10_000;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MIN = 100;
+const ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MAX = 500_000;
 
 export interface MergeConfigOptions {
   arrayStrategies?: StrategyMap;
@@ -376,6 +509,82 @@ function parseTtl(value: unknown): number | undefined {
   return undefined;
 }
 
+function applySafetyGateShadowConfig(raw: unknown): SafetyGateShadowConfig | undefined {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  const envEnabled = parseBooleanish(
+    process.env.SAFETY_GATE_SHADOW_ENABLED ?? process.env.SAFETY_GATE_SHADOW ?? process.env.SHADOW_MODE,
+  );
+  const configEnabled = parseBooleanish(source?.enabled ?? source?.mode);
+  const enabled = envEnabled ?? configEnabled ?? false;
+
+  const sampleRateCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_SAMPLE_RATE ??
+      process.env.SAFETY_GATE_SHADOW_FRACTION ??
+      process.env.SAFETY_GATE_SHADOW_PERCENT ??
+      source?.sampleRate ??
+      source?.sample_rate ??
+      source?.fraction ??
+      source?.traffic_fraction,
+  );
+  const normalisedSampleRate = sampleRateCandidate !== undefined ? clamp(sampleRateCandidate, 0, 1) : undefined;
+
+  const endpoint = pickString(
+    process.env.PY_SAFETY_GATE_SHADOW_URL,
+    source?.endpoint,
+    source?.url,
+    source?.baseUrl,
+    source?.base_url,
+  );
+
+  const variant = pickString(
+    process.env.SAFETY_GATE_SHADOW_VARIANT,
+    source?.variant,
+    source?.modelVariant,
+    source?.model_variant,
+  );
+
+  const timeoutCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_TIMEOUT_MS ?? source?.timeoutMs ?? source?.timeout_ms ?? source?.timeout,
+  );
+  const timeoutMs =
+    timeoutCandidate !== undefined ? clamp(timeoutCandidate, SAFETY_GATE_TIMEOUT_MIN, SAFETY_GATE_TIMEOUT_MAX) : undefined;
+
+  const maxRetriesCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_MAX_RETRIES ?? source?.maxRetries ?? source?.max_retries,
+  );
+  const maxRetries =
+    maxRetriesCandidate !== undefined ? Math.max(0, Math.min(Math.round(maxRetriesCandidate), 3)) : undefined;
+
+  const baseDelayCandidate = parseNumberish(
+    process.env.SAFETY_GATE_SHADOW_BASE_DELAY_MS ?? source?.baseDelayMs ?? source?.base_delay_ms,
+  );
+  const baseDelayMs = baseDelayCandidate !== undefined ? Math.max(0, Math.min(baseDelayCandidate, 2_000)) : undefined;
+
+  const auditEvent =
+    pickString(source?.auditEvent, source?.audit_event, process.env.SAFETY_GATE_SHADOW_AUDIT_EVENT) ??
+    'orchestrator.safety.shadow';
+
+  const activeSampleRate = normalisedSampleRate ?? (enabled ? 1 : 0);
+
+  if (!enabled || activeSampleRate <= 0) {
+    return undefined;
+  }
+
+  const shadow: SafetyGateShadowConfig = {
+    enabled: true,
+    endpoint,
+    sampleRate: clamp(activeSampleRate, 0, 1),
+    variant,
+    timeoutMs,
+    maxRetries,
+    baseDelayMs,
+    auditEvent,
+  };
+
+  return shadow;
+}
+
 function applySafetyGatePolicies(raw?: SafetyGateConfig): SafetyGateConfig {
   const working: SafetyGateConfig & Record<string, unknown> = { ...(raw ?? {}) };
   const timeout = typeof working.timeout_ms === 'number'
@@ -410,6 +619,13 @@ function applySafetyGatePolicies(raw?: SafetyGateConfig): SafetyGateConfig {
   }
   working.acuity_threshold_emergency = acuity;
 
+  const shadow = applySafetyGateShadowConfig(working.shadow);
+  if (shadow) {
+    working.shadow = shadow;
+  } else {
+    delete working.shadow;
+  }
+
   return working;
 }
 
@@ -420,6 +636,154 @@ function applyIdempotencyConfig(raw: unknown): IdempotencyConfig {
   let ttl = envOverride ?? configValue ?? IDEMPOTENCY_TTL_DEFAULT;
   ttl = clamp(ttl, IDEMPOTENCY_TTL_MIN, IDEMPOTENCY_TTL_MAX);
   return { ttlSeconds: ttl };
+}
+
+function applyBookingConfig(raw: unknown): BookingConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+  const envOverride = parseNumberish(process.env.BOOKING_AVAILABILITY_TIMEOUT_MS);
+  const configValue = parseNumberish(
+    source?.availabilityTimeoutMs ?? source?.availability_timeout_ms
+  );
+  let timeout = envOverride ?? configValue ?? BOOKING_AVAILABILITY_TIMEOUT_DEFAULT;
+  timeout = clamp(timeout, BOOKING_AVAILABILITY_TIMEOUT_MIN, BOOKING_AVAILABILITY_TIMEOUT_MAX);
+  return { availabilityTimeoutMs: timeout };
+}
+
+interface TokenBucketBounds {
+  capacityMin: number;
+  capacityMax: number;
+  refillMin: number;
+  refillMax: number;
+  ttlMin: number;
+  ttlMax: number;
+  maxEntriesMin: number;
+  maxEntriesMax: number;
+}
+
+function applyTokenBucketConfig(
+  raw: unknown,
+  defaults: TokenBucketRateLimitConfig,
+  bounds: TokenBucketBounds,
+): TokenBucketRateLimitConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  const capacityCandidate = parseNumberish(
+    readRecordValue(source, 'capacity') ??
+      readRecordValue(source, 'burst') ??
+      readRecordValue(source, 'maxTokens') ??
+      readRecordValue(source, 'max_tokens'),
+  );
+  let capacity =
+    capacityCandidate !== undefined && Number.isFinite(capacityCandidate)
+      ? Number(capacityCandidate)
+      : defaults.capacity;
+  if (!Number.isFinite(capacity)) capacity = defaults.capacity;
+  capacity = clamp(capacity, bounds.capacityMin, bounds.capacityMax);
+  capacity = Math.max(bounds.capacityMin, Math.floor(capacity));
+
+  const refillCandidate = parseNumberish(
+    readRecordValue(source, 'refillPerSecond') ??
+      readRecordValue(source, 'refill_per_second') ??
+      readRecordValue(source, 'tokensPerSecond') ??
+      readRecordValue(source, 'tokens_per_second') ??
+      readRecordValue(source, 'ratePerSecond') ??
+      readRecordValue(source, 'rate_per_second') ??
+      readRecordValue(source, 'rate'),
+  );
+  let refill =
+    refillCandidate !== undefined && Number.isFinite(refillCandidate)
+      ? Number(refillCandidate)
+      : defaults.refillPerSecond;
+  if (!Number.isFinite(refill)) refill = defaults.refillPerSecond;
+  refill = clamp(refill, bounds.refillMin, bounds.refillMax);
+
+  const ttlCandidate = parseNumberish(
+    readRecordValue(source, 'ttlSeconds') ?? readRecordValue(source, 'ttl_seconds') ?? readRecordValue(source, 'ttl'),
+  );
+  let ttl =
+    ttlCandidate !== undefined && Number.isFinite(ttlCandidate) ? Number(ttlCandidate) : defaults.ttlSeconds;
+  if (!Number.isFinite(ttl)) ttl = defaults.ttlSeconds;
+  ttl = clamp(ttl, bounds.ttlMin, bounds.ttlMax);
+  ttl = Math.max(bounds.ttlMin, Math.round(ttl));
+
+  const maxEntriesCandidate = parseNumberish(
+    readRecordValue(source, 'maxEntries') ??
+      readRecordValue(source, 'max_entries') ??
+      readRecordValue(source, 'cacheSize') ??
+      readRecordValue(source, 'cache_size'),
+  );
+  let maxEntries =
+    maxEntriesCandidate !== undefined && Number.isFinite(maxEntriesCandidate)
+      ? Number(maxEntriesCandidate)
+      : defaults.maxEntries;
+  if (!Number.isFinite(maxEntries)) maxEntries = defaults.maxEntries;
+  maxEntries = clamp(maxEntries, bounds.maxEntriesMin, bounds.maxEntriesMax);
+  maxEntries = Math.max(bounds.maxEntriesMin, Math.round(maxEntries));
+
+  return {
+    capacity,
+    refillPerSecond: refill,
+    ttlSeconds: ttl,
+    maxEntries,
+  };
+}
+
+function applyAccessGateConfig(raw: unknown): AccessGateConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+  const rateLimitSource: Record<string, unknown> =
+    (isPlainObject(source?.rateLimit) ? (source?.rateLimit as Record<string, unknown>) : undefined) ??
+    (isPlainObject(source?.rate_limit) ? (source?.rate_limit as Record<string, unknown>) : undefined) ??
+    (source ?? {});
+
+  const tenantDefaults: TokenBucketRateLimitConfig = {
+    capacity: ACCESS_GATE_TENANT_CAPACITY_DEFAULT,
+    refillPerSecond: ACCESS_GATE_TENANT_REFILL_DEFAULT,
+    ttlSeconds: ACCESS_GATE_TENANT_TTL_DEFAULT,
+    maxEntries: ACCESS_GATE_TENANT_MAX_ENTRIES_DEFAULT,
+  };
+  const accountDefaults: TokenBucketRateLimitConfig = {
+    capacity: ACCESS_GATE_ACCOUNT_CAPACITY_DEFAULT,
+    refillPerSecond: ACCESS_GATE_ACCOUNT_REFILL_DEFAULT,
+    ttlSeconds: ACCESS_GATE_ACCOUNT_TTL_DEFAULT,
+    maxEntries: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_DEFAULT,
+  };
+
+  const tenant = applyTokenBucketConfig(
+    readRecordValue(rateLimitSource, 'tenant'),
+    tenantDefaults,
+    {
+      capacityMin: ACCESS_GATE_TENANT_CAPACITY_MIN,
+      capacityMax: ACCESS_GATE_TENANT_CAPACITY_MAX,
+      refillMin: ACCESS_GATE_TENANT_REFILL_MIN,
+      refillMax: ACCESS_GATE_TENANT_REFILL_MAX,
+      ttlMin: ACCESS_GATE_TENANT_TTL_MIN,
+      ttlMax: ACCESS_GATE_TENANT_TTL_MAX,
+      maxEntriesMin: ACCESS_GATE_TENANT_MAX_ENTRIES_MIN,
+      maxEntriesMax: ACCESS_GATE_TENANT_MAX_ENTRIES_MAX,
+    },
+  );
+
+  const account = applyTokenBucketConfig(
+    readRecordValue(rateLimitSource, 'account'),
+    accountDefaults,
+    {
+      capacityMin: ACCESS_GATE_ACCOUNT_CAPACITY_MIN,
+      capacityMax: ACCESS_GATE_ACCOUNT_CAPACITY_MAX,
+      refillMin: ACCESS_GATE_ACCOUNT_REFILL_MIN,
+      refillMax: ACCESS_GATE_ACCOUNT_REFILL_MAX,
+      ttlMin: ACCESS_GATE_ACCOUNT_TTL_MIN,
+      ttlMax: ACCESS_GATE_ACCOUNT_TTL_MAX,
+      maxEntriesMin: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MIN,
+      maxEntriesMax: ACCESS_GATE_ACCOUNT_MAX_ENTRIES_MAX,
+    },
+  );
+
+  return {
+    rateLimit: {
+      tenant,
+      account,
+    },
+  };
 }
 
 function parseHeadersRecord(raw: unknown): Record<string, string> {
@@ -732,6 +1096,48 @@ function applyPharmacyConfig(raw: unknown): PharmacyConfig | undefined {
   const config: PharmacyConfig = {};
   if (ruleset) config.eligibility = ruleset;
   return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function applyTriageFallbackConfig(raw: unknown): TriageFallbackConfig {
+  const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
+
+  let enabled = TRIAGE_FALLBACK_ENABLED_DEFAULT;
+  if (source && typeof source.enabled === 'boolean') {
+    enabled = source.enabled;
+  } else if (source && typeof source.mode === 'string') {
+    enabled = source.mode.trim().toLowerCase() !== 'none';
+  }
+
+  const rawBudget =
+    source && source.time_budget_ms !== undefined ? Number(source.time_budget_ms) : Number(source?.timeBudgetMs);
+  let timeBudget =
+    rawBudget !== undefined && Number.isFinite(rawBudget) ? Number(rawBudget) : TRIAGE_FALLBACK_TIME_BUDGET_MS_DEFAULT;
+  timeBudget = clamp(timeBudget, TRIAGE_FALLBACK_TIME_BUDGET_MS_MIN, TRIAGE_FALLBACK_TIME_BUDGET_MS_MAX);
+
+  const rawDelta =
+    source && source.score_delta_tolerance !== undefined
+      ? Number(source.score_delta_tolerance)
+      : Number(source?.scoreDeltaTolerance);
+  let scoreDelta =
+    rawDelta !== undefined && Number.isFinite(rawDelta) ? Number(rawDelta) : TRIAGE_FALLBACK_SCORE_DELTA_DEFAULT;
+  scoreDelta = clamp(scoreDelta, TRIAGE_FALLBACK_SCORE_DELTA_MIN, TRIAGE_FALLBACK_SCORE_DELTA_MAX);
+
+  const rawMaxReasons =
+    source && source.max_reasons !== undefined
+      ? Number(source.max_reasons)
+      : Number(source?.maxReasons ?? source?.max_reason_count);
+  let maxReasons =
+    rawMaxReasons !== undefined && Number.isFinite(rawMaxReasons)
+      ? Math.floor(Number(rawMaxReasons))
+      : TRIAGE_FALLBACK_MAX_REASONS_DEFAULT;
+  maxReasons = clamp(maxReasons, TRIAGE_FALLBACK_MAX_REASONS_MIN, TRIAGE_FALLBACK_MAX_REASONS_MAX);
+
+  return {
+    enabled,
+    timeBudgetMs: timeBudget,
+    scoreDeltaTolerance: scoreDelta,
+    maxReasons,
+  };
 }
 
 function parsePharmacyEligibilityRuleset(raw: unknown): PharmacyEligibilityRuleset | undefined {
@@ -1126,8 +1532,23 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   resolved.ics = applyIcsConfig(icsRaw);
   const billingRaw = (mergedConfig as Record<string, unknown>).billing ?? resolved.billing;
   resolved.billing = applyBillingConfig(billingRaw);
+  const bookingRaw = (mergedConfig as Record<string, unknown>).booking ?? resolved.booking;
+  resolved.booking = applyBookingConfig(bookingRaw);
   const pharmacyRaw = (mergedConfig as Record<string, unknown>).pharmacy ?? resolved.pharmacy;
   resolved.pharmacy = applyPharmacyConfig(pharmacyRaw);
+  const accessGateRaw = (mergedConfig as Record<string, unknown>).access_gate ?? resolved.access_gate;
+  resolved.access_gate = applyAccessGateConfig(accessGateRaw);
+  const triageRaw = (mergedConfig as Record<string, unknown>).triage;
+  const triageSection =
+    triageRaw && isPlainObject(triageRaw)
+      ? { ...(triageRaw as Record<string, unknown>) }
+      : resolved.triage && typeof resolved.triage === 'object'
+        ? { ...(resolved.triage as Record<string, unknown>) }
+        : {};
+  const fallbackConfig = applyTriageFallbackConfig(triageSection.fallback);
+  resolved.triageFallback = fallbackConfig;
+  triageSection.fallback = fallbackConfig;
+  resolved.triage = triageSection;
 
   if (pcnId || icsId || mergedSources.length > 0) {
     const lineage: Record<string, unknown> = {};
@@ -1145,5 +1566,68 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
     resolved._lineage = lineage;
   }
 
+  resolveRedFlagSet(resolved, mergedConfig as Record<string, unknown>, configRoot);
+
   return resolved;
+}
+
+function resolveRedFlagSet(resolved: ResolvedConfig, mergedConfig: Record<string, unknown>, configRoot: string): void {
+  const rawSource = (mergedConfig.red_flag_source ?? resolved.red_flag_source) as unknown;
+  const sourceId = typeof rawSource === 'string' && rawSource.trim().length > 0 ? rawSource.trim() : DEFAULT_RED_FLAG_SOURCE;
+  const base = loadRedFlagSource(configRoot, sourceId);
+
+  const rawExtras = mergedConfig.red_flag_set;
+  const extras = Array.isArray(rawExtras) ? toStringList(rawExtras) : [];
+  const combined = dedupeStrings([...base, ...extras]);
+
+  resolved.red_flag_source = sourceId;
+  resolved.red_flag_set = combined;
+}
+
+function loadRedFlagSource(configRoot: string, sourceId: string): string[] {
+  const filenameJson = join(configRoot, RED_FLAGS_DIR, `${sourceId}.json`);
+  const filenameYaml = join(configRoot, RED_FLAGS_DIR, `${sourceId}.yaml`);
+  if (existsSync(filenameJson)) {
+    const raw = readFileSync(filenameJson, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`red_flag_source_invalid:${sourceId}`);
+    }
+    return dedupeStrings(toStringList(parsed));
+  }
+  if (existsSync(filenameYaml)) {
+    const parsed = parseYaml(readFileSync(filenameYaml, 'utf8'));
+    if (!Array.isArray(parsed)) {
+      throw new Error(`red_flag_source_invalid:${sourceId}`);
+    }
+    return dedupeStrings(toStringList(parsed));
+  }
+  throw new Error(`red_flag_source_missing:${sourceId}`);
+}
+
+function toStringList(values: Iterable<unknown>): string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        result.push(trimmed.toLowerCase());
+      }
+    }
+  }
+  return result;
+}
+
+function dedupeStrings(values: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const key = value.trim().toLowerCase();
+    if (!key) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(key);
+    }
+  }
+  return result;
 }

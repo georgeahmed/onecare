@@ -17,20 +17,20 @@ choose_python() {
     if ! command -v "${candidate}" >/dev/null 2>&1; then
       continue
     fi
-    if "${candidate}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    if "${candidate}" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info < (3, 13) else 1)' >/dev/null 2>&1; then
       PYTHON_BIN="${candidate}"
       return 0
     fi
   done
 
-  echo "error: Python 3.10+ interpreter not found. Set PYTHON_BIN to a 3.10+ executable." >&2
+  echo "error: Python 3.10–3.12 interpreter not found. Set PYTHON_BIN to a supported executable." >&2
   exit 1
 }
 
 choose_python
 
 if [ -x "${VENV_DIR}/bin/python" ]; then
-  if ! "${VENV_DIR}/bin/python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+  if ! "${VENV_DIR}/bin/python" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info < (3, 13) else 1)' >/dev/null 2>&1; then
     rm -rf "${VENV_DIR}"
   fi
 fi

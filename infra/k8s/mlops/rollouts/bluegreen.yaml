@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-gate-green
+  labels:
+    app: safety-gate
+    rollout.onecare.io/color: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: safety-gate
+      version: green
+  template:
+    metadata:
+      labels:
+        app: safety-gate
+        version: green
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: safety-gate
+          image: ghcr.io/onecare/safety-gate:1.12.0
+          ports:
+            - containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+              readOnly: false
+          envFrom:
+            - configMapRef:
+                name: safety-gate-config
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-gate-blue
+  labels:
+    app: safety-gate
+    rollout.onecare.io/color: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: safety-gate
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: safety-gate
+        version: blue
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: safety-gate
+          image: ghcr.io/onecare/safety-gate:1.11.3
+          ports:
+            - containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+              readOnly: false
+          envFrom:
+            - configMapRef:
+                name: safety-gate-config
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-gate-entry
+  annotations:
+    run.onecare.io/rollout-mode: bluegreen
+spec:
+  type: ClusterIP
+  selector:
+    app: safety-gate
+    version: green
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: safety-gate
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: safety-gate.staging.onecare.cloud
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: safety-gate-entry
+                port:
+                  number: 80

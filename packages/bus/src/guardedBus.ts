@@ -1,18 +1,27 @@
 import type { Handler, Message, MessageBus, Subscription } from './types';
+import type { IdempotencyStore } from '@onecare/ports';
+import { executeWithIdempotency } from '@onecare/ports';
 
 const GUARDED_SYMBOL = Symbol.for('onecare.bus.guarded');
 const CORRELATION_HEADER = 'x-correlation-id';
+const MESSAGE_ID_HEADER = 'x-message-id';
 
 export interface MessageBusGuardOptions {
   allowedTopics: Iterable<string>;
   enforceEnvelope?: boolean;
   requireCorrelationHeader?: boolean;
+  idempotencyStore?: IdempotencyStore | null;
+  idempotencyTtlSeconds?: number;
+  onDuplicate?: (message: Message) => Promise<void> | void;
 }
 
 interface NormalizedGuardOptions {
   allowedTopics: Set<string>;
   enforceEnvelope: boolean;
   requireCorrelationHeader: boolean;
+  idempotencyStore?: IdempotencyStore;
+  idempotencyTtlSeconds: number;
+  onDuplicate?: (message: Message) => Promise<void> | void;
 }
 
 interface EnvelopeCandidate {
@@ -47,6 +56,29 @@ class GuardedMessageBus implements MessageBus {
     this.assertAllowedTopic(topic);
     return this.inner.subscribe(topic, async (message) => {
       const normalized = this.normalizeIncoming(message);
+      if (!normalized) {
+        return;
+      }
+      if (this.options.idempotencyStore) {
+        const key = buildIdempotencyKey(topic, normalized);
+        if (!key) {
+          await handler(normalized as Message<T>);
+          return;
+        }
+        await executeWithIdempotency({
+          store: this.options.idempotencyStore,
+          key,
+          ttlSeconds: this.options.idempotencyTtlSeconds,
+          execute: async () => {
+            await handler(normalized as Message<T>);
+            return true as const;
+          },
+          onDuplicate: async () => {
+            await Promise.resolve(this.options.onDuplicate?.(normalized));
+          },
+        });
+        return;
+      }
       await handler(normalized as Message<T>);
     });
   }
@@ -62,7 +94,7 @@ class GuardedMessageBus implements MessageBus {
       return { payload, headers };
     }
     const envelope = this.assertEnvelope(payload as EnvelopeCandidate, topic, 'publish');
-    const normalizedHeaders = this.ensureHeaders(envelope.correlationId, headers, false);
+    const normalizedHeaders = this.ensureHeaders(envelope, headers, false);
     return { payload, headers: normalizedHeaders };
   }
 
@@ -72,7 +104,7 @@ class GuardedMessageBus implements MessageBus {
       return message;
     }
     const envelope = this.assertEnvelope(message.payload as EnvelopeCandidate, message.topic, 'subscribe');
-    const normalizedHeaders = this.ensureHeaders(envelope.correlationId, message.headers, true);
+    const normalizedHeaders = this.ensureHeaders(envelope, message.headers, true);
     if (normalizedHeaders === message.headers) {
       return message;
     }
@@ -118,16 +150,33 @@ class GuardedMessageBus implements MessageBus {
   }
 
   private ensureHeaders(
+    envelope: {
+      id: string;
+      correlationId?: string;
+    },
+    headers: Record<string, string> | undefined,
+    incoming: boolean
+  ): Record<string, string> | undefined {
+    const withCorrelation = this.ensureCorrelationHeader(envelope.correlationId, headers, incoming);
+    return this.ensureMessageIdHeader(envelope.id, withCorrelation, incoming);
+  }
+
+  private ensureCorrelationHeader(
     correlationId: string | undefined,
     headers: Record<string, string> | undefined,
     incoming: boolean
   ): Record<string, string> | undefined {
-    if (!this.options.requireCorrelationHeader || correlationId === undefined) {
+    if (!this.options.requireCorrelationHeader) {
       return headers;
+    }
+    if (correlationId === undefined) {
+      const phase = incoming ? 'incoming' : 'publish';
+      throw new Error(`[MessageBusGuard] envelope_correlation_missing (${phase})`);
     }
     const trimmed = correlationId.trim();
     if (trimmed.length === 0) {
-      return headers;
+      const phase = incoming ? 'incoming' : 'publish';
+      throw new Error(`[MessageBusGuard] envelope_correlation_missing (${phase})`);
     }
     if (!headers) {
       if (incoming) {
@@ -153,13 +202,45 @@ class GuardedMessageBus implements MessageBus {
     if (located.key === CORRELATION_HEADER) {
       return headers;
     }
-    // Existing header uses different casing. Preserve the original record shape to avoid surprises.
     if (incoming) {
       return headers;
     }
     const next = { ...headers };
     delete next[located.key];
     next[CORRELATION_HEADER] = trimmed;
+    return next;
+  }
+
+  private ensureMessageIdHeader(
+    messageId: string,
+    headers: Record<string, string> | undefined,
+    incoming: boolean
+  ): Record<string, string> | undefined {
+    const trimmed = messageId.trim();
+    if (!headers) {
+      return { [MESSAGE_ID_HEADER]: trimmed };
+    }
+    const located = findHeader(headers, MESSAGE_ID_HEADER);
+    if (located && located.value.length > 0 && located.value !== trimmed) {
+      throw new Error(
+        `[MessageBusGuard] message_id_mismatch: envelope=${trimmed} header=${String(located.value)}`
+      );
+    }
+    if (!located) {
+      return {
+        ...headers,
+        [MESSAGE_ID_HEADER]: trimmed,
+      };
+    }
+    if (located.key === MESSAGE_ID_HEADER) {
+      return headers;
+    }
+    if (incoming) {
+      return headers;
+    }
+    const next = { ...headers };
+    delete next[located.key];
+    next[MESSAGE_ID_HEADER] = trimmed;
     return next;
   }
 }
@@ -187,11 +268,39 @@ function normalizeOptions(options: MessageBusGuardOptions): NormalizedGuardOptio
   if (allowedTopics.size === 0) {
     throw new Error('[MessageBusGuard] allowedTopics must contain at least one topic');
   }
+  const ttlSeconds = normalizeTtlSeconds(options.idempotencyTtlSeconds);
   return {
     allowedTopics,
     enforceEnvelope: options.enforceEnvelope !== false,
     requireCorrelationHeader: options.requireCorrelationHeader !== false,
+    idempotencyStore: options.idempotencyStore ?? undefined,
+    idempotencyTtlSeconds: ttlSeconds,
+    onDuplicate: options.onDuplicate,
   };
+}
+
+function normalizeTtlSeconds(candidate: number | undefined): number {
+  if (!Number.isFinite(candidate) || candidate === undefined) {
+    return 600;
+  }
+  const parsed = Number(candidate);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 600;
+  }
+  return Math.min(86_400, Math.max(30, Math.floor(parsed)));
+}
+
+function buildIdempotencyKey(topic: string, message: Message): string | undefined {
+  const headers = message.headers ?? {};
+  const located = findHeader(headers, MESSAGE_ID_HEADER);
+  const fromHeader = located?.value?.trim();
+  const envelope = message.payload as EnvelopeCandidate;
+  const fallback = typeof envelope?.id === 'string' ? envelope.id.trim() : undefined;
+  const idCandidate = fromHeader && fromHeader.length > 0 ? fromHeader : fallback;
+  if (!idCandidate || idCandidate.length === 0) {
+    return undefined;
+  }
+  return `bus:${topic}:${idCandidate}`;
 }
 
 export function withMessageGuards(bus: MessageBus, options: MessageBusGuardOptions): MessageBus {
@@ -213,4 +322,3 @@ export function unwrapGuardedBus(bus: MessageBus): MessageBus {
   }
   return current;
 }
-

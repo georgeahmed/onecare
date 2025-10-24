@@ -163,7 +163,17 @@ def load_model_bundle(model_path: Optional[str] = None, meta_path: Optional[str]
     prototypes: dict[int, list[float]] = {}
     for label, vector in prototypes_raw.items():
         if isinstance(vector, Iterable):
-            prototypes[int(label)] = [float(value) for value in vector]
+            prototype_vector = [float(value) for value in vector]
+            prototypes[int(label)] = prototype_vector
+        else:
+            raise RuntimeError(f"Acuity model artifact contains non-iterable prototype for label {label}")
+
+    expected_dimension = EMBEDDING_SIZE + 4
+    for label, vector in prototypes.items():
+        if len(vector) != expected_dimension:
+            raise RuntimeError(
+                f"Acuity model prototype for label {label} has dimension {len(vector)}; expected {expected_dimension}"
+            )
 
     calibration = metadata.get("calibration", {})
     temperature = float(calibration.get("temperature", 1.0))
@@ -227,7 +237,9 @@ def _euclidean_distance(a: Sequence[float], b: Sequence[float]) -> float:
 def _emergency_score(distances: Mapping[int, float], prototypes: Mapping[int, Sequence[float]]) -> float:
     emergency_dist = distances.get(2)
     if emergency_dist is None:
-        return 0.0
+        if 2 not in prototypes:
+            raise RuntimeError("Acuity model artifact is missing emergency class prototype (label 2)")
+        raise RuntimeError("Emergency distance unavailable for acuity computation")
     other = [dist for label, dist in distances.items() if label != 2]
     other_dist = min(other) if other else emergency_dist + 1.0
     return other_dist - emergency_dist

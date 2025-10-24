@@ -1,0 +1,13 @@
+{
+  "status": 201,
+  "headers": {
+    "content-type": "application/fhir+json",
+    "Ssp-Version": "1.3.0"
+  },
+  "body": {
+    "appointmentId": "appt-409",
+    "slotId": "slot-409",
+    "start": "2025-10-20T09:30:00Z",
+    "end": "2025-10-20T09:45:00Z"
+  }
+}

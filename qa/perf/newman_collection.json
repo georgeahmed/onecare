@@ -1,0 +1,118 @@
+{
+  "info": {
+    "name": "OneCare Booking Smoke",
+    "_postman_id": "3f9c5f78-8f71-4f23-94bb-4d6de27b3163",
+    "description": "Synthetic smoke checks for the booking service (QA-01.14). Uses minimal payloads to exercise readiness and slot search endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const now = Date.now();",
+          "pm.variables.set('timestamp', String(now));",
+          "pm.variables.set('windowStart', new Date(now + 60 * 60 * 1000).toISOString());",
+          "pm.variables.set('windowEnd', new Date(now + 2 * 60 * 60 * 1000).toISOString());"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000"
+    },
+    {
+      "key": "correlationPrefix",
+      "value": "perf-smoke"
+    },
+    {
+      "key": "serviceType",
+      "value": "GP"
+    },
+    {
+      "key": "location",
+      "value": "org-demo"
+    }
+  ],
+  "item": [
+    {
+      "name": "Booking readiness",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-correlation-id",
+            "value": "{{correlationPrefix}}-ready-{{timestamp}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/readyz"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200 or 503', function () {",
+              "  pm.expect([200, 503]).to.include(pm.response.code);",
+              "});",
+              "pm.test('readyz under 500ms', function () {",
+              "  pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "console.log('[booking] readyz ms:', pm.response.responseTime);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Booking slot search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "x-correlation-id",
+            "value": "{{correlationPrefix}}-search-{{timestamp}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"serviceType\": \"{{serviceType}}\",\n  \"windowStart\": \"{{windowStart}}\",\n  \"windowEnd\": \"{{windowEnd}}\",\n  \"location\": \"{{location}}\"\n}"
+        },
+        "url": "{{baseUrl}}/booking/search"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('slot search status', function () {",
+              "  pm.expect([200, 202, 503]).to.include(pm.response.code);",
+              "});",
+              "pm.test('slot search under 1200ms', function () {",
+              "  pm.expect(pm.response.responseTime).to.be.below(1200);",
+              "});",
+              "pm.test('correlation echoed', function () {",
+              "  const responseCorr = pm.response.headers.get('x-correlation-id');",
+              "  pm.expect(responseCorr, 'response x-correlation-id header').to.exist;",
+              "  pm.expect(responseCorr).to.eql(pm.request.headers.get('x-correlation-id'));",
+              "});",
+              "console.log('[booking] search ms:', pm.response.responseTime);"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

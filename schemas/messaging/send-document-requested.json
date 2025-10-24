@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/messaging/send-document-requested.json",
+  "title": "SendDocumentRequested",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "pdfUrl": { "type": "string", "format": "uri" },
+    "compositionBundleRef": { "type": "string", "minLength": 1 },
+    "requestedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 }
+  },
+  "required": ["taskId", "patientId", "pdfUrl", "compositionBundleRef", "requestedAt"],
+  "additionalProperties": false
+}

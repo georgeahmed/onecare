@@ -1,0 +1,51 @@
+groups:
+  - name: telephony-slo
+    rules:
+      - alert: TelephonyIngressLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(telephony_http_duration_ms_bucket{path="/calls"}[10m])) by (le)
+          ) > 10000
+        for: 15m
+        labels:
+          severity: warning
+          slo: telephony-transcription
+          team: telephony
+          service: telephony
+        annotations:
+          summary: "Telephony transcription p95 >10s"
+          description: "Call ingestion latency exceeded 10 seconds (p95) for 15 minutes."
+          runbook: https://onecare/runbooks/oncall#telephony-ingress
+
+      - alert: TelephonyErrorRate
+        expr: |
+          sum(rate(telephony_http_requests_total{path="/calls",status=~"server_error|fatal_error"}[5m])) /
+          clamp_min(sum(rate(telephony_http_requests_total{path="/calls"}[5m])), 1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          slo: telephony-error
+          team: telephony
+          service: telephony
+        annotations:
+          summary: "Telephony server error rate >5%"
+          description: "Telephony ingress is returning server errors for more than 5% of requests over 10 minutes."
+          runbook: https://onecare/runbooks/oncall#telephony-ingress
+
+      - alert: TelephonyRateLimitSpike
+        expr: |
+          sum(rate(telephony_reject_total{reason=~"over_capacity|rate_limit"}[10m])) /
+          clamp_min(sum(rate(telephony_http_requests_total{path="/calls"}[10m])), 1)
+          > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          slo: telephony-backpressure
+          team: telephony
+          service: telephony
+        annotations:
+          summary: "Telephony ingress rejecting >10% of calls"
+          description: "Rejections due to over-capacity or rate limiting exceeded 10% of call attempts for 15 minutes."
+          runbook: https://onecare/runbooks/oncall#telephony-ingress

@@ -1,0 +1,14 @@
+[
+  {
+    "callId": "call-alpha-001",
+    "patientId": "patient-alpha",
+    "transcript": "Caller reports cough with mild fever, denies shortness of breath, requests same-day callback.",
+    "lang": "en"
+  },
+  {
+    "callId": "call-bravo-001",
+    "patientId": "patient-bravo",
+    "transcript": "Parent describes new rash on child, itching improving with cream, seeking nurse advice.",
+    "lang": "en"
+  }
+]

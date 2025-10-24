@@ -1,0 +1,25 @@
+{
+  "triage-core": {
+    "freshness": {
+      "maxAgeSeconds": 3600
+    },
+    "constraints": {
+      "acuity": { "type": "range", "min": 0, "max": 1 },
+      "risk": { "type": "range", "min": 0, "max": 1 },
+      "complexity": { "type": "range", "min": 0, "max": 1 },
+      "source": { "type": "domain", "values": ["triage-service", "backfill", "playback"] },
+      "generatedAt": { "type": "notNull" },
+      "sequence": { "type": "monotonic", "direction": "nondecreasing" }
+    }
+  },
+  "acuity-signal": {
+    "freshness": {
+      "maxAgeSeconds": 900
+    },
+    "constraints": {
+      "score": { "type": "range", "min": 0, "max": 1 },
+      "confidence": { "type": "range", "min": 0, "max": 1 },
+      "generatedAt": { "type": "notNull" }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "submissions": [
+    {"type": "local", "path": "var/exports/orchestrator/submissions"},
+    {"type": "s3", "bucket": "onecare-prod-exports", "prefix": "triage/submissions/2025-03/"}
+  ],
+  "safetyGate": [
+    {"type": "local", "glob": "var/exports/safety_gate/*.jsonl"}
+  ],
+  "clinician": [
+    {"type": "local", "path": "var/exports/clinician"}
+  ]
+}

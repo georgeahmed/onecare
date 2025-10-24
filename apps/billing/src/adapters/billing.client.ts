@@ -2,28 +2,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 import type { ResolvedConfig, BillingConfig, IcsTlsConfig } from '@onecare/config';
 import { createHistogram, createCounter, logger } from '@onecare/observability';
-
-export interface ClaimPayload {
-  claimId: string;
-  encounterId: string;
-  amount: number;
-  currency: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ClaimResponse {
-  claimId: string;
-  status: 'accepted' | 'pending' | 'rejected';
-  reason?: string;
-}
+import type { BillingClaim, BillingResponse } from '@onecare/events';
+import { assertValidBillingClaim, assertValidBillingResponse } from './contracts';
 
 export interface BillingCallOptions {
   correlationId?: string;
 }
 
 export interface BillingClient {
-  submitClaim(claim: ClaimPayload, options?: BillingCallOptions): Promise<ClaimResponse>;
-  getResponse(claimId: string, options?: BillingCallOptions): Promise<ClaimResponse>;
+  submitClaim(claim: BillingClaim, options?: BillingCallOptions): Promise<BillingResponse>;
+  getResponse(claimId: string, options?: BillingCallOptions): Promise<BillingResponse>;
 }
 
 export type BillingErrorCode =
@@ -77,8 +65,8 @@ export interface BillingCallContext {
   operation: 'claim' | 'response';
 }
 
-export type ClaimDispatcher = (claim: ClaimPayload, context: BillingCallContext) => Promise<ClaimResponse>;
-export type ResponseDispatcher = (claimId: string, context: BillingCallContext) => Promise<ClaimResponse>;
+export type ClaimDispatcher = (claim: BillingClaim, context: BillingCallContext) => Promise<BillingResponse>;
+export type ResponseDispatcher = (claimId: string, context: BillingCallContext) => Promise<BillingResponse>;
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 const DEFAULT_RETRY_POLICY: RetryPolicy = {
@@ -137,25 +125,31 @@ export class BillingHttpClient implements BillingClient {
     });
   }
 
-  async submitClaim(claim: ClaimPayload, options?: BillingCallOptions): Promise<ClaimResponse> {
+  async submitClaim(claim: BillingClaim, options?: BillingCallOptions): Promise<BillingResponse> {
     if (!claim?.claimId) {
       throw new BillingClientError('invalid_input', 'claimId is required');
     }
-    return this.executeWithGuard('claim', options, (context) => this.submitDispatcher(claim, context));
+    assertValidBillingClaim(claim);
+    const response = await this.executeWithGuard('claim', options, (context) => this.submitDispatcher(claim, context));
+    assertValidBillingResponse(response);
+    return response;
   }
 
-  async getResponse(claimId: string, options?: BillingCallOptions): Promise<ClaimResponse> {
+  async getResponse(claimId: string, options?: BillingCallOptions): Promise<BillingResponse> {
     if (!claimId || !claimId.trim()) {
       throw new BillingClientError('invalid_input', 'claimId is required');
     }
-    return this.executeWithGuard('response', options, (context) => this.responseDispatcher(claimId.trim(), context));
+    const cleanedId = claimId.trim();
+    const response = await this.executeWithGuard('response', options, (context) => this.responseDispatcher(cleanedId, context));
+    assertValidBillingResponse(response);
+    return response;
   }
 
   private async executeWithGuard(
     operation: 'claim' | 'response',
     options: BillingCallOptions | undefined,
-    executor: (context: BillingCallContext) => Promise<ClaimResponse>,
-  ): Promise<ClaimResponse> {
+    executor: (context: BillingCallContext) => Promise<BillingResponse>,
+  ): Promise<BillingResponse> {
     if (!this.circuitBreaker.canExecute()) {
       circuitOpenCounter.add(1, { operation });
       logger.warn('billing.circuit.open', { operation, correlationId: options?.correlationId });
@@ -267,7 +261,7 @@ function recordFailure(
   }
 }
 
-async function defaultSubmitDispatcher(claim: ClaimPayload, _context: BillingCallContext): Promise<ClaimResponse> {
+async function defaultSubmitDispatcher(claim: BillingClaim, _context: BillingCallContext): Promise<BillingResponse> {
   await delay(10);
   return {
     claimId: claim.claimId,
@@ -275,7 +269,7 @@ async function defaultSubmitDispatcher(claim: ClaimPayload, _context: BillingCal
   };
 }
 
-async function defaultResponseDispatcher(claimId: string, _context: BillingCallContext): Promise<ClaimResponse> {
+async function defaultResponseDispatcher(claimId: string, _context: BillingCallContext): Promise<BillingResponse> {
   await delay(5);
   return {
     claimId,
@@ -300,6 +294,9 @@ function buildHeaders(headers: Record<string, string>, apiKey?: string): Record<
   }
   if (!result['Content-Type']) {
     result['Content-Type'] = 'application/json';
+  }
+  if (!result.Accept) {
+    result.Accept = 'application/json';
   }
   return result;
 }

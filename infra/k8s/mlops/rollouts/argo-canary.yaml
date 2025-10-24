@@ -1,0 +1,121 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: safety-gate-rollout
+  labels:
+    app: safety-gate
+spec:
+  strategy:
+    canary:
+      canaryService: safety-gate-canary
+      stableService: safety-gate-stable
+      trafficRouting:
+        nginx:
+          stableIngress: safety-gate
+      steps:
+        - setWeight: 1
+        - pause:
+            duration: 5m
+        - analysis:
+            templates:
+              - templateName: safety-gate-latency
+        - setWeight: 5
+        - pause:
+            duration: 10m
+        - analysis:
+            templates:
+              - templateName: safety-gate-errors
+        - setWeight: 25
+        - pause:
+            duration: 15m
+        - setWeight: 50
+        - pause:
+            duration: 30m
+        - setWeight: 100
+  replicas: 4
+  revisionHistoryLimit: 4
+  selector:
+    matchLabels:
+      app: safety-gate
+  template:
+    metadata:
+      labels:
+        app: safety-gate
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: safety-gate
+          image: ghcr.io/onecare/safety-gate:1.12.0
+          ports:
+            - containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+              readOnly: false
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: safety-gate-latency
+spec:
+  metrics:
+    - name: p95-latency
+      interval: 60s
+      successCondition: result < 0.8
+      failureCondition: result > 0.85
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{service="safety-gate",role="canary"}[2m]))
+              by (le)
+            )
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: safety-gate-errors
+spec:
+  metrics:
+    - name: error-rate
+      interval: 60s
+      successCondition: result < 0.01
+      failureCondition: result > 0.02
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_requests_total{service="safety-gate",role="canary",code=~"5.."}[2m]))
+            /
+            sum(rate(http_requests_total{service="safety-gate",role="canary"}[2m]))

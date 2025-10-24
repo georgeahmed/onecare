@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
+import { isIP } from 'node:net';
 import type { ResolvedConfig, IcsConfig, IcsRouteConfig, IcsTlsConfig } from '@onecare/config';
 import { createHistogram, createCounter, logger, startSpan } from '@onecare/observability';
 import { SpanStatusCode } from '@opentelemetry/api';
@@ -26,9 +27,20 @@ export type IcsErrorCode =
   | 'unknown';
 
 export class IcsClientError extends Error {
-  constructor(public readonly code: IcsErrorCode, message: string, public readonly cause?: unknown) {
+  public readonly cause?: unknown;
+  public readonly retryAfterMs?: number;
+
+  constructor(
+    public readonly code: IcsErrorCode,
+    message: string,
+    options: { cause?: unknown; retryAfterMs?: number } = {},
+  ) {
     super(message);
     this.name = 'IcsClientError';
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -103,6 +115,13 @@ interface RouteOptionsResolved {
   correlationHeader: string;
   tls?: IcsTlsConfig;
   rateLimitPerMinute?: number;
+}
+
+interface RouteCredentialUpdate {
+  headers?: Record<string, string>;
+  apiKey?: string | null;
+  correlationHeader?: string;
+  tls?: IcsTlsConfig;
 }
 
 const DEFAULT_TIMEOUT_MS = 3_000;
@@ -180,12 +199,14 @@ function logFailure(
   code: IcsErrorCode,
   attempt: number,
   retrying: boolean,
+  extra: Record<string, unknown> = {},
 ): void {
   logger.warn('integration.call.failure', buildLogFields(operation, endpoint, correlationId, {
     code,
     attempt,
     retrying,
     result: 'failure',
+    ...extra,
   }));
 }
 
@@ -316,6 +337,17 @@ export class IcsHttpClient implements IcsClient {
     );
   }
 
+  refreshRouteCredentials(organisationId: string | 'default', update: RouteCredentialUpdate): void {
+    const target =
+      organisationId === 'default'
+        ? this.defaultRoute
+        : this.routes.get(normaliseOrgId(organisationId));
+    if (!target) {
+      throw new Error('ics_route_missing');
+    }
+    applyRouteCredentialUpdate(target, update);
+  }
+
   private async executeWithGuard(
     operation: 'referral' | 'ack',
     route: RouteState,
@@ -373,18 +405,21 @@ export class IcsHttpClient implements IcsClient {
         if (finalAttempt) {
           const durationMs = performance.now() - operationStart;
           recordFailureMetrics(operation, durationMs, mapped.code);
-          logFailure(operation, route.options.endpoint, correlationId, mapped.code, attempt, false);
+          const failureExtra = mapped.retryAfterMs !== undefined ? { retryAfterMs: mapped.retryAfterMs } : {};
+          logFailure(operation, route.options.endpoint, correlationId, mapped.code, attempt, false, failureExtra);
           span.recordException(mapped);
           span.setStatus({ code: SpanStatusCode.ERROR, message: mapped.message });
           span.end();
           throw mapped;
         }
         const nextAttempt = attempt + 1;
-        const delayMs = calculateDelay(route.options.retry, nextAttempt);
-        logRetry(operation, route.options.endpoint, correlationId, mapped.code, attempt, delayMs);
-        span.addEvent('retry', { attempt, delayMs, code: mapped.code });
+        const backoffDelayMs = calculateDelay(route.options.retry, nextAttempt);
+        const enforcedDelayMs =
+          mapped.retryAfterMs !== undefined ? Math.max(backoffDelayMs, mapped.retryAfterMs) : backoffDelayMs;
+        logRetry(operation, route.options.endpoint, correlationId, mapped.code, attempt, enforcedDelayMs);
+        span.addEvent('retry', { attempt, delayMs: enforcedDelayMs, code: mapped.code });
         attempt = nextAttempt;
-        await delay(delayMs);
+        await delay(enforcedDelayMs);
       }
     }
     const fallbackError = lastError ?? new IcsClientError('unknown', 'ICS request failed');
@@ -436,9 +471,10 @@ export class IcsHttpClient implements IcsClient {
     const mapped =
       error instanceof IcsClientError
         ? error
-        : new IcsClientError('upstream_unavailable', 'ICS request failed', error);
+        : new IcsClientError('upstream_unavailable', 'ICS request failed', { cause: error });
     recordFailureMetrics(operation, 0, mapped.code);
-    logFailure(operation, route.options.endpoint, correlationId, mapped.code, 0, false);
+    const failureExtra = mapped.retryAfterMs !== undefined ? { retryAfterMs: mapped.retryAfterMs } : {};
+    logFailure(operation, route.options.endpoint, correlationId, mapped.code, 0, false, failureExtra);
     const span = this.startCallSpan(operation, route, correlationId, organisationId);
     span.recordException(mapped);
     span.setStatus({ code: SpanStatusCode.ERROR, message: mapped.message });
@@ -503,9 +539,10 @@ function createRouteState(key: string, options: IcsRouteOptions): RouteState {
   const correlationHeader = typeof options.correlationHeader === 'string'
     ? options.correlationHeader.trim()
     : undefined;
+  const safeEndpoint = ensureSafeIcsEndpoint(options.endpoint);
   const resolved: RouteOptionsResolved = {
-    endpoint: options.endpoint,
-    headers: { ...(options.headers ?? {}) },
+    endpoint: safeEndpoint,
+    headers: sanitizeHeaders(options.headers),
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     retry: normalizeRetryPolicy(options.retry),
     circuitBreaker: normalizeCircuitPolicy(options.circuitBreaker),
@@ -573,43 +610,43 @@ async function withTimeout<T>(
 function mapProviderError(error: unknown): IcsClientError {
   if (error instanceof IcsClientError) return error;
   if (error instanceof Error && error.name === 'AbortError') {
-    return new IcsClientError('upstream_timeout', 'ICS request timed out', error);
+    return new IcsClientError('upstream_timeout', 'ICS request timed out', { cause: error });
   }
   const status = extractStatus(error);
   if (status !== undefined) {
     if (status === 400 || status === 422) {
-      return new IcsClientError('invalid_input', 'ICS rejected request', error);
+      return new IcsClientError('invalid_input', 'ICS rejected request', { cause: error });
     }
     if (status === 401 || status === 403) {
-      return new IcsClientError('forbidden', 'ICS authentication failed', error);
+      return new IcsClientError('forbidden', 'ICS authentication failed', { cause: error });
     }
     if (status === 408) {
-      return new IcsClientError('upstream_timeout', 'ICS request timed out', error);
+      return new IcsClientError('upstream_timeout', 'ICS request timed out', { cause: error });
     }
     if (status === 409) {
-      return new IcsClientError('conflict', 'ICS duplicate detected', error);
+      return new IcsClientError('conflict', 'ICS duplicate detected', { cause: error });
     }
     if (status === 429) {
-      return new IcsClientError('rate_limited', 'ICS rate limit exceeded', error);
+      return new IcsClientError('rate_limited', 'ICS rate limit exceeded', { cause: error });
     }
     if (status >= 500) {
-      return new IcsClientError('upstream_unavailable', 'ICS service unavailable', error);
+      return new IcsClientError('upstream_unavailable', 'ICS service unavailable', { cause: error });
     }
   }
   const code = (error as { code?: string }).code;
   if (typeof code === 'string') {
     const lowered = code.toLowerCase();
     if (lowered === 'etimedout') {
-      return new IcsClientError('upstream_timeout', 'ICS request timed out', error);
+      return new IcsClientError('upstream_timeout', 'ICS request timed out', { cause: error });
     }
     if (lowered === 'econnrefused' || lowered === 'ehostunreach') {
-      return new IcsClientError('upstream_unavailable', 'ICS service unavailable', error);
+      return new IcsClientError('upstream_unavailable', 'ICS service unavailable', { cause: error });
     }
     if (lowered.includes('rate') && lowered.includes('limit')) {
-      return new IcsClientError('rate_limited', 'ICS rate limit exceeded', error);
+      return new IcsClientError('rate_limited', 'ICS rate limit exceeded', { cause: error });
     }
   }
-  return new IcsClientError('internal_error', 'ICS request failed', error);
+  return new IcsClientError('internal_error', 'ICS request failed', { cause: error });
 }
 
 function extractStatus(error: unknown): number | undefined {
@@ -651,6 +688,105 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function sanitizeHeaders(headers?: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (headers) {
+    for (const [key, value] of Object.entries(headers)) {
+      if (typeof value !== 'string') continue;
+      const trimmedKey = key.trim();
+      const trimmedValue = value.trim();
+      if (!trimmedKey || !trimmedValue) continue;
+      result[trimmedKey] = trimmedValue;
+    }
+  }
+  if (!result['Content-Type']) {
+    result['Content-Type'] = 'application/json';
+  }
+  if (!result.Accept) {
+    result.Accept = 'application/json';
+  }
+  return result;
+}
+
+function applyRouteCredentialUpdate(route: RouteState, update: RouteCredentialUpdate): void {
+  if (update.headers || update.apiKey !== undefined) {
+    const headersSource = update.headers ? { ...update.headers } : { ...route.options.headers };
+    if (update.apiKey !== undefined) {
+      const trimmed = update.apiKey?.trim();
+      if (!trimmed) {
+        delete headersSource.Authorization;
+      } else {
+        headersSource.Authorization = trimmed.startsWith('Bearer ')
+          ? trimmed
+          : `Bearer ${trimmed}`;
+      }
+    }
+    route.options.headers = sanitizeHeaders(headersSource);
+  }
+  if (update.correlationHeader !== undefined) {
+    const trimmed = update.correlationHeader?.trim() ?? '';
+    route.options.correlationHeader = trimmed.length > 0 ? trimmed : DEFAULT_CORRELATION_HEADER;
+  }
+  if (update.tls !== undefined) {
+    route.options.tls = update.tls || undefined;
+  }
+}
+
+function ensureSafeIcsEndpoint(candidate: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new Error('ics_endpoint_missing');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('ics_endpoint_invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('ics_endpoint_insecure');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('ics_endpoint_credentials_not_allowed');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('ics_endpoint_extraneous');
+  }
+  if (isBlockedHostname(parsed.hostname)) {
+    throw new Error('ics_endpoint_blocked');
+  }
+  const normalisedPath = parsed.pathname.replace(/\/+$/u, '');
+  return `${parsed.origin}${normalisedPath === '' ? '' : normalisedPath}`;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const lower = hostname.trim().toLowerCase();
+  if (!lower) return true;
+  if (lower === 'localhost' || lower.endsWith('.localhost')) return true;
+  if (lower.endsWith('.local') || lower.endsWith('.internal')) return true;
+  if (lower === '0.0.0.0') return true;
+  if (lower === '::1') return true;
+  const ipType = isIP(lower);
+  if (ipType === 4) {
+    const segments = lower.split('.').map((segment) => Number(segment));
+    if (segments.length !== 4 || segments.some((segment) => Number.isNaN(segment) || segment < 0 || segment > 255)) {
+      return true;
+    }
+    const [a, b] = segments;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 0) return true;
+  } else if (ipType === 6) {
+    if (lower === '::1') return true;
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (lower.startsWith('fe80')) return true;
+  }
+  return false;
 }
 
 class CircuitBreaker {
@@ -703,12 +839,13 @@ class RateLimiter {
   consume(): void {
     if (!this.limit || this.limit <= 0) return;
     const now = Date.now();
-    if (now - this.windowStart >= 60_000) {
+    if (this.windowStart === 0 || now - this.windowStart >= 60_000) {
       this.windowStart = now;
       this.count = 0;
     }
     if (this.count >= this.limit) {
-      throw new IcsClientError('rate_limited', 'ICS rate limit exceeded');
+      const retryAfterMs = Math.max(1, this.windowStart + 60_000 - now);
+      throw new IcsClientError('rate_limited', 'ICS rate limit exceeded', { retryAfterMs });
     }
     this.count += 1;
   }

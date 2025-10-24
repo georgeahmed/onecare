@@ -1,0 +1,42 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-pharmacy-outcome-minimal",
+      "topic": "pharmacy.outcome",
+      "timestamp": "2025-01-07T11:00:00.000Z",
+      "correlationId": "corr-pharmacy-outcome-min",
+      "payload": {
+        "serviceRequestId": "sr-200",
+        "organisationId": "pharmacy/demo",
+        "status": "accepted",
+        "referralReference": "cpcs-sr-200",
+        "recordedAt": "2025-01-07T11:00:05.000Z"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-pharmacy-outcome-maximal",
+      "topic": "pharmacy.outcome",
+      "timestamp": "2025-01-07T11:05:00.000Z",
+      "correlationId": "corr-pharmacy-outcome-max",
+      "payload": {
+        "serviceRequestId": "sr-201",
+        "organisationId": "pharmacy/demo",
+        "status": "rejected",
+        "referralReference": "cpcs-sr-201",
+        "code": "slot_unavailable",
+        "message": "Slot no longer available",
+        "summary": "Referral for sore throat (severity: moderate)",
+        "condition": "sore-throat",
+        "severity": "moderate",
+        "slot": {
+          "start": "2025-01-08T09:00:00.000Z",
+          "end": "2025-01-08T09:15:00.000Z"
+        },
+        "recordedAt": "2025-01-07T11:05:05.000Z",
+        "escalated": true
+      }
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "description": "Edge-case analytics metrics",
+  "envelopes": [
+    {
+      "correlationId": "cid-edge-001",
+      "payload": {
+        "name": "latency_ms",
+        "value": 987.65,
+        "timestamp": "2025-01-01T00:03:00.000Z",
+        "labels": {
+          "service": "orchestrator",
+          "result": "timeout",
+          "source": "playback",
+          "status": "retry"
+        }
+      },
+      "expected": "success"
+    },
+    {
+      "correlationId": "cid-edge-002",
+      "payload": {
+        "name": "errors_total",
+        "value": 1,
+        "timestamp": "2025-01-01T00:04:00.000Z",
+        "labels": {
+          "service": "booking",
+          "result": "error",
+          "source": "ops@onecare.example"
+        }
+      },
+      "expected": "success"
+    },
+    {
+      "correlationId": "cid-edge-003",
+      "payload": {
+        "value": 7,
+        "timestamp": "2025-01-01T00:05:00.000Z",
+        "labels": {
+          "service": "triage",
+          "result": "error",
+          "source": "playback"
+        }
+      },
+      "expected": "dlq"
+    }
+  ]
+}

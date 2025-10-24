@@ -1,15 +1,23 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { PortalSubmission, SafetyDecision } from '../src/lib/types';
 
-const uuidSequence = [
-  'corr-attempt-1', 'req-attempt-1',
-  'corr-attempt-2', 'req-attempt-2',
-  'corr-attempt-3', 'req-attempt-3',
+const correlationSequence = [
+  'corr-attempt-1',
+  'req-attempt-1',
+  'corr-attempt-2',
+  'req-attempt-2',
+  'corr-attempt-3',
+  'req-attempt-3'
 ];
 
-vi.mock('uuid', () => ({
-  v4: vi.fn(() => uuidSequence.shift() ?? 'uuid-fallback'),
-}));
+vi.mock('../src/lib/telemetry', () => {
+  return {
+    createCorrelationId: vi.fn(() => correlationSequence.shift() ?? 'corr-fallback'),
+    getSessionCorrelationId: vi.fn(() => 'sess-correlation'),
+    recordRumEvent: vi.fn(),
+    safeLog: vi.fn()
+  };
+});
 
 const payload: PortalSubmission = {
   practiceId: 'practice-123',
@@ -29,12 +37,13 @@ const buildResponse = (status: number, body: unknown, headers: Record<string, st
 
 describe('submitIntake', () => {
   beforeEach(() => {
-    uuidSequence.splice(
-      0,
-      uuidSequence.length,
-      'corr-attempt-1', 'req-attempt-1',
-      'corr-attempt-2', 'req-attempt-2',
-      'corr-attempt-3', 'req-attempt-3',
+    correlationSequence.splice(0, correlationSequence.length,
+      'corr-attempt-1',
+      'req-attempt-1',
+      'corr-attempt-2',
+      'req-attempt-2',
+      'corr-attempt-3',
+      'req-attempt-3'
     );
   });
 
@@ -61,6 +70,7 @@ describe('submitIntake', () => {
       'content-type': 'application/json',
       'x-correlation-id': 'corr-attempt-1',
       'x-request-id': 'req-attempt-1',
+      'x-session-correlation-id': 'sess-correlation'
     });
     expect(init?.credentials).toBe('include');
     expect(result.decision).toEqual(decision);
@@ -89,7 +99,7 @@ describe('submitIntake', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledOnce();
-    expect(onRetry).toHaveBeenCalledWith({ attempt: 1, maxRetries: 2, correlationId: 'cid-retry' });
+    expect(onRetry).toHaveBeenCalledWith({ attempt: 1, maxRetries: 2, correlationId: 'corr-attempt-1' });
     expect(result.correlationId).toBe('cid-final');
     expect(result.decision).toEqual(decision);
   });
@@ -111,6 +121,7 @@ describe('submitIntake', () => {
       'content-type': 'application/json',
       'x-correlation-id': 'corr-attempt-1',
       'x-request-id': 'req-attempt-1',
+      'x-session-correlation-id': 'sess-correlation',
       'accept-language': 'es',
     });
   });

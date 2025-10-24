@@ -1,0 +1,32 @@
+{
+  "$id": "https://onecare/schemas/fhir/bundle-entry-resource.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FHIR Bundle Entry Resource",
+  "type": "object",
+  "discriminator": {
+    "propertyName": "resourceType"
+  },
+  "oneOf": [
+    {
+      "title": "BundleEntryPatient",
+      "allOf": [
+        { "$ref": "./patient.json" },
+        { "properties": { "resourceType": { "const": "Patient" } } }
+      ]
+    },
+    {
+      "title": "BundleEntryCommunication",
+      "allOf": [
+        { "$ref": "./communication.json" },
+        { "properties": { "resourceType": { "const": "Communication" } } }
+      ]
+    },
+    {
+      "title": "BundleEntryDocumentReference",
+      "allOf": [
+        { "$ref": "./document-reference.json" },
+        { "properties": { "resourceType": { "const": "DocumentReference" } } }
+      ]
+    }
+  ]
+}

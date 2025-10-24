@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/messaging/send-document-ack.json",
+  "title": "SendDocumentAck",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "messageId": { "type": "string", "minLength": 1 },
+    "mexLocalId": { "type": "string", "minLength": 1 },
+    "ackType": {
+      "type": "string",
+      "title": "SendDocumentAckType",
+      "enum": ["technical", "business"]
+    },
+    "status": {
+      "type": "string",
+      "title": "SendDocumentAckStatus",
+      "enum": ["received", "accepted"]
+    },
+    "receivedAt": { "type": "string", "format": "date-time" },
+    "details": { "type": "string", "minLength": 1 }
+  },
+  "required": ["taskId", "patientId", "messageId", "mexLocalId", "ackType", "status", "receivedAt"],
+  "additionalProperties": false
+}

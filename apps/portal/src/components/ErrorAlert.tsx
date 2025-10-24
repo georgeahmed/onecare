@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useIntl } from 'react-intl';
 import type { ErrorEnvelope } from '../lib/types';
+import Alert from './ui/Alert';
+import Button from './ui/Button';
+import { classNames } from '../lib/classNames';
 
 type ErrorCode = ErrorEnvelope['error']['code'];
 
@@ -16,6 +19,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
   invalid_input: {
     titleId: 'error.title.invalid_input',
     descriptionId: 'error.description.invalid_input'
+  },
+  not_found: {
+    titleId: 'error.title.not_found',
+    descriptionId: 'error.description.not_found'
   },
   unsupported_media_type: {
     titleId: 'error.title.unsupported_media_type',
@@ -33,6 +40,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
     titleId: 'error.title.too_many_requests',
     descriptionId: 'error.description.too_many_requests'
   },
+  rate_limited: {
+    titleId: 'error.title.rate_limited',
+    descriptionId: 'error.description.rate_limited'
+  },
   upstream_timeout: {
     titleId: 'error.title.upstream_timeout',
     descriptionId: 'error.description.upstream_timeout'
@@ -44,6 +55,10 @@ const ERROR_MESSAGE_IDS: Record<ErrorCode, { titleId: string; descriptionId: str
   busy: {
     titleId: 'error.title.busy',
     descriptionId: 'error.description.busy'
+  },
+  over_capacity: {
+    titleId: 'error.title.over_capacity',
+    descriptionId: 'error.description.over_capacity'
   },
   invalid_fhir: {
     titleId: 'error.title.invalid_fhir',
@@ -86,9 +101,8 @@ const ErrorAlert = ({
 
     const title = intl.formatMessage({ id: mapping.titleId });
     const fallbackDescription = intl.formatMessage({ id: mapping.descriptionId });
-    const description = mapping === ERROR_MESSAGE_IDS.internal_error && envelope.error?.message
-      ? envelope.error.message
-      : fallbackDescription;
+    const serverMessage = typeof envelope.error?.message === 'string' ? envelope.error.message.trim() : '';
+    const description = serverMessage.length > 0 ? serverMessage : fallbackDescription;
 
     return {
       title,
@@ -111,18 +125,17 @@ const ErrorAlert = ({
     return null;
   }
 
-  const combinedClassName = ['error-alert', className].filter(Boolean).join(' ');
-
   return (
-    <section
+    <Alert
+      variant="error"
+      title={normalized.title}
+      className={classNames('error-alert', className)}
       id={id}
       ref={containerRef}
       role="alert"
       tabIndex={-1}
       aria-live="assertive"
-      className={combinedClassName}
     >
-      <h2>{normalized.title}</h2>
       <p>{normalized.description}</p>
       {normalized.correlationId ? (
         <p>
@@ -131,13 +144,13 @@ const ErrorAlert = ({
       ) : null}
       <div>
         {onRetry ? (
-          <button type="button" onClick={onRetry}>
+          <Button type="button" variant="subtle" onClick={onRetry}>
             {intl.formatMessage({ id: 'error.retry' })}
-          </button>
+          </Button>
         ) : null}
         <a href={supportUrl ?? DEFAULT_SUPPORT_URL}>{intl.formatMessage({ id: 'error.contactSupport' })}</a>
       </div>
-    </section>
+    </Alert>
   );
 };
 

@@ -1,0 +1,95 @@
+fullnameOverride: orchestrator
+nameOverride: orchestrator
+component: orchestrator
+
+containerPort: 3001
+
+image:
+  repository: ghcr.io/onecare/orchestrator
+  tag: latest
+
+replicaCount: 3
+
+service:
+  port: 8080
+  targetPort: http
+
+probes:
+  readiness:
+    path: /ready
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: orchestrator.onecare.health
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - orchestrator.onecare.health
+      secretName: orchestrator-ingress-tls
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 9
+  targetCPUUtilizationPercentage: 65
+
+resources:
+  requests:
+    cpu: 400m
+    memory: 768Mi
+  limits:
+    cpu: 800m
+    memory: 1.5Gi
+
+env:
+  - name: NODE_ENV
+    value: production
+  - name: LOG_LEVEL
+    value: info
+  - name: NATS_URL
+    valueFrom:
+      secretKeyRef:
+        name: orchestrator-secrets
+        key: nats_url
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    enabled: true
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: observability
+        ports:
+          - protocol: TCP
+            port: 4317
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: messaging
+        ports:
+          - protocol: TCP
+            port: 4222
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2

@@ -1,0 +1,47 @@
+{
+  "description": "Happy path analytics metrics",
+  "envelopes": [
+    {
+      "correlationId": "cid-happy-001",
+      "payload": {
+        "name": "latency_ms",
+        "value": 123.45,
+        "timestamp": "2025-01-01T00:00:00.000Z",
+        "labels": {
+          "service": "triage",
+          "result": "ok",
+          "source": "playback"
+        }
+      },
+      "expected": "success"
+    },
+    {
+      "correlationId": "cid-happy-002",
+      "payload": {
+        "name": "errors_total",
+        "value": 0,
+        "timestamp": "2025-01-01T00:01:00.000Z",
+        "labels": {
+          "service": "booking",
+          "result": "ok",
+          "source": "playback"
+        }
+      },
+      "expected": "success"
+    },
+    {
+      "correlationId": "cid-happy-003",
+      "payload": {
+        "name": "requests_total",
+        "value": 42,
+        "timestamp": "2025-01-01T00:02:00.000Z",
+        "labels": {
+          "service": "telephony",
+          "result": "ok",
+          "source": "playback"
+        }
+      },
+      "expected": "success"
+    }
+  ]
+}

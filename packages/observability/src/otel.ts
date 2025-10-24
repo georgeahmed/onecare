@@ -18,6 +18,7 @@ const globalInitKey = Symbol.for('onecare.observability.initTracing');
 let tracingEnabled = false;
 let sdkInstance: NodeSDK | undefined;
 let sdkInitPromise: Promise<void> | undefined;
+const ensuredServices = new Set<string>();
 
 const truthy = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
 const falsy = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
@@ -46,9 +47,21 @@ function ensureDiagLogger(): void {
   (globalThis as Record<string | symbol, unknown>)[globalDiagKey] = true;
 }
 
+function getGlobalInitPromise(): Promise<void> | undefined {
+  return (globalThis as Record<string | symbol, unknown>)[globalInitKey] as Promise<void> | undefined;
+}
+
+function setGlobalInitPromise(promise: Promise<void>): void {
+  (globalThis as Record<string | symbol, unknown>)[globalInitKey] = promise;
+}
+
+function clearGlobalInitPromise(): void {
+  delete (globalThis as Record<string | symbol, unknown>)[globalInitKey];
+}
+
 export function initTracing(serviceName: string): Promise<void> {
   if (sdkInitPromise) return sdkInitPromise;
-  const globalInit = (globalThis as Record<string | symbol, unknown>)[globalInitKey] as Promise<void> | undefined;
+  const globalInit = getGlobalInitPromise();
   if (globalInit) {
     sdkInitPromise = globalInit;
     return globalInit;
@@ -57,13 +70,13 @@ export function initTracing(serviceName: string): Promise<void> {
   tracingEnabled = shouldEnableTracing();
   if (!tracingEnabled) {
     sdkInitPromise = Promise.resolve();
-    (globalThis as Record<string | symbol, unknown>)[globalInitKey] = sdkInitPromise;
+    setGlobalInitPromise(sdkInitPromise);
     return sdkInitPromise;
   }
 
-  sdkInitPromise = (async () => {
-    ensureDiagLogger();
+  ensureDiagLogger();
 
+  const startPromise = (async () => {
     const baseResource = defaultResource();
     const serviceResource = resourceFromAttributes({
       [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
@@ -75,18 +88,28 @@ export function initTracing(serviceName: string): Promise<void> {
 
     try {
       const traceExporter = new OTLPTraceExporter();
-      sdkInstance = new NodeSDK({ resource, traceExporter });
-      await sdkInstance.start();
+      const sdk = new NodeSDK({ resource, traceExporter });
+      sdkInstance = sdk;
+      await Promise.resolve(sdk.start());
       diag.info(`OpenTelemetry tracing initialized for ${serviceName}`);
     } catch (err) {
       tracingEnabled = false;
       sdkInstance = undefined;
       console.error('Failed to start OpenTelemetry tracing', err);
+      throw err instanceof Error ? err : new Error(String(err));
     }
   })();
-  (globalThis as Record<string | symbol, unknown>)[globalInitKey] = sdkInitPromise;
 
-  return sdkInitPromise;
+  const trackedPromise = startPromise.catch((err) => {
+    clearGlobalInitPromise();
+    sdkInitPromise = undefined;
+    throw err;
+  });
+
+  sdkInitPromise = trackedPromise;
+  setGlobalInitPromise(trackedPromise);
+
+  return trackedPromise;
 }
 
 export function startSpan(name: string, options?: SpanOptions): Span {
@@ -141,4 +164,38 @@ export function withCorrelationContext<T>(fn: () => T): T {
   return correlationStorage.run(initial, fn);
 }
 
+export async function shutdownTracing(): Promise<void> {
+  const pending = sdkInitPromise;
+  if (pending) {
+    try {
+      await pending;
+    } catch {
+      // ignore; startup failed
+    }
+  }
+  const sdk = sdkInstance;
+  sdkInstance = undefined;
+  sdkInitPromise = undefined;
+  tracingEnabled = false;
+  ensuredServices.clear();
+  clearGlobalInitPromise();
+  if (!sdk) return;
+  try {
+    await sdk.shutdown();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('shutdownTracing failed', message);
+  }
+}
+
 export type { Span };
+
+export function ensureTracing(serviceName: string): void {
+  if (ensuredServices.has(serviceName)) return;
+  ensuredServices.add(serviceName);
+  void initTracing(serviceName).catch((err: unknown) => {
+    ensuredServices.delete(serviceName);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`ensureTracing(${serviceName}) failed`, message);
+  });
+}

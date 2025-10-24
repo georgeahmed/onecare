@@ -1,0 +1,19 @@
+# Example staging overrides (import with `-f` after the base values).
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: orchestrator.staging.onecare.health
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - orchestrator.staging.onecare.health
+      secretName: orchestrator-staging-tls
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4

@@ -1,6 +1,7 @@
+import { withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import { createEnvelope, Topics, type DlqEvent, type PortalNotify, type TypedEnvelope } from '@onecare/events';
-import { logger } from '@onecare/observability';
+import { createCounter, logger } from '@onecare/observability';
 import { validate, type ValidationError } from '@onecare/domain/src/schema/validator';
 
 import { computePortalNotifyKey } from '../util/idempotency';
@@ -18,6 +19,10 @@ const defaultSleep: SleepFn = (ms) =>
   });
 
 const defaultNow: NowFn = () => new Date();
+
+const portalEventRetryCounter = createCounter('event.retry_total');
+const portalEventDlqCounter = createCounter('event.dlq_total');
+const portalEventPublishErrorCounter = createCounter('event.publish_error_total');
 
 export type PortalNotifyPublishRequest = PortalNotify & { correlationId?: string };
 
@@ -54,8 +59,13 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
   private readonly now: NowFn;
 
   constructor(opts: ReliablePortalNotifyPublisherOptions) {
-    this.bus = opts.bus;
+    if (!opts.bus) {
+      throw new Error('portal_notify_bus_missing');
+    }
     this.dlqTopic = opts.dlqTopic ?? Topics.broker.deadLetter;
+    this.bus = withMessageGuards(opts.bus, {
+      allowedTopics: new Set([Topics.portal.notify, this.dlqTopic]),
+    });
     this.maxAttempts = Math.max(1, opts.maxAttempts ?? 3);
     this.baseDelayMs = Math.max(0, opts.baseDelayMs ?? 200);
     this.maxDelayMs = Math.max(this.baseDelayMs, opts.maxDelayMs ?? 2_000);
@@ -77,15 +87,26 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       throw new PortalNotifyValidationError(result.errors);
     }
 
-    const envelope = createEnvelope(Topics.portal.notify, payload, request.correlationId);
+    const correlationId = normalizeCorrelationId(request.correlationId);
+    const firstSeenAt = this.now().toISOString();
+    const envelope = createEnvelope(Topics.portal.notify, payload, correlationId, {
+      attempt: 0,
+      firstSeenAt,
+    });
     const idempotencyKey = computePortalNotifyKey(payload.practiceId, payload.state, payload.at);
-    const headers = this.buildHeaders(request.correlationId, idempotencyKey);
+    const headers = this.buildHeaders(correlationId, idempotencyKey);
 
     let attempt = 0;
     let lastError: unknown;
 
     while (attempt < this.maxAttempts) {
       attempt += 1;
+      envelope.metadata = {
+        attempt,
+        firstSeenAt,
+      };
+      headers['x-attempt'] = String(attempt);
+      headers['x-first-seen-at'] = firstSeenAt;
       try {
         await this.bus.publish(Topics.portal.notify, envelope, headers);
         logger.info('portal.notify.published', {
@@ -93,25 +114,34 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
           state: payload.state,
           attempt,
           idempotencyKey,
-          correlationId: request.correlationId,
+          correlationId,
         });
         return;
       } catch (error) {
         lastError = error;
         const retryable = this.isRetryable(error);
+        const errorCode = this.extractErrorCode(error) ?? 'unknown';
+        portalEventPublishErrorCounter.add(1, {
+          topic: Topics.portal.notify,
+          code: errorCode,
+        });
         logger.warn('portal.notify.publish_failed', {
           practiceId: payload.practiceId,
           state: payload.state,
           attempt,
           retryable,
-          correlationId: request.correlationId,
-          code: this.extractErrorCode(error),
+          correlationId,
+          code: errorCode,
         });
 
         if (!retryable || attempt >= this.maxAttempts) {
           break;
         }
 
+        portalEventRetryCounter.add(1, {
+          topic: Topics.portal.notify,
+          code: errorCode,
+        });
         const delay = this.computeBackoff(attempt);
         if (delay > 0) {
           await this.sleep(delay);
@@ -119,7 +149,21 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       }
     }
 
-    await this.publishDlq(envelope, idempotencyKey, request, lastError);
+    if (lastError) {
+      const dlqCode = this.extractErrorCode(lastError) ?? 'unknown';
+      portalEventDlqCounter.add(1, {
+        topic: Topics.portal.notify,
+        code: dlqCode,
+      });
+      await this.publishDlq(envelope, idempotencyKey, request, lastError).catch((dlqError) => {
+        logger.error('portal.notify.dlq_publish_failed', {
+          practiceId: request.practiceId,
+          state: request.state,
+          correlationId,
+          reason: this.errorMessage(dlqError),
+        });
+      });
+    }
   }
 
   private buildHeaders(correlationId: string | undefined, idempotencyKey: string): Record<string, string> {
@@ -185,6 +229,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
     error: unknown,
   ): Promise<void> {
     const errorMessage = this.errorMessage(error);
+    const corr = envelope.correlationId ?? request.correlationId;
     const payloadRef: Record<string, unknown> = {
       practiceId: request.practiceId,
       state: request.state,
@@ -198,7 +243,7 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
 
     const dlqPayload: DlqEvent = {
       originalTopic: Topics.portal.notify,
-      correlationId: request.correlationId,
+      correlationId: corr,
       errorCode: this.extractErrorCode(error),
       errorMessage: errorMessage ? truncate(errorMessage, 256) : undefined,
       payloadRef,
@@ -210,14 +255,14 @@ export class ReliablePortalNotifyPublisher implements PortalNotifyPublisher {
       throw new PortalNotifyValidationError(validation.errors);
     }
 
-    const headers = this.buildDlqHeaders(request.correlationId, Topics.portal.notify);
-    const dlqEnvelope = createEnvelope(this.dlqTopic, dlqPayload, request.correlationId);
+    const headers = this.buildDlqHeaders(corr, Topics.portal.notify);
+    const dlqEnvelope = createEnvelope(this.dlqTopic, dlqPayload, corr);
     await this.bus.publish(dlqEnvelope.topic, dlqEnvelope, headers);
 
     logger.error('portal.notify.routed_to_dlq', {
       practiceId: request.practiceId,
       state: request.state,
-      correlationId: request.correlationId,
+      correlationId: corr,
       idempotencyKey,
       dlqTopic: this.dlqTopic,
       code: this.extractErrorCode(error),
@@ -243,4 +288,10 @@ function truncate(input: string, max: number): string {
     return '.'.repeat(max);
   }
   return `${input.slice(0, max - 3)}...`;
+}
+
+function normalizeCorrelationId(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

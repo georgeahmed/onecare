@@ -2,9 +2,22 @@ node_modules/
 dist/
 .DS_Store
 .env
+.env.dev
+.env.local
 .venv/
 __pycache__/
 *.pyc
 coverage/
 build/
-
+infra/tls/dev/*.key
+infra/tls/dev/*.csr
+infra/tls/dev/*.srl
+artifacts/
+# Local dev secrets (never commit real tokens/keys)
+mockjwks.json
+nhs_access.json
+nhslogin_token.json
+test-*.pem
+test-*.pem.pub
+test-*.jwks.json
+var/private/

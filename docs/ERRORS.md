@@ -25,6 +25,7 @@ Code → Status Mapping
 | `unauthorized`           | 401  | Caller must authenticate (not yet used by orchestrator)             |
 | `forbidden`              | 403  | Authenticated actor denied (missing signature, consent, or scope)   |
 | `invalid_input`          | 400  | Malformed JSON or schema validation failure                         |
+| `not_found`              | 404  | Resource missing or already actioned (e.g., clinician task stale)   |
 | `unsupported_media_type` | 415  | Content-Type not `application/json`                                 |
 | `payload_too_large`      | 413  | Body exceeds configured `MAX_BODY_BYTES`                            |
 | `conflict`               | 409  | Idempotency collision/double-submit                                 |

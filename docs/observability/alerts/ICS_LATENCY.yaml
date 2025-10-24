@@ -1,0 +1,48 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ics-hub-latency-slo
+  labels:
+    team: "backend"
+    service: "ics-hub"
+    env: "prod"
+spec:
+  groups:
+    - name: ics-hub.latency
+      rules:
+        - alert: ICSRoutingLatencyHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(ics_routing_latency_ms_bucket{service="ics-hub"}[5m])) by (le)
+            ) > 0.04
+          for: 10m
+          labels:
+            severity: warning
+            slo: "ics-routing"
+            env: "prod"
+            team: "backend"
+          annotations:
+            summary: "ICS routing p95 above 40ms"
+            description: |
+              Routing decisions exceed the 40ms p95 target. Check processing limiter metrics,
+              inbound backlog, and downstream dependencies.
+            runbook: "https://onecare/runbooks/oncall#ics-acknowledgements"
+        - alert: ICSAckLatencyHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(ics_ack_latency_ms_bucket{service="ics-hub"}[5m])) by (le)
+            ) > 0.03
+          for: 10m
+          labels:
+            severity: warning
+            slo: "ics-ack"
+            env: "prod"
+            team: "backend"
+          annotations:
+            summary: "ICS ack p95 above 30ms"
+            description: |
+              Ack publishing exceeds the 30ms p95 budget. Review bus health, audit spool backlog,
+              and idempotency store latency.
+            runbook: "https://onecare/runbooks/oncall#ics-acknowledgements"

@@ -1,12 +1,52 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { BookingSlot } from '../../lib/booking';
 import { confirmBooking, type BookingApiError, type ConfirmBookingResult } from '../../lib/api';
+import {
+  enqueueOfflineJob,
+  getOfflineJob,
+  removeOfflineJob,
+  subscribeOfflineQueue,
+  updateOfflineJob,
+  type OfflineBookingJob,
+} from '../../lib/offlineQueue';
+import { createCorrelationId, recordRumEvent, safeLog, startTimer } from '../../lib/telemetry';
+import { formatAccessibleDateTime, formatDate, formatTimeRange, formatTimeZoneName } from '../../lib/format';
+import { useLocale } from '../../i18n';
+import { formatSlotModalityLabel } from '../../lib/bookingLabels';
+
+const BASE_BACKOFF_MS = 1_500;
+const MAX_BACKOFF_MS = 30_000;
+const RETRY_JITTER_MAX_MS = 750;
+const isBrowser = typeof window !== 'undefined';
+
+const isNavigatorOnline = (): boolean => {
+  if (typeof navigator === 'undefined' || typeof navigator.onLine !== 'boolean') {
+    return true;
+  }
+  return navigator.onLine;
+};
+
+export type QueueStatus = 'idle' | 'queued' | 'processing';
+
+export const deriveQueueStatus = (
+  current: QueueStatus,
+  job: OfflineBookingJob | null
+): QueueStatus => {
+  if (!job) {
+    return 'idle';
+  }
+  if (current === 'processing') {
+    return current;
+  }
+  return 'queued';
+};
 
 export interface ConfirmBookingProps {
   slot: BookingSlot;
   patientId: string;
   idempotencyKey: string;
+  timezone: string;
   onBack: () => void;
   onSuccess: (result: ConfirmBookingResult) => void;
   onError: (error: BookingConfirmationError) => void;
@@ -16,12 +56,18 @@ export interface ConfirmBookingContentProps {
   slot: BookingSlot;
   patientId: string;
   idempotencyKey: string;
+  timezone: string;
   isSubmitting: boolean;
   statusMessageId: string;
   onBack: () => void;
   onConfirm: () => void;
   titleId?: string;
   descriptionId?: string;
+  queueJob: OfflineBookingJob | null;
+  queueStatus: QueueStatus;
+  retryCountdown: number | null;
+  onRetryQueued: () => void;
+  onCancelQueued: () => void;
 }
 
 export interface BookingConfirmationError {
@@ -32,36 +78,67 @@ export interface BookingConfirmationError {
   status?: number;
 }
 
+const ConfirmBookingSkeleton = () => (
+  <div className="booking-confirm-skeleton" aria-hidden="true">
+    <div className="booking-confirm-skeleton__header skeleton skeleton-line long" />
+    <div className="booking-confirm-skeleton__grid">
+      {Array.from({ length: 6 }, (_, index) => (
+        <div key={index} className="booking-confirm-skeleton__row">
+          <span className="skeleton skeleton-line short" />
+          <span className="skeleton skeleton-line long" />
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 export const ConfirmBookingContent = ({
   slot,
   patientId,
   idempotencyKey,
+  timezone,
   isSubmitting,
   statusMessageId,
   onBack,
   onConfirm,
   titleId,
   descriptionId,
-}: ConfirmBookingContentProps & { titleId?: string; descriptionId?: string }) => {
+  queueJob,
+  queueStatus,
+  retryCountdown,
+  onRetryQueued,
+  onCancelQueued,
+}: ConfirmBookingContentProps) => {
   const intl = useIntl();
+  const { direction } = useLocale();
   const resolvedTitleId = titleId ?? 'booking-confirm-title';
   const resolvedDescriptionId = descriptionId ?? `${resolvedTitleId}-description`;
 
+  const locale = intl.locale;
   const dateLabel = useMemo(
-    () =>
-      intl.formatDate(new Date(slot.start), {
-        dateStyle: 'full'
-      }),
-    [slot.start, intl]
+    () => formatDate(slot.start, { locale, timeZone: timezone, dateStyle: 'full' }),
+    [slot.start, locale, timezone],
   );
 
   const timeLabel = useMemo(
-    () =>
-      `${intl.formatTime(new Date(slot.start), { timeStyle: 'short' })} – ${intl.formatTime(new Date(slot.end), { timeStyle: 'short' })}`,
-    [slot.start, slot.end, intl]
+    () => formatTimeRange(slot.start, slot.end, { locale, timeZone: timezone }),
+    [slot.start, slot.end, locale, timezone],
   );
 
-  const modalityLabel = intl.formatMessage({ id: `booking.modality.${slot.modality}` });
+  const accessibleStart = useMemo(
+    () => formatAccessibleDateTime(slot.start, { locale, timeZone: timezone }),
+    [slot.start, locale, timezone],
+  );
+
+  const accessibleEnd = useMemo(
+    () => formatAccessibleDateTime(slot.end, { locale, timeZone: timezone }),
+    [slot.end, locale, timezone],
+  );
+
+  const accessibleRange = useMemo(() => `${accessibleStart} – ${accessibleEnd}`, [accessibleStart, accessibleEnd]);
+  const timeZoneLabel = useMemo(() => formatTimeZoneName(timezone, { locale }), [timezone, locale]);
+
+  const modalityLabel = formatSlotModalityLabel(intl, slot);
   const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
 
   const submittingLabel = intl.formatMessage({ id: 'booking.confirm.submitting' });
@@ -72,53 +149,129 @@ export const ConfirmBookingContent = ({
     <section
       aria-labelledby={resolvedTitleId}
       aria-describedby={`${resolvedDescriptionId}${statusLabel ? ` ${statusMessageId}` : ''}`}
+      dir={direction}
     >
       <header>
         <h2 id={resolvedTitleId}>{intl.formatMessage({ id: 'booking.confirm.title' })}</h2>
         <p id={resolvedDescriptionId}>{intl.formatMessage({ id: 'booking.confirm.summary' })}</p>
       </header>
 
-      <dl className="booking-confirm-summary">
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.patient' })}</dt>
-          <dd>{patientId}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.date' })}</dt>
-          <dd>{dateLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.time' })}</dt>
-          <dd>{timeLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.modality' })}</dt>
-          <dd>{modalityLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.location' })}</dt>
-          <dd>{locationLabel}</dd>
-        </div>
-        <div>
-          <dt>{intl.formatMessage({ id: 'booking.confirm.idempotencyKey' })}</dt>
-          <dd>
-            <code>{idempotencyKey}</code>
-          </dd>
-        </div>
-      </dl>
+      <div
+        className={['booking-confirm-summary-container', (isSubmitting || queueStatus === 'processing') ? 'booking-confirm-summary-container--loading' : '']
+          .filter(Boolean)
+          .join(' ')}
+      >
+        <dl className="booking-confirm-summary">
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.patient' })}</dt>
+            <dd>{patientId}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.date' })}</dt>
+            <dd>
+              <span aria-hidden="true">{dateLabel}</span>
+              <span className="visually-hidden">{accessibleStart}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.time' })}</dt>
+            <dd>
+              <span aria-hidden="true">{timeLabel}</span>
+              <span className="visually-hidden">{accessibleRange}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.modality' })}</dt>
+            <dd>{modalityLabel}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.location' })}</dt>
+            <dd>{locationLabel}</dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.timeZone' })}</dt>
+            <dd>
+              <span aria-hidden="true">{timeZoneLabel}</span>
+              <span className="visually-hidden">{timezone}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{intl.formatMessage({ id: 'booking.confirm.idempotencyKey' })}</dt>
+            <dd>
+              <code>{idempotencyKey}</code>
+            </dd>
+          </div>
+        </dl>
+        {(isSubmitting || queueStatus === 'processing') ? <ConfirmBookingSkeleton /> : null}
+      </div>
 
       <div id={statusMessageId} aria-live="polite" role="status">
         {statusLabel}
       </div>
 
       <div className="booking-confirm-actions">
-        <button type="button" onClick={onBack} disabled={isSubmitting}>
+        <button
+          type="button"
+          className="ui-button ui-button--subtle"
+          onClick={onBack}
+          disabled={isSubmitting || queueStatus === 'processing'}
+        >
           {intl.formatMessage({ id: 'booking.confirm.back' })}
         </button>
-        <button type="button" onClick={onConfirm} disabled={isSubmitting} aria-describedby={statusLabel ? statusMessageId : undefined}>
+        <button
+          type="button"
+          className="ui-button"
+          onClick={onConfirm}
+          disabled={isSubmitting || queueStatus === 'processing' || Boolean(queueJob)}
+          aria-describedby={statusLabel ? statusMessageId : undefined}
+        >
           {isSubmitting ? submittingLabel : confirmLabel}
         </button>
       </div>
+
+      {queueJob ? (
+        <div className="booking-offline-banner" role="status">
+          <p className="booking-offline-banner__title">
+            {intl.formatMessage({
+              id: queueStatus === 'processing' ? 'booking.confirm.offline.processing' : 'booking.confirm.offline.queued',
+            })}
+          </p>
+          <p className="booking-offline-banner__body">
+            {queueStatus === 'processing'
+              ? intl.formatMessage({ id: 'booking.confirm.offline.inProgress' })
+              : retryCountdown !== null
+                ? intl.formatMessage(
+                    { id: 'booking.confirm.offline.autoResume' },
+                    { seconds: Math.max(retryCountdown, 0) },
+                  )
+                : intl.formatMessage({ id: 'booking.confirm.offline.waiting' })}
+          </p>
+          {queueJob.lastError ? (
+            <p className="booking-offline-banner__error">
+              {intl.formatMessage({ id: 'booking.confirm.offline.lastError' })}{' '}
+              <span>{queueJob.lastError}</span>
+            </p>
+          ) : null}
+          <div className="booking-offline-actions">
+            <button
+              type="button"
+              className="ui-button"
+              onClick={onRetryQueued}
+              disabled={queueStatus === 'processing'}
+            >
+              {intl.formatMessage({ id: 'booking.confirm.offline.retryNow' })}
+            </button>
+            <button
+              type="button"
+              className="ui-button ui-button--subtle"
+              onClick={onCancelQueued}
+              disabled={queueStatus === 'processing'}
+            >
+              {intl.formatMessage({ id: 'booking.confirm.offline.cancel' })}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 };
@@ -128,9 +281,15 @@ const getFocusableElements = (container: HTMLElement): HTMLElement[] =>
     container.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     )
-  ).filter((element) => !element.hasAttribute('disabled') && !element.getAttribute('aria-hidden'));
+  ).filter((element) => {
+    if (element.hasAttribute('disabled')) {
+      return false;
+    }
+    const ariaHidden = element.getAttribute('aria-hidden');
+    return !(ariaHidden && ariaHidden.toLowerCase() === 'true');
+  });
 
-const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, onError }: ConfirmBookingProps) => {
+const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onSuccess, onError }: ConfirmBookingProps) => {
   const intl = useIntl();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -139,6 +298,18 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
+  const confirmCorrelationRef = useRef<string>(createCorrelationId());
+  const [queueJob, setQueueJob] = useState<OfflineBookingJob | null>(() => getOfflineJob(idempotencyKey) ?? null);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>(() => (getOfflineJob(idempotencyKey) ? 'queued' : 'idle'));
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
+
+  const clearCountdownTimer = useCallback(() => {
+    if (countdownTimerRef.current !== null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -191,9 +362,217 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
     };
   }, []);
 
+  const processQueuedJob = useCallback(
+    async (job: OfflineBookingJob) => {
+      setQueueStatus('processing');
+      confirmCorrelationRef.current = job.correlationId;
+      recordRumEvent('booking.confirm.retry.start', {
+        correlationId: job.correlationId,
+        attempt: job.attempt,
+        slotId: job.payload.slotId,
+      });
+      safeLog('booking.confirm.retry.start', {
+        correlationId: job.correlationId,
+        attempt: job.attempt,
+      });
+      const stopTimer = startTimer();
+      try {
+        const result = await confirmBooking(
+          {
+            slotId: job.payload.slotId,
+            patientId: job.payload.patientId,
+          },
+          {
+            idempotencyKey: job.idempotencyKey,
+            correlationId: job.correlationId,
+          },
+        );
+        removeOfflineJob(job.id);
+        setQueueJob(null);
+        setQueueStatus('idle');
+        setRetryCountdown(null);
+        const durationMs = stopTimer();
+        recordRumEvent('booking.confirm.retry.success', {
+          correlationId: job.correlationId,
+          durationMs,
+        });
+        safeLog('booking.confirm.retry.success', {
+          correlationId: job.correlationId,
+          durationMs,
+        });
+        onSuccess(result);
+      } catch (error) {
+        const fallbackMessage = intl.formatMessage({ id: 'booking.confirm.error' });
+        const message =
+          error instanceof Error && typeof error.message === 'string' && error.message.trim().length > 0
+            ? error.message
+            : fallbackMessage;
+        const attempts = job.attempt + 1;
+        const jitter = Math.floor(Math.random() * RETRY_JITTER_MAX_MS);
+        const baseDelay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempts) + jitter;
+        const retryAfterSeconds =
+          typeof (error as BookingApiError).retryAfterSeconds === 'number'
+            ? (error as BookingApiError).retryAfterSeconds
+            : undefined;
+        const enforcedDelay =
+          retryAfterSeconds && retryAfterSeconds > 0
+            ? Math.max(baseDelay, retryAfterSeconds * 1_000)
+            : baseDelay;
+        const next = updateOfflineJob(job.id, {
+          attempt: attempts,
+          lastError: message,
+          nextAttemptAt: Date.now() + enforcedDelay,
+        });
+        setQueueJob(next ?? job);
+        setQueueStatus('queued');
+        const durationMs = stopTimer();
+        recordRumEvent('booking.confirm.retry.error', {
+          correlationId: job.correlationId,
+          durationMs,
+          attempt: attempts,
+        });
+        safeLog('booking.confirm.retry.error', {
+          correlationId: job.correlationId,
+          durationMs,
+          message,
+          retryAfterSeconds,
+        });
+      }
+    },
+    [intl, onSuccess],
+  );
+
+  useEffect(() => {
+    const unsubscribe = subscribeOfflineQueue((jobs) => {
+      const job = jobs.find((entry) => entry.id === idempotencyKey) ?? null;
+      setQueueJob(job);
+      setQueueStatus((previous) => deriveQueueStatus(previous, job));
+    });
+    return unsubscribe;
+  }, [idempotencyKey]);
+
+  useEffect(() => {
+    clearCountdownTimer();
+    if (!queueJob || queueStatus === 'processing') {
+      setRetryCountdown(null);
+      return () => {};
+    }
+
+    const tick = () => {
+      const latest = getOfflineJob(queueJob.id);
+      if (!latest) {
+        setRetryCountdown(null);
+        clearCountdownTimer();
+        return;
+      }
+      const remainingMs = latest.nextAttemptAt - Date.now();
+      if (remainingMs <= 0) {
+        setRetryCountdown(0);
+        if (isNavigatorOnline()) {
+          clearCountdownTimer();
+          void processQueuedJob(latest);
+        }
+      } else {
+        setRetryCountdown(Math.max(0, Math.ceil(remainingMs / 1000)));
+      }
+    };
+
+    tick();
+    countdownTimerRef.current = window.setInterval(tick, 1000);
+    return () => clearCountdownTimer();
+  }, [queueJob, queueStatus, clearCountdownTimer, processQueuedJob]);
+
+  useEffect(() => {
+    if (!isBrowser || !queueJob) return;
+    const handleOnline = () => {
+      const latest = getOfflineJob(queueJob.id);
+      if (latest) {
+        void processQueuedJob(latest);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [queueJob, processQueuedJob]);
+
+  const queueAndNotify = useCallback(() => {
+    const job = enqueueOfflineJob({
+      id: idempotencyKey,
+      idempotencyKey,
+      correlationId: createCorrelationId(),
+      payload: {
+        slotId: slot.id,
+        patientId,
+      },
+      slot: {
+        start: slot.start,
+        end: slot.end,
+        modality: slot.modality,
+        location: slot.location,
+      },
+    });
+    setQueueJob(job);
+    setQueueStatus('queued');
+    setRetryCountdown(0);
+    confirmCorrelationRef.current = job.correlationId;
+    recordRumEvent('booking.confirm.queued', {
+      correlationId: job.correlationId,
+      slotId: slot.id,
+    });
+    safeLog('booking.confirm.queued', {
+      correlationId: job.correlationId,
+      slotId: slot.id,
+    });
+  }, [idempotencyKey, patientId, slot]);
+
+  const handleRetryQueued = useCallback(() => {
+    const job = getOfflineJob(idempotencyKey);
+    if (!job) return;
+    const updated = updateOfflineJob(job.id, {
+      nextAttemptAt: Date.now(),
+      lastError: undefined,
+    }) ?? job;
+    setQueueJob(updated);
+    setQueueStatus('processing');
+    setRetryCountdown(0);
+    recordRumEvent('booking.confirm.retry.manual', {
+      correlationId: updated.correlationId,
+      attempt: updated.attempt,
+    });
+    safeLog('booking.confirm.retry.manual', {
+      correlationId: updated.correlationId,
+      attempt: updated.attempt,
+    });
+    void processQueuedJob(updated);
+  }, [idempotencyKey, processQueuedJob]);
+
+  const handleCancelQueued = useCallback(() => {
+    removeOfflineJob(idempotencyKey);
+    setQueueJob(null);
+    setQueueStatus('idle');
+    setRetryCountdown(null);
+    clearCountdownTimer();
+    recordRumEvent('booking.confirm.retry.cancelled', { correlationId: confirmCorrelationRef.current });
+    safeLog('booking.confirm.retry.cancelled', { correlationId: confirmCorrelationRef.current });
+  }, [idempotencyKey, clearCountdownTimer]);
+
   const handleConfirm = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || queueStatus === 'processing') return;
+
+    if (!isNavigatorOnline()) {
+      queueAndNotify();
+      return;
+    }
+
+    const correlationId = createCorrelationId();
+    confirmCorrelationRef.current = correlationId;
+    recordRumEvent('booking.confirm.start', {
+      correlationId,
+      slotId: slot.id,
+    });
+    safeLog('booking.confirm.start', { correlationId, slotId: slot.id });
+
     setIsSubmitting(true);
+    const stopTimer = startTimer();
 
     abortControllerRef.current?.abort();
     const controller = new AbortController();
@@ -207,13 +586,30 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
         },
         {
           idempotencyKey,
-          signal: controller.signal
+          signal: controller.signal,
+          correlationId,
         }
       );
+      const durationMs = stopTimer();
+      recordRumEvent('booking.confirm.success', {
+        correlationId,
+        durationMs,
+      });
+      safeLog('booking.confirm.success', {
+        correlationId,
+        durationMs,
+        appointmentId: result.appointmentId,
+      });
       onSuccess(result);
     } catch (error) {
       const fallbackMessage = intl.formatMessage({ id: 'booking.confirm.error' });
       const candidate = error as BookingApiError | Error;
+      const networkLikeError = !('status' in candidate) || candidate.status === 0;
+      if (!isNavigatorOnline() || networkLikeError) {
+        queueAndNotify();
+        return;
+      }
+      const durationMs = stopTimer();
       const message =
         candidate instanceof Error && typeof candidate.message === 'string' && candidate.message.trim().length > 0
           ? candidate.message
@@ -231,6 +627,15 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
         retryAfterSeconds: 'retryAfterSeconds' in candidate ? candidate.retryAfterSeconds : undefined,
         status: 'status' in candidate ? candidate.status : undefined
       };
+      recordRumEvent('booking.confirm.error', {
+        correlationId: confirmCorrelationRef.current,
+        durationMs,
+      });
+      safeLog('booking.confirm.error', {
+        correlationId: confirmCorrelationRef.current,
+        durationMs,
+        message: payload.message,
+      });
       onError(payload);
     } finally {
       setIsSubmitting(false);
@@ -253,12 +658,18 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, onBack, onSuccess, on
           slot={slot}
           patientId={patientId}
           idempotencyKey={idempotencyKey}
+          timezone={timezone}
           isSubmitting={isSubmitting}
           statusMessageId={statusMessageId}
           onBack={onBack}
           onConfirm={handleConfirm}
           titleId={titleId}
           descriptionId={descriptionId}
+          queueJob={queueJob}
+          queueStatus={queueStatus}
+          retryCountdown={retryCountdown}
+          onRetryQueued={handleRetryQueued}
+          onCancelQueued={handleCancelQueued}
         />
       </div>
     </div>

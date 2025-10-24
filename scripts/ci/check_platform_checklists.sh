@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ ! -d "team/backend" ]]; then
+  echo "[platform-checklist] team/backend not found; skipping check."
+  exit 0
+fi
+
 missing=()
 while IFS= read -r -d '' f; do
   if ! grep -q "^Platform Checklist (pre-flight)" "$f"; then
@@ -21,4 +26,3 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 echo "[platform-checklist] All backend engineer files contain a Platform Checklist section."
-

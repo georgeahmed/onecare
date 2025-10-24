@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from safety_gate_service.analyzer import fallback_metrics
 from safety_gate_service.main import app, reset_models_for_testing
+from security_utils import safety_headers, set_safety_auth_env
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +13,7 @@ def reset_models(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("SAFETY_GATE_ACUITY_MODE", raising=False)
     monkeypatch.delenv("SAFETY_GATE_ACUITY_MODEL_PATH", raising=False)
+    set_safety_auth_env(monkeypatch)
     fallback_metrics.reset()
     reset_models_for_testing()
     yield
@@ -31,6 +33,7 @@ def test_timeout_triggers_rules_fallback(monkeypatch):
         }
 
     monkeypatch.setattr("safety_gate_service.ner.SafetyNER.analyze", slow_analyze, raising=False)
+    monkeypatch.setattr("safety_gate_service.language.detect", lambda _: "en")
 
     with TestClient(app) as client:
         decision_config = getattr(app.state, "decision_config")
@@ -39,6 +42,7 @@ def test_timeout_triggers_rules_fallback(monkeypatch):
 
         response = client.post(
             "/analyze",
+            headers=safety_headers(),
             json={
                 "practiceId": "p1",
                 "patient": {"id": "x"},

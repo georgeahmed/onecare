@@ -8,9 +8,17 @@
     "topic": { "type": "string" },
     "timestamp": { "type": "string", "format": "date-time" },
     "payload": { "type": ["object", "array", "string", "number", "boolean", "null"] },
-    "correlationId": { "type": "string" }
+    "correlationId": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "title": "EventEnvelopeMetadata",
+      "properties": {
+        "attempt": { "type": "integer", "minimum": 1 },
+        "firstSeenAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    }
   },
   "required": ["id", "topic", "timestamp", "payload"],
   "additionalProperties": false
 }
-

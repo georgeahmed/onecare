@@ -1,0 +1,35 @@
+{
+  "patient-123": [
+    {
+      "purpose": "care",
+      "resources": ["QuestionnaireResponse", "Communication", "Slot"],
+      "reference": "Consent/patient-123-care",
+      "grantedAt": "2024-01-01T00:00:00Z",
+      "expiresAt": "2030-01-01T00:00:00Z"
+    },
+    {
+      "purpose": "analytics-lite",
+      "resources": ["FeatureLog"],
+      "reference": "Consent/patient-123-analytics",
+      "grantedAt": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "patient-42": [
+    {
+      "purpose": "care",
+      "resources": ["QuestionnaireResponse", "Communication", "Slot"],
+      "reference": "Consent/patient-42-care",
+      "grantedAt": "2024-01-01T00:00:00Z",
+      "expiresAt": "2030-01-01T00:00:00Z"
+    }
+  ],
+  "patient-demo": [
+    {
+      "purpose": "care",
+      "resources": ["QuestionnaireResponse", "Communication", "Slot"],
+      "reference": "Consent/patient-demo-care",
+      "grantedAt": "2024-01-01T00:00:00Z",
+      "expiresAt": "2030-01-01T00:00:00Z"
+    }
+  ]
+}

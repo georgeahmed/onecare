@@ -15,6 +15,7 @@
     },
     "state": {
       "type": "string",
+      "title": "PortalState",
       "enum": ["UP", "DOWN", "OOH"],
       "description": "Resulting portal availability state."
     },

@@ -1,0 +1,14 @@
+[
+  {
+    "taskId": "task-alpha-001",
+    "patientId": "patient-alpha",
+    "priority": "ROUTINE",
+    "owner": "team:respiratory"
+  },
+  {
+    "taskId": "task-bravo-001",
+    "patientId": "patient-bravo",
+    "priority": "URGENT",
+    "owner": "team:pediatrics"
+  }
+]

@@ -1,14 +1,25 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
-import type { IcsClient } from '../adapters/ics.client';
+import { IcsClientError, type IcsClient } from '../adapters/ics.client';
 import type { IcsOrganisationPolicy, ResolvedConfig } from '@onecare/config';
 import { getIcsOrganisationPolicies } from '@onecare/config';
-import { createCounter, logger } from '@onecare/observability';
-import type { TypedEnvelope, IcsReferralRequest, AuditEvent, ErrorEnvelope } from '@onecare/events';
+import { createCounter, createHistogram, logger, startSpan } from '@onecare/observability';
+import type {
+  TypedEnvelope,
+  IcsReferralRequest,
+  AuditEvent,
+  ErrorEnvelope,
+  IcsReferralAck,
+} from '@onecare/events';
 import type { MessageBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import { publishAutomationTasks, type AutomationPublishOptions } from '../adapters/bus.adapter';
+import {
+  publishAutomationTasks,
+  publishReferralAck,
+  type AutomationPublishOptions,
+  type PublishOptions as BusPublishOptions,
+} from '../adapters/bus.adapter';
 import { buildRouteDecision, type RouteDecision, type RoutingConfig } from './routing';
 import { validateReferralIngress } from './ingress';
 import { createErrorEnvelope } from './errors';
@@ -21,10 +32,19 @@ import {
   type AutomationIntent,
   type AutomationTaskCreation,
 } from './automation.rules';
+import { SpanStatusCode } from '@opentelemetry/api';
+import { AuditSpool } from './audit.spool';
+import { ProcessingLimiter } from './backpressure';
 
-const routingDecisionCounter = createCounter('ics.routing.decisions_total');
-const routingBlockedCounter = createCounter('ics.routing.blocked_total');
-const routingRateLimitedCounter = createCounter('ics.routing.rate_limited_total');
+const routingDecisionCounter = createCounter('ics_routing_decisions_total');
+const routingBlockedCounter = createCounter('ics_routing_blocked_total');
+const routingRateLimitedCounter = createCounter('ics_routing_rate_limited_total');
+const routingLatencyHistogram = createHistogram('ics_routing_latency_ms');
+const processingOverloadCounter = createCounter('ics_backpressure_overload_total');
+const ackPublishedCounter = createCounter('ics_ack_published_total');
+const ackFailureCounter = createCounter('ics_ack_failed_total');
+const ackDuplicateCounter = createCounter('ics_ack_duplicate_total');
+const ackLatencyHistogram = createHistogram('ics_ack_latency_ms');
 
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_ICS_IDEMPOTENCY_TTL_SECONDS = 5 * 60;
@@ -102,6 +122,8 @@ export interface IcsContext extends MachineContext {
   client?: IcsClient;
   bus?: MessageBus;
   organisationId?: string;
+  originalOrganisationId?: string;
+  normalisedOrganisationId?: string;
   claim?: unknown;
   correlationId?: string;
   createTaskId?: () => string;
@@ -116,6 +138,7 @@ export interface IcsContext extends MachineContext {
   destinationOrgId?: string;
   auditIntents?: AuditEvent[];
   invalid?: boolean;
+  receivedAtMs?: number;
   automationConfig?: AutomationTriggerConfig;
   automationEvent?: AutomationTriggerEvent;
   automationIntents?: AutomationIntent[];
@@ -124,6 +147,16 @@ export interface IcsContext extends MachineContext {
   idempotencyStore?: IdempotencyStore;
   idempotencyTtlSeconds?: number;
   automationPublishIdempotencyKey?: string;
+  ack?: IcsReferralAck;
+  ackPublished?: boolean;
+  ackPublishIdempotencyKey?: string;
+  ackPublishOptions?: BusPublishOptions;
+  ackLatencyMs?: number;
+  responseHeaders?: Record<string, string>;
+  retryAfterSeconds?: number;
+  auditSpool?: AuditSpool;
+  processingLimiter?: ProcessingLimiter;
+  processingRelease?: (() => void) | null;
 }
 
 export interface IcsEvent extends MachineEvent {
@@ -132,7 +165,7 @@ export interface IcsEvent extends MachineEvent {
 
 type OrgPolicyMap = Record<string, IcsOrganisationPolicy>;
 
-interface InboundStateOptions {
+export interface InboundStateOptions {
   now?: () => number;
 }
 
@@ -178,9 +211,30 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     if (!ctx.auditIntents) {
       ctx.auditIntents = [];
     }
+    if (ctx.processingLimiter && !ctx.processingRelease) {
+      if (ctx.processingLimiter.isOverloaded()) {
+        applyBackpressureOutcome(ctx, ctx.processingLimiter, 'overloaded');
+        releaseProcessing(ctx);
+        return 'Validated';
+      }
+      try {
+        ctx.processingRelease = await ctx.processingLimiter.acquire(ctx.id ?? 'ics-message');
+      } catch (error) {
+        applyBackpressureOutcome(ctx, ctx.processingLimiter, 'queue_overflow');
+        releaseProcessing(ctx);
+        return 'Validated';
+      }
+    }
     if (!ctx.client) {
+      releaseProcessing(ctx);
       throw new Error('ics_client_missing');
     }
+
+    ctx.responseHeaders = {};
+    ctx.retryAfterSeconds = undefined;
+    ctx.receivedAtMs = this.now();
+    ctx.ackPublished = false;
+    ctx.ack = undefined;
 
     const validation = validateReferralIngress(ctx.rawEnvelope ?? ctx.referralEnvelope);
     if (!validation.ok) {
@@ -194,10 +248,9 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
         httpStatus: 400,
         error: validation.error,
       };
-      this.recordAudit(ctx, 'ics.referral.validation_failed', {
-        reason: validation.reason,
-      });
+      pushAudit(ctx, 'ics.referral.validation_failed', { reason: validation.reason }, undefined, this.now);
       routingDecisionCounter.add(1, { outcome: 'invalid' });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -225,31 +278,52 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
           ctx.correlationId,
         ),
       };
-      this.recordAudit(ctx, 'ics.referral.validation_failed', {
-        reason: 'organisation_missing',
-        referralId: envelope.payload.referralId,
-      });
+      pushAudit(
+        ctx,
+        'ics.referral.validation_failed',
+        {
+          reason: 'organisation_missing',
+          referralId: envelope.payload.referralId,
+        },
+        undefined,
+        this.now,
+      );
       routingDecisionCounter.add(1, { outcome: 'invalid' });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
     const correlationId = ctx.correlationId;
-    this.recordAudit(ctx, 'ics.referral.received', {
-      referralId: envelope.payload.referralId,
-      organisationId: requestedOrg,
-    }, correlationId);
+    pushAudit(
+      ctx,
+      'ics.referral.received',
+      {
+        referralId: envelope.payload.referralId,
+        organisationId: requestedOrg,
+      },
+      correlationId,
+      this.now,
+    );
 
     const normalisedOrg = normaliseOrgId(requestedOrg);
     ctx.organisationId = normalisedOrg;
+    ctx.normalisedOrganisationId = normalisedOrg;
+    ctx.originalOrganisationId = requestedOrg;
 
     const routeDecision = buildRouteDecision(envelope.payload, this.routingConfig);
     ctx.routeDecision = routeDecision;
     ctx.destinationOrgId = routeDecision.destinationOrgId;
-    this.recordAudit(ctx, 'ics.referral.route_decided', {
-      referralId: envelope.payload.referralId,
-      destinationOrgId: routeDecision.destinationOrgId,
-      policy: routeDecision.policy,
-    }, correlationId);
+    pushAudit(
+      ctx,
+      'ics.referral.route_decided',
+      {
+        referralId: envelope.payload.referralId,
+        destinationOrgId: routeDecision.destinationOrgId,
+        policy: routeDecision.policy,
+      },
+      correlationId,
+      this.now,
+    );
 
     const policy = this.policies.get(normalisedOrg);
     if (!policy) {
@@ -275,6 +349,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       });
       routingDecisionCounter.add(1, { outcome: 'blocked', organisationId: normalisedOrg });
       routingBlockedCounter.add(1, { organisationId: normalisedOrg });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -302,6 +377,12 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
           correlationId,
         ),
       };
+      if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)) {
+        const seconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+        ctx.retryAfterSeconds = seconds;
+        ctx.responseHeaders ??= {};
+        ctx.responseHeaders['Retry-After'] = String(seconds);
+      }
       logger.warn('ics.routing.rate_limited', {
         organisationId: normalisedOrg,
         correlationId,
@@ -310,6 +391,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       });
       routingDecisionCounter.add(1, { outcome: 'rate_limited', organisationId: normalisedOrg });
       routingRateLimitedCounter.add(1, { organisationId: normalisedOrg });
+      releaseProcessing(ctx);
       return 'Validated';
     }
 
@@ -325,25 +407,6 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
     return 'Validated';
   }
 
-  private timestamp(): string {
-    return new Date(this.now()).toISOString();
-  }
-
-  private recordAudit(
-    ctx: IcsContext,
-    type: string,
-    details: Record<string, unknown>,
-    correlationId?: string,
-  ): void {
-    const event: AuditEvent = {
-      type,
-      timestamp: this.timestamp(),
-      correlationId: correlationId ?? null,
-      actor: null,
-      details,
-    };
-    ctx.auditIntents?.push(event);
-  }
 }
 
 export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
@@ -354,6 +417,7 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
     if (ctx.routingOutcome?.status === 'invalid') {
       ctx.invalid = true;
+      releaseProcessing(ctx);
       return 'Invalid';
     }
     if (ctx.blocked) {
@@ -362,6 +426,7 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
         httpStatus: 403,
         error: createErrorEnvelope('forbidden', 'organisation_not_allowed'),
       };
+      releaseProcessing(ctx);
       return 'Blocked';
     }
     if (ctx.rateLimited) {
@@ -372,10 +437,18 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
         routeDecision: ctx.routeDecision ?? buildRouteDecisionFromContext(ctx),
         error: createErrorEnvelope('too_many_requests', 'rate_limit_exceeded'),
       };
+      releaseProcessing(ctx);
       return 'RateLimited';
     }
     if (!ctx.routePolicy) {
+      releaseProcessing(ctx);
       throw new Error('route_policy_missing');
+    }
+    if (typeof ctx.receivedAtMs === 'number') {
+      const latency = Math.max(0, Date.now() - ctx.receivedAtMs);
+      routingLatencyHistogram.record(latency, {
+        organisationId: ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown',
+      });
     }
     return 'Routed';
   }
@@ -386,8 +459,158 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
     super('Routed');
   }
 
-  async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (!ctx.client) {
+      releaseProcessing(ctx);
+      throw new Error('ics_client_missing');
+    }
+    if (!ctx.referral) {
+      releaseProcessing(ctx);
+      throw new Error('ics_referral_missing');
+    }
+    if (!ctx.bus) {
+      releaseProcessing(ctx);
+      throw new Error('ics_bus_missing');
+    }
+    try {
+    const destinationOrgId =
+      ctx.routeDecision?.destinationOrgId ??
+      ctx.originalOrganisationId ??
+      ctx.organisationId ??
+      ctx.referral.org;
+    const correlationId = ctx.correlationId;
+    const idempotencyKey = deriveAckIdempotencyKey(ctx, destinationOrgId);
+    const ttlSeconds = resolveIcsIdempotencyTtl(ctx);
+    ctx.ackPublishIdempotencyKey = idempotencyKey;
+
+    const { status, result } = await executeWithIdempotency({
+      store: ctx.idempotencyStore,
+      key: idempotencyKey,
+      ttlSeconds,
+      execute: async () => {
+        const span = startSpan('ics.referral.ack', {
+          attributes: {
+            'ics.destination_org': destinationOrgId ?? 'unknown-org',
+            'ics.referral_id': ctx.referral?.referralId ?? 'unknown-referral',
+          },
+        });
+        const attemptStartedAt = Date.now();
+        try {
+          const ack = await ctx.client!.sendReferral(ctx.referral!, {
+            correlationId,
+            organisationIdOverride: destinationOrgId,
+          });
+          ctx.ack = ack;
+          await publishReferralAck(ctx.bus!, ack, correlationId, ctx.ackPublishOptions);
+          ctx.ackPublished = true;
+          const latency =
+            typeof ctx.receivedAtMs === 'number'
+              ? Date.now() - ctx.receivedAtMs
+              : Date.now() - attemptStartedAt;
+          ctx.ackLatencyMs = latency;
+          const metricLabels = {
+            destinationOrgId,
+            accepted: ack.accepted ? 'true' : 'false',
+          };
+          ackPublishedCounter.add(1, metricLabels);
+          if (Number.isFinite(latency) && latency >= 0) {
+            ackLatencyHistogram.record(latency, metricLabels);
+          }
+          pushAudit(
+            ctx,
+            'ics.referral.ack_published',
+            {
+              referralId: ack.referralId,
+              destinationOrgId,
+              accepted: ack.accepted,
+            },
+            correlationId,
+          );
+          logger.info('ics.referral.ack_published', {
+            referralId: ack.referralId,
+            destinationOrgId,
+            correlationId,
+          });
+          span.setStatus({ code: SpanStatusCode.OK });
+          return ack;
+        } catch (error) {
+          ackFailureCounter.add(1, { destinationOrgId });
+          const reason =
+            error instanceof Error ? error.message : 'unknown_error';
+          const retryAfterMs =
+            error instanceof IcsClientError ? error.retryAfterMs : undefined;
+          if (error instanceof Error) {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            logger.error('ics.referral.ack_failed', {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              correlationId,
+              reason: error.message,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+            });
+          } else {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: 'unknown_error' });
+            logger.error('ics.referral.ack_failed', {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              correlationId,
+              reason: 'unknown_error',
+            });
+          }
+          pushAudit(
+            ctx,
+            'ics.referral.ack_failed',
+            {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              reason,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+            },
+            correlationId,
+          );
+          if (retryAfterMs !== undefined) {
+            ctx.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+            ctx.responseHeaders ??= {};
+            ctx.responseHeaders['Retry-After'] = String(ctx.retryAfterSeconds);
+          }
+          throw error;
+        } finally {
+          span.end();
+        }
+      },
+      onDuplicate: () => {
+        ctx.ackPublished = true;
+        if (!ctx.ack) {
+          const accepted =
+            ctx.routingOutcome?.status === 'forbidden'
+              ? false
+              : ctx.routingOutcome?.status === 'rate_limited'
+                ? false
+                : true;
+          ctx.ack = {
+            referralId: ctx.referral?.referralId ?? 'unknown-referral',
+            accepted,
+            note: 'duplicate_ack_suppressed',
+          };
+        }
+        ackDuplicateCounter.add(1, { destinationOrgId });
+        logger.warn('ics.referral.ack_duplicate', {
+          referralId: ctx.referral?.referralId,
+          destinationOrgId,
+          correlationId,
+        });
+      },
+    });
+
+    if (status === 'executed' && result) {
+      ctx.ack = result;
+    }
+
     return 'Acked';
+    } finally {
+      releaseProcessing(ctx);
+    }
   }
 }
 
@@ -397,7 +620,40 @@ export class InvalidState extends BaseState<IcsContext, IcsEvent> {
   }
 
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(_ctx);
     return 'Invalid';
+  }
+}
+
+export class BlockedState extends BaseState<IcsContext, IcsEvent> {
+  constructor() {
+    super('Blocked');
+  }
+
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(ctx);
+    return 'Blocked';
+  }
+}
+
+export class RateLimitedState extends BaseState<IcsContext, IcsEvent> {
+  constructor() {
+    super('RateLimited');
+  }
+
+  async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    if (
+      typeof ctx.retryAfterSeconds === 'number' &&
+      Number.isFinite(ctx.retryAfterSeconds) &&
+      ctx.retryAfterSeconds > 0
+    ) {
+      ctx.responseHeaders ??= {};
+      if (!ctx.responseHeaders['Retry-After']) {
+        ctx.responseHeaders['Retry-After'] = String(Math.ceil(ctx.retryAfterSeconds));
+      }
+    }
+    releaseProcessing(ctx);
+    return 'RateLimited';
   }
 }
 
@@ -455,6 +711,17 @@ export function evaluateAutomation(
     now: options.now,
   });
   ctx.automationTasks = tasks;
+  if (tasks.length > 0) {
+    const publishKey = buildAutomationPublishKey(ctx, event, tasks);
+    if (publishKey) {
+      ctx.automationPublishIdempotencyKey = publishKey;
+    }
+    const debounceTtl = deriveAutomationDebounceTtl(tasks);
+    if (debounceTtl) {
+      const currentTtl = typeof ctx.idempotencyTtlSeconds === 'number' ? ctx.idempotencyTtlSeconds : 0;
+      ctx.idempotencyTtlSeconds = Math.max(currentTtl, debounceTtl);
+    }
+  }
   return tasks;
 }
 
@@ -514,7 +781,85 @@ function resolveIcsIdempotencyTtl(ctx: IcsContext): number {
 
 function deriveAutomationPublishKey(ctx: IcsContext): string {
   if (ctx.automationPublishIdempotencyKey) return ctx.automationPublishIdempotencyKey;
-  return `ics:automation:${ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
+  return `ics:automation:${ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
+}
+
+function buildAutomationPublishKey(
+  ctx: IcsContext,
+  event: AutomationTriggerEvent,
+  tasks: AutomationTaskCreation[],
+): string {
+  const orgSegment = ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown-org';
+  const sourceTaskId = event.current?.taskId ?? 'unknown-task';
+  const ruleSegment = tasks
+    .map((task) => `${task.ruleName}:${task.task.patientId}`)
+    .sort()
+    .join('|') || 'none';
+  const correlationSegment = event.correlationId ?? ctx.correlationId ?? 'none';
+  return `ics:automation:${orgSegment}:${sourceTaskId}:${ruleSegment}:${correlationSegment}`;
+}
+
+function deriveAutomationDebounceTtl(tasks: AutomationTaskCreation[]): number | undefined {
+  const windows = tasks
+    .map((task) => task.debounceWindowSeconds)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  if (windows.length === 0) return undefined;
+  return Math.max(...windows);
+}
+
+function applyBackpressureOutcome(
+  ctx: IcsContext,
+  limiter: ProcessingLimiter,
+  reason: 'overloaded' | 'queue_overflow',
+): void {
+  const retryAfterSeconds = limiter.retryAfterSecondsValue;
+  ctx.rateLimited = true;
+  ctx.blocked = false;
+  ctx.retryAfterSeconds = retryAfterSeconds;
+  ctx.responseHeaders ??= {};
+  ctx.responseHeaders['Retry-After'] = String(retryAfterSeconds);
+  ctx.routePolicy ??= { endpoint: 'ics-backpressure', rateLimit: limiter.capacity } as IcsOrganisationPolicy;
+  const decision = ctx.routeDecision ?? buildRouteDecisionFromContext(ctx);
+  ctx.routeDecision = decision;
+  ctx.routingOutcome = {
+    status: 'rate_limited',
+    httpStatus: 429,
+    policy: ctx.routePolicy!,
+    retryAfterMs: retryAfterSeconds * 1_000,
+    routeDecision: decision,
+    error: createErrorEnvelope('too_many_requests', 'processing_overloaded', {
+      reason,
+      queueSize: limiter.queueSize,
+      inflight: limiter.inflightCount,
+      capacity: limiter.capacity,
+    }),
+  };
+  processingOverloadCounter.add(1, { reason });
+  pushAudit(
+    ctx,
+    'ics.referral.backpressure',
+    {
+      reason,
+      queueSize: limiter.queueSize,
+      inflight: limiter.inflightCount,
+      capacity: limiter.capacity,
+    },
+    ctx.correlationId,
+  );
+}
+
+function releaseProcessing(ctx: IcsContext): void {
+  const release = ctx.processingRelease;
+  if (!release) return;
+  try {
+    release();
+  } catch (error) {
+    logger.error('ics.backpressure.release_failed', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    ctx.processingRelease = null;
+  }
 }
 
 export class AckedState extends BaseState<IcsContext, IcsEvent> {
@@ -523,6 +868,52 @@ export class AckedState extends BaseState<IcsContext, IcsEvent> {
   }
 
   async handle(_ctx: IcsContext, _event: IcsEvent): Promise<string> {
+    releaseProcessing(_ctx);
     return 'Acked';
   }
+}
+
+function pushAudit(
+  ctx: IcsContext,
+  type: string,
+  details: Record<string, unknown>,
+  correlationId?: string,
+  timestampProvider: () => number = Date.now,
+): void {
+  const stamp = new Date(timestampProvider()).toISOString();
+  const event: AuditEvent = {
+    type,
+    ts: stamp,
+    correlationId: correlationId ?? null,
+    actorRef: null,
+    subjectRef: null,
+    outcome: null,
+    reasonCode: null,
+    details,
+  };
+  ctx.auditIntents?.push(event);
+  ctx.auditSpool?.enqueue(event, correlationId ?? undefined);
+}
+
+function deriveAckIdempotencyKey(ctx: IcsContext, destinationOrgId: string): string {
+  if (ctx.ackPublishIdempotencyKey) {
+    return ctx.ackPublishIdempotencyKey;
+  }
+  const referralId = ctx.referral?.referralId ?? 'unknown-referral';
+  const envelopeId = ctx.referralEnvelope?.id ?? 'unknown-envelope';
+  const orgId = destinationOrgId?.trim().length ? destinationOrgId : 'unknown-org';
+  return `ics:ack:${orgId}:${referralId}:${envelopeId}`;
+}
+
+export function initialiseIcsContext(
+  ctx: IcsContext,
+  deps: { auditSpool?: AuditSpool; processingLimiter?: ProcessingLimiter },
+): IcsContext {
+  if (deps.auditSpool) {
+    ctx.auditSpool = deps.auditSpool;
+  }
+  if (deps.processingLimiter) {
+    ctx.processingLimiter = deps.processingLimiter;
+  }
+  return ctx;
 }

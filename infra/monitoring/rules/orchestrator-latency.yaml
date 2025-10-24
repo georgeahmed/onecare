@@ -1,0 +1,35 @@
+groups:
+  - name: orchestrator-latency
+    rules:
+      - alert: OrchestratorLatencyP95Warning
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[5m])) by (le)
+          ) > 1500
+        for: 5m
+        labels:
+          severity: warning
+          slo: latency
+          team: devops-sre
+          service: orchestrator
+        annotations:
+          summary: "Triage latency (p95) breaching 1.5s for 5 minutes"
+          description: "p95 /safety-check latency exceeded 1500ms for the last 5 minutes."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
+      - alert: OrchestratorLatencyP95Critical
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[30m])) by (le)
+          ) > 1500
+        for: 15m
+        labels:
+          severity: critical
+          slo: latency
+          team: devops-sre
+          service: orchestrator
+        annotations:
+          summary: "Triage latency (p95) breaching 1.5s for 30 minutes"
+          description: "p95 /safety-check latency exceeded 1500ms for the last 30 minutes."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency

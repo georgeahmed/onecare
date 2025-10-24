@@ -83,6 +83,7 @@ describe('IcsHttpClient', () => {
     const dispatcher = vi.fn(async (_route, request: IcsReferralRequest, context) => {
       expect(context.headers.Authorization).toBe('Bearer token');
       expect(context.headers['x-correlation-id']).toBe('corr-123');
+      expect(context.headers.Accept).toBe('application/json');
       expect(context.tls).toEqual({ ca: 'CA', cert: 'CERT', key: 'KEY', rejectUnauthorized: true });
       expect(context.operation).toBe('referral');
       expect(request.org).toBe('ORG1');
@@ -122,6 +123,84 @@ describe('IcsHttpClient', () => {
         }),
       ]),
     );
+  });
+
+  it('enforces https endpoints and blocks private hosts', () => {
+    expect(() => new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'http://ics.example.org',
+        },
+      },
+    })).toThrow('ics_endpoint_insecure');
+
+    expect(() => new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://127.0.0.1/service',
+        },
+      },
+    })).toThrow('ics_endpoint_blocked');
+  });
+
+  it('normalises endpoint path by trimming trailing slash', async () => {
+    const dispatcher = vi.fn(async (_route, request: IcsReferralRequest, context) => {
+      expect(context.endpoint).toBe('https://ics.example/org1');
+      expect(context.headers.Accept).toBe('application/json');
+      return { referralId: request.referralId, accepted: true };
+    });
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1/',
+          retry: { attempts: 0 },
+          circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000 },
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    await client.sendReferral(baseReferral);
+    expect(dispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes route credentials and TLS without rebuilding client', async () => {
+    const dispatcher = vi.fn(async (_route, request: IcsReferralRequest, context) => ({
+      referralId: request.referralId,
+      accepted: true,
+      headers: context.headers,
+      tls: context.tls,
+    }));
+    const client = new IcsHttpClient({
+      routes: {
+        ORG1: {
+          endpoint: 'https://ics.example/org1',
+          headers: { 'X-Org': 'ORG1', Authorization: 'Bearer initial' },
+          tls: { ca: 'CA1', cert: 'CERT1', key: 'KEY1', rejectUnauthorized: true },
+          retry: { attempts: 0 },
+          circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000 },
+        },
+      },
+      referralDispatcher: dispatcher,
+    });
+
+    await client.sendReferral(baseReferral, { correlationId: 'corr-initial' });
+    dispatcher.mockClear();
+
+    client.refreshRouteCredentials('ORG1', {
+      headers: { 'X-Org': 'ORG1', 'X-Env': 'rotated' },
+      apiKey: 'rotated-token',
+      correlationHeader: 'x-rot-corr',
+      tls: { ca: 'CA2', cert: 'CERT2', key: 'KEY2', rejectUnauthorized: true },
+    });
+
+    await client.sendReferral(baseReferral, { correlationId: 'corr-rotated' });
+    const [, , context] = dispatcher.mock.calls.at(-1)!;
+    expect(context.headers.Authorization).toBe('Bearer rotated-token');
+    expect(context.headers['X-Env']).toBe('rotated');
+    expect(context.headers.Accept).toBe('application/json');
+    expect(context.headers['x-rot-corr']).toBe('corr-rotated');
+    expect(context.tls).toEqual({ ca: 'CA2', cert: 'CERT2', key: 'KEY2', rejectUnauthorized: true });
   });
 
   it('acknowledges referral using same route', async () => {

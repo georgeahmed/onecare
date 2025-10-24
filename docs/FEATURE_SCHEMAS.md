@@ -108,3 +108,4 @@ Conventions & Next Steps
 - All schemas set `additionalProperties: false`; additive signals should be placed under the `extensions` map (triage) or require a schema bump.
 - When introducing a new feature set, add a corresponding entry in this document capturing owner, freshness SLA, join keys, and sample payload.
 - Pipelines (including `scripts/feature_backfill.js`) must validate payloads with the `@onecare/ports` helpers before writing to the feature store. A failing validation should be treated as a data quality incident (surface to DLQ/alerts).
+- Keep the feature registry (`docs/FEATURE_REGISTRY.md`) in sync with any schema additions or ownership changes.

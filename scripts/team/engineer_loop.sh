@@ -29,7 +29,7 @@ echo "[loop] Starting engineer loop for $ENGINEER, task: $TASK_SUBSTR"
 
 if [[ $DO_SCHEMAS -eq 1 ]]; then
   echo "[loop] Running codegen (TS + optional Py via RUN_PY=1 env)"
-  npm run codegen
+  npm run --workspaces=false codegen
 fi
 
 echo "[loop] TypeScript build/typecheck/lint/test"

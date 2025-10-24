@@ -40,8 +40,24 @@ services:
       interval: 5s
       timeout: 2s
       retries: 10
+
+  nats-bootstrap:
+    image: node:20-alpine
+    restart: "no"
+    depends_on:
+      nats:
+        condition: service_healthy
+    working_dir: /app
+    command: ["node", "scripts/nats/bootstrap.js"]
+    environment:
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+    volumes:
+      - ./:/app:ro
+
   otel-collector:
-    image: otel/opentelemetry-collector:0.97.0
+    image: otel/opentelemetry-collector-contrib:0.97.0
     restart: unless-stopped
     command: ["--config", "/etc/otel-collector.yaml"]
     volumes:
@@ -72,7 +88,9 @@ services:
     restart: unless-stopped
     environment:
       - PORT=3001
+      - PRACTICE_ID=demo
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
+      - PY_SAFETY_GATE_HOST_ALLOWLIST=safety-gate
       - PY_SCRIBE_URL=http://scribe:8082
       - BUS_IMPL=nats
       - NATS_URL=nats://onecare:onecare-secret@nats:4222
@@ -80,6 +98,11 @@ services:
       - NATS_PASS=onecare-secret
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
+      - NATS_TLS_ENABLED=0
+      - NATS_TLS_REQUIRED=0
+      - CONFIG_ROOT=/app/config
+      - FHIR_BASE_URL=${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4}
+      - SECURITY_SHARED_SECRET=${SECURITY_SHARED_SECRET:-dev-shared-secret}
     ports:
       - "3001:3001"
     deploy:
@@ -97,6 +120,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
 
   safety-gate:
     build:
@@ -145,6 +170,8 @@ services:
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
       - ANALYTICS_SINK_PATH=/var/analytics/metrics.jsonl
+      - NATS_TLS_ENABLED=0
+      - NATS_TLS_REQUIRED=0
     volumes:
       - analytics-metrics:/var/analytics
     deploy:
@@ -158,7 +185,176 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+
+  loki:
+    image: grafana/loki:2.9.6
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config/loki-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/logs/loki-config.yaml:/etc/loki/config/loki-config.yaml:ro
+      - loki-data:/loki
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  promtail:
+    image: grafana/promtail:2.9.6
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config/promtail-config.yaml"]
+    volumes:
+      - ./infra/logs/promtail-config.yaml:/etc/promtail/config/promtail-config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_FEATURE_TOGGLES_ENABLE=tempoSearch,lokiLogsStreaming
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infra/logs/grafana-provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  mock-safety-gate:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-safety-gate.mjs"]
+    environment:
+      - PORT=5011
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=safety-gate
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "5011:5011"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5011/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  mock-scribe:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-scribe.mjs"]
+    environment:
+      - PORT=5012
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=scribe
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "5012:5012"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5012/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  mock-fhir:
+    profiles: ['test']
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "mock-fhir.mjs"]
+    environment:
+      - PORT=9500
+      - MOCK_DATA_PATH=/data
+      - MOCK_SERVICE_NAME=fhir
+    volumes:
+      - ./qa/env/mocks:/app:ro
+      - ./qa/env/mock-data:/data
+    ports:
+      - "9500:9500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9500/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+
+  qa-test-env:
+    profiles: ['test']
+    image: alpine:3.20
+    command: ["tail", "-f", "/dev/null"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-safety-gate:
+        condition: service_healthy
+      mock-scribe:
+        condition: service_healthy
+      mock-fhir:
+        condition: service_healthy
+    volumes:
+      - ./qa/env/mock-data:/data:ro
 
 volumes:
   nats-data:
   analytics-metrics:
+  loki-data:
+  prometheus-data:
+  grafana-data:

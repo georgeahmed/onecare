@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { promises as dns } from 'node:dns';
+import { readFileSync } from 'node:fs';
 import { PortalSubmission, SafetyDecision } from '@onecare/events';
 import { logger } from '@onecare/observability';
 import { context, trace } from '@opentelemetry/api';
@@ -37,7 +38,6 @@ export class SafetyGateHttpError extends Error {
 
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = resolveMaxResponseBytes();
-let STATIC_AUTH_HEADERS = resolveSafetyGateAuthHeaders();
 const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
   accept: 'application/json',
   'user-agent': 'onecare-orchestrator',
@@ -63,13 +63,28 @@ function isIpV6LoopbackOrPrivate(host: string): boolean {
 async function enforceAllowlist(url: URL): Promise<void> {
   const hostname = url.hostname;
   if (!/^https?:$/.test(url.protocol)) throw new Error('blocked_protocol');
-  if (hostname === 'localhost' || hostname.endsWith('.local')) throw new Error('blocked_host');
+  const allowEntries = (process.env.PY_SAFETY_GATE_HOST_ALLOWLIST || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+  const allowlist = new Set(allowEntries);
+  const hostKey = hostname.toLowerCase();
+  const allowlisted = allowlist.has(hostKey);
+
+  if (allowlist.size > 0 && !allowlisted) {
+    throw new Error('blocked_not_allowlisted');
+  }
+
+  if (allowlisted) {
+    return;
+  }
+
+  if (hostKey === 'localhost' || hostKey.endsWith('.local')) throw new Error('blocked_host');
   const isV4 = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
   const isV6 = /^[0-9a-fA-F:]+$/.test(hostname);
   if (isV4 && isIpV4Private(hostname)) throw new Error('blocked_private_ip');
   if (isV6 && isIpV6LoopbackOrPrivate(hostname)) throw new Error('blocked_private_ip');
-  const allow = (process.env.PY_SAFETY_GATE_HOST_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (allow.length > 0 && !allow.includes(hostname)) throw new Error('blocked_not_allowlisted');
+
   if (!isV4 && !isV6) {
     let records;
     try {
@@ -254,10 +269,37 @@ function resolveMaxResponseBytes(): number {
   return Math.min(Math.floor(parsed), 2 * 1024 * 1024);
 }
 
+function readSecretEnv(value: string | undefined, fileEnv: string | undefined, logKey: string): string | undefined {
+  const inline = value?.trim();
+  const filePath = fileEnv?.trim();
+  if (!filePath) {
+    return inline && inline.length > 0 ? inline : undefined;
+  }
+  try {
+    const contents = readFileSync(filePath, 'utf8').trim();
+    if (contents.length === 0) {
+      logger.warn('safety gate auth file empty', { key: logKey, path: filePath });
+      return inline && inline.length > 0 ? inline : undefined;
+    }
+    return contents;
+  } catch (error) {
+    logger.warn('safety gate auth file read failed', {
+      key: logKey,
+      path: filePath,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return inline && inline.length > 0 ? inline : undefined;
+  }
+}
+
 function resolveSafetyGateAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const headerName = process.env.PY_SAFETY_GATE_AUTH_HEADER_NAME?.trim();
-  const headerValue = process.env.PY_SAFETY_GATE_AUTH_HEADER_VALUE?.trim();
+  const headerValue = readSecretEnv(
+    process.env.PY_SAFETY_GATE_AUTH_HEADER_VALUE,
+    process.env.PY_SAFETY_GATE_AUTH_HEADER_VALUE_FILE,
+    'auth_header_value',
+  );
   let skipAuthorization = false;
   if (headerName && headerValue) {
     headers[headerName] = headerValue;
@@ -265,9 +307,17 @@ function resolveSafetyGateAuthHeaders(): Record<string, string> {
   }
 
   const apiKey =
-    process.env.PY_SAFETY_GATE_API_KEY?.trim() ??
-    process.env.PY_SAFETY_GATE_BEARER_TOKEN?.trim() ??
-    process.env.PY_SAFETY_GATE_TOKEN?.trim();
+    readSecretEnv(
+      process.env.PY_SAFETY_GATE_API_KEY,
+      process.env.PY_SAFETY_GATE_API_KEY_FILE,
+      'api_key',
+    ) ??
+    readSecretEnv(
+      process.env.PY_SAFETY_GATE_BEARER_TOKEN,
+      process.env.PY_SAFETY_GATE_BEARER_TOKEN_FILE,
+      'bearer_token',
+    ) ??
+    readSecretEnv(process.env.PY_SAFETY_GATE_TOKEN, process.env.PY_SAFETY_GATE_TOKEN_FILE, 'token');
   if (apiKey && !skipAuthorization && !hasAuthorizationHeader(headers)) {
     headers.Authorization = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
   }
@@ -294,17 +344,17 @@ function hasAuthorizationHeader(headers: Record<string, string>): boolean {
 }
 
 function buildSafetyGateHeaders(options: AnalyzePortalSubmissionOptions): Record<string, string> {
-  const headers: Record<string, string> = { ...STATIC_AUTH_HEADERS };
+  const headers: Record<string, string> = { ...resolveSafetyGateAuthHeaders() };
   const correlationId = options.correlationId;
-  if (correlationId && correlationId.trim().length > 0) {
+  if (correlationId && correlationId.trim().length > 0 && !headers['x-correlation-id']) {
     headers['x-correlation-id'] = correlationId.trim();
   }
   const traceParent = currentTraceParent();
-  if (traceParent) {
+  if (traceParent && !headers.traceparent) {
     headers.traceparent = traceParent;
   }
   const requestId = options.requestId;
-  if (requestId && requestId.trim().length > 0) {
+  if (requestId && requestId.trim().length > 0 && !headers['x-request-id']) {
     headers['x-request-id'] = requestId.trim();
   }
   const scopes = new Set<string>([SAFETY_GATE_SCOPE]);
@@ -335,9 +385,7 @@ export const __safetyGateTesting = {
   mapStatusToError,
   parseRetryAfter,
   MAX_RESPONSE_BYTES,
-  refreshAuthHeaders: () => {
-    STATIC_AUTH_HEADERS = resolveSafetyGateAuthHeaders();
-  },
+  refreshAuthHeaders: () => undefined,
 };
 
 export function parseJsonOrThrow<T>(text: string): T {
@@ -370,31 +418,41 @@ export interface AnalyzePortalSubmissionOptions {
 
 export async function analyzePortalSubmission(
   submission: PortalSubmission,
-  endpoint = process.env.PY_SAFETY_GATE_URL || 'http://localhost:8081',
+  endpoint?: string,
   options: AnalyzePortalSubmissionOptions = {}
 ): Promise<SafetyDecision> {
-  const correlationId = options.correlationId;
-  const url = `${endpoint.replace(/\/$/, '')}/analyze`;
+  const normalizedOptions =
+    typeof options === 'string'
+      ? ({ correlationId: options } satisfies AnalyzePortalSubmissionOptions)
+      : options;
+  const correlationId = normalizedOptions.correlationId;
+  const candidateEndpoint = endpoint ?? process.env.PY_SAFETY_GATE_URL;
+  const trimmedEndpoint = candidateEndpoint?.trim();
+  if (!trimmedEndpoint) {
+    throw new Error('safety_gate_endpoint_missing');
+  }
+  const normalizedEndpoint = trimmedEndpoint.replace(/\/$/, '');
+  const url = `${normalizedEndpoint}/analyze`;
   try {
     await enforceAllowlist(new URL(url));
   } catch (error) {
     logger.warn('safety gate endpoint blocked by SSRF guard', {
       reason: (error as Error).message,
-      endpoint,
+      endpoint: trimmedEndpoint,
       correlationId,
     });
     throw error;
   }
 
   const headerOptions: AnalyzePortalSubmissionOptions = {
-    ...options,
+    ...normalizedOptions,
     correlationId,
   };
   const headers = buildSafetyGateHeaders(headerOptions);
   const client: SafetyGateClient =
-    options.client ?? ((u, b, h, s) => postJson<SafetyDecision>(u, b, h, s));
+    normalizedOptions.client ?? ((u, b, h, s) => postJson<SafetyDecision>(u, b, h, s));
   try {
-    return await client(url, submission, headers, options.signal);
+    return await client(url, submission, headers, normalizedOptions.signal);
   } catch (error) {
     logger.warn('safety gate call failed', {
       err: (error as Error)?.message,

@@ -1,0 +1,13 @@
+{
+  "envelope": {
+    "id": "env-ics-1",
+    "topic": "ics.referral.request",
+    "correlationId": "corr-sandbox",
+    "payload": {
+      "referralId": "ics-ref-1",
+      "patientId": "patient-ics-1",
+      "org": "ORG1",
+      "reason": "sandbox-routing"
+    }
+  }
+}

@@ -1,0 +1,88 @@
+fullnameOverride: booking
+nameOverride: booking
+component: booking
+
+image:
+  repository: ghcr.io/onecare/booking
+  tag: latest
+
+replicaCount: 2
+
+service:
+  port: 8080
+  targetPort: http
+
+probes:
+  readiness:
+    path: /readyz
+    port: http
+  liveness:
+    path: /healthz
+    port: http
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
+resources:
+  requests:
+    cpu: 300m
+    memory: 512Mi
+  limits:
+    cpu: 600m
+    memory: 1Gi
+
+env:
+  - name: NODE_ENV
+    value: production
+  - name: GP_CONNECT_URL
+    valueFrom:
+      secretKeyRef:
+        name: booking-secrets
+        key: gp_connect_url
+  - name: GP_CONNECT_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: booking-secrets
+        key: gp_connect_api_key
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    enabled: true
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: messaging
+        ports:
+          - protocol: TCP
+            port: 4222
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: observability
+        ports:
+          - protocol: TCP
+            port: 4317
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: booking.onecare.health
+      paths:
+        - path: /booking
+          pathType: Prefix
+  tls:
+    - hosts:
+        - booking.onecare.health
+      secretName: booking-ingress-tls

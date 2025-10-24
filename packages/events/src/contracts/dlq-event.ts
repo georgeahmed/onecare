@@ -5,6 +5,7 @@ export interface DlqEvent {
   correlationId?: string;
   errorCode?: string;
   errorMessage?: string;
+  attempts?: number;
   /**
    * Opaque reference or small safe context; avoid PHI.
    */

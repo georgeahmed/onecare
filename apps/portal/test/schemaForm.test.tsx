@@ -1,8 +1,9 @@
 /// <reference types="vitest/globals" />
 
+import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import SchemaForm, { collectValidationIssues, type JsonSchema } from '../src/features/schemaForm/SchemaForm';
+import SchemaForm, { coerceNumberInput, collectValidationIssues, type JsonSchema } from '../src/features/schemaForm/SchemaForm';
 import type { PortalSubmission } from '../src/lib/types';
 import { I18nProvider } from '../src/i18n';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -120,5 +121,68 @@ describe('SchemaForm', () => {
     });
 
     expect(validIssues).toEqual([]);
+  });
+
+  it('enforces string length and pattern constraints', () => {
+    const longId = 'a'.repeat(80);
+    const lengthIssues = collectValidationIssues(
+      schema,
+      buildSubmission({
+        practiceId: longId,
+        patient: { id: 'patient-456' },
+        narrative: 'Concern details go here.'
+      })
+    );
+
+    expect(lengthIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'practiceId', kind: 'max-length' })
+      ])
+    );
+
+    const patternIssues = collectValidationIssues(
+      schema,
+      buildSubmission({
+        practiceId: 'invalid id',
+        patient: { id: 'patient-456' },
+        narrative: 'Concern details go here.'
+      })
+    );
+
+    expect(patternIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'practiceId', kind: 'pattern' })
+      ])
+    );
+  });
+
+  it('rejects unsafe protocols for URI formatted fields', () => {
+    const linkSchema: JsonSchema = {
+      type: 'object',
+      properties: {
+        link: { type: 'string', format: 'uri' }
+      },
+      required: ['link']
+    };
+
+    const unsafeIssues = collectValidationIssues(linkSchema, { link: 'javascript:alert(1)' });
+    expect(unsafeIssues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'link', kind: 'format-uri' })])
+    );
+
+    const secureIssues = collectValidationIssues(linkSchema, { link: 'https://example.com' });
+    expect(secureIssues).toEqual([]);
+  });
+});
+
+describe('coerceNumberInput', () => {
+  it('returns raw string when integer input is invalid', () => {
+    expect(coerceNumberInput('1.5', 'integer')).toBe('1.5');
+    expect(coerceNumberInput('abc', 'integer')).toBe('abc');
+  });
+
+  it('parses valid integers and decimals correctly', () => {
+    expect(coerceNumberInput('-42', 'integer')).toBe(-42);
+    expect(coerceNumberInput('3.14', 'number')).toBeCloseTo(3.14);
   });
 });

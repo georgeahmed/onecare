@@ -2,9 +2,12 @@ import type { TelephonyContext } from './types';
 import type { IntentClassifier } from '../adapters/intent.classifier';
 import { IntentServiceClassifier } from '../adapters/intent.client';
 import { executeEmergencyHandoff } from '../adapters/emergency.handoff';
+import type { AsrClient } from '../adapters/asr.client';
+import { createAsrClientFromEnv } from '../adapters/asr.client';
 
 let singleton: IntentClassifier | undefined;
 let factoryOverride: (() => IntentClassifier) | undefined;
+let asrSingleton: AsrClient | undefined;
 
 function normalizeBoolean(value: string | undefined): boolean | undefined {
   if (!value) return undefined;
@@ -37,11 +40,21 @@ export function getIntentClassifier(): IntentClassifier {
   return singleton;
 }
 
+function getAsrClient(): AsrClient {
+  if (!asrSingleton) {
+    asrSingleton = createAsrClientFromEnv();
+  }
+  return asrSingleton;
+}
+
 /**
  * Applies telephony dependencies (intent classifier, etc.) to the provided context.
  * Call this once per call/session before running the state machine.
  */
 export function applyTelephonyDependencies<T extends TelephonyContext>(ctx: T): T {
+  if (!ctx.asrClient) {
+    ctx.asrClient = getAsrClient();
+  }
   if (!ctx.intentClassifier) {
     ctx.intentClassifier = getIntentClassifier();
   }
@@ -66,4 +79,8 @@ export function setIntentClassifierFactory(factory?: () => IntentClassifier): vo
 export function setIntentClassifier(instance: IntentClassifier | undefined): void {
   singleton = instance;
   factoryOverride = instance ? () => instance : undefined;
+}
+
+export function setAsrClient(instance: AsrClient | undefined): void {
+  asrSingleton = instance;
 }

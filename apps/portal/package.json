@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "a11y:ci": "tsx scripts/a11y-ci.ts",
+    "i18n:extract": "tsx scripts/i18n/extract.ts",
+    "i18n:check": "tsx scripts/i18n/extract.ts --check",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -12,7 +14,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@onecare/events": "workspace:*",
+    "@onecare/events": "file:../../packages/events",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-intl": "^7.1.14",
@@ -26,7 +28,9 @@
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
     "axe-core": "^4.11.0",
+    "eslint": "^8.57.0",
     "jsdom": "^27.0.0",
+    "json-schema-to-typescript": "^13.1.2",
     "pa11y": "^9.0.1",
     "tsx": "^4.20.6",
     "typescript": "^5.4.0",

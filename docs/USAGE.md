@@ -7,24 +7,54 @@ Prerequisites
 - npm: v9+
 - Python: 3.11+ (for ML services)
 - Docker + Docker Compose (for full local stack)
-- Optional: make or just for task shortcuts
+- Optional tooling:
+  - make or just for task shortcuts
+  - pre-commit for Git hook management
+  - k6 for perf smoke tests (`make perf-smoke`)
+  - newman for perf smoke tests (`make perf-smoke`)
+  - nats CLI for DLQ and JetStream ops scripts
+  - syft for SBOM generation (`scripts/sbom-generate.sh`)
+  - datamodel-code-generator for schema -> Pydantic model generation (`RUN_PY=1 npm run --workspaces=false codegen`)
 
 Environment Variables
 - NODE_ENV — environment name (default: development)
+- PRACTICE_ID — required practice identifier (set to `demo` for local dev/testing)
 - PORT_ORCHESTRATOR / PORT — port for orchestrator (default: 3001)
-- PY_SAFETY_GATE_URL — Safety Gate base URL (default: http://localhost:8081)
+- PY_SAFETY_GATE_URL — Safety Gate base URL (must be reachable by orchestrator; e.g. http://localhost:8081 for local dev)
+- PY_SAFETY_GATE_HOST_ALLOWLIST — optional comma-separated host allowlist (set to `localhost` for local stubs)
+- BOOKING_AVAILABILITY_TIMEOUT_MS — optional process override for booking availability timeout (clamped 200-10000 ms; prefer updating practice config `booking.availabilityTimeoutMs`)
+- BOOKING_READINESS_CACHE_MS — cache window for booking `/readyz` probes (default 1000 ms, minimum 250 ms). Readiness validates GP Connect reachability/auth and flips to 503 during shutdown.
+- BOOKING_SERVICE_URL — base URL for orchestrator-to-booking interactions (used by clinician book-slot API).
 - PY_SCRIBE_URL — Scribe base URL (default: http://localhost:8082)
+- Messaging Send Document uses practice config keys under `messaging.send_document.*` (see `apps/messaging/README.md`). Set `PRACTICE_ID` and ensure the resolved config defines `mesh.sender_mailbox`, workflow IDs, and PDF limits before booting the service.
 - LOG_LEVEL — logging level (default: info)
 - BUS_IMPL — message bus implementation (`memory` for local dev, `nats` in docker)
+- STARTUP_TIMEOUT_SECONDS — for `make dev-run`, seconds to wait for Safety Gate and Orchestrator readiness before prompting or exiting (default: 30)
 - NATS_URL — NATS connection URL(s) (comma-separated, e.g. nats://onecare:onecare-secret@nats:4222)
 - NATS_USER / NATS_PASS — credentials for protected NATS servers
 - NATS_CONNECT_TIMEOUT_MS — connect timeout (default: 2000ms)
 - NATS_MAX_RECONNECT_ATTEMPTS — reconnect attempts before marking not ready (default: 10)
 - NATS_RECONNECT_DELAY_MS — delay before retrying manual reconnects (default: 1500ms)
+- ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL / ORCHESTRATOR_MAX_CONCURRENCY_DEFAULT — global + per-route concurrency budgets (default 64 / 32). Override individual routes via `ORCHESTRATOR_MAX_CONCURRENCY_SAFETY`, `ORCHESTRATOR_MAX_CONCURRENCY_BOOKING`, `ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG`.
+- ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE / ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE — actor rate limits; optional window/penalty overrides `ORCHESTRATOR_RATE_LIMIT_WINDOW_MS`, `ORCHESTRATOR_RATE_LIMIT_BLOCK_MS`, `ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS`, `ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS`.
+- ORCHESTRATOR_BUS_PUBLISH_TIMEOUT_MS / ORCHESTRATOR_BUS_PUBLISH_MAX_RETRIES / ORCHESTRATOR_BUS_PUBLISH_BACKOFF_MS — guardrail settings for event publishes before routing to the DLQ.
+- ORCHESTRATOR_SHUTDOWN_DRAIN_TIMEOUT_MS — maximum drain window before shutdown proceeds (default 10s).
+- TRIAGE_PORT — HTTP port for the triage runtime (default: 7300; set to 0 for ephemeral in tests).
+- TRIAGE_READINESS_CACHE_MS — cache window for `/readyz` responses (default: 1000 ms, minimum 250 ms).
+- TRIAGE_READY_MAX_PENDING — maximum SLA backlog size before `/readyz` returns 503 (default: 500).
+- TRIAGE_FHIR_PROBE_TIMEOUT_MS — timeout for the FHIR readiness probe (default: 750 ms).
+- TRIAGE_SHUTDOWN_GRACE_MS — maximum wait for graceful shutdown (default: 10 000 ms).
 
 Example: copy .env.example to .env and adjust as needed.
 
 Install & Build
+- End-to-end operator guide: `./scripts/dev-operation.sh`  
+  - Interactive walkthrough covering setup, stack launch, testing, observability, and clean-up.  
+  - Offers to open separate terminals for long-running services and surfaces sample credentials.  
+- Bootstrap all dependencies: `./scripts/setup-requirements.sh`  
+  - Adds npm workspace packages and Python `services-py` extras; reports any manual prerequisites (Docker, Node, Python, etc.).  
+  - Use `./scripts/setup-requirements.sh --dry-run` to preview actions without installing.  
+  - Visual options: `--no-color`, `--no-unicode`, `--no-spinner`, or `--plain` (all off) to adjust terminal output.
 - Install deps: npm ci
 - Build all workspaces: npm run build
 - Typecheck: npm run typecheck
@@ -35,10 +65,60 @@ Lint, Format, Test
 - Test (TS via Vitest): npm run test
 - Test (Python via Pytest): ./services-py/run-tests.sh
 
+Localization & Accessibility Tooling
+- Extract locale bundles: `npx tsx apps/portal/scripts/i18n/extract.ts`
+- Drift check (CI safe): `npm run i18n:portal:check`
+- Pseudo-locale: choose “Pseudo (debug)” from the portal language switcher (dev only) to surface truncation/missing keys.
+- Accessibility audit: `npm run a11y:portal` (runs pa11y against intake + booking flows).
+- High-contrast theme: switch via the header “Theme” menu; tokens live in `apps/portal/src/styles/tokens.css`.
+- Audit reports are written to `var/reports/portal-a11y-report.json`; track the `contrast` counter before sign-off.
+
+Portal Offline & PWA Workflow
+- Build + preview with the production service worker: `npm run --workspace @onecare/app-portal build && npm run --workspace @onecare/app-portal preview`.
+- In Chrome DevTools: Application → Service Workers → check “Update on reload” while testing changes; unregister once done to avoid stale caches in dev.
+- Simulate offline: Network tab → select “Offline”, confirm the shell still loads, submit a booking, and watch it queue. Bringing the network back online should flush the queue automatically (background sync) and clear the offline banner.
+- Clear IndexedDB/Cache Storage entries named `onecare.portal.*` if you need a clean slate between runs.
+- Locale bundles are cached in `localStorage`; the UI will show a locale banner if we fall back to English or if fresh translations are available (see `LocaleNotice`).
+
+Performance Monitoring & Data Client
+- Core Web Vitals collection (LCP, CLS, INP) is wired through `startPerformanceMonitoring()` in `apps/portal/src/lib/performance.ts`. Metrics are emitted via `recordRumEvent('performance.metric', …)` and compared against budgets (LCP ≤ 2500 ms, CLS ≤ 0.1, INP ≤ 200 ms). Customize thresholds there if budgets change.
+- Session correlation IDs are created once per browser session (`getSessionCorrelationId`) and automatically attached to outgoing fetches and RUM events so tracing is aligned across layers.
+- Prefer the shared data client helpers in `apps/portal/src/lib/dataClient.ts` for new network calls. `getJson` / `postJson` provide:
+  - Automatic retries with exponential backoff (`retry` options),
+  - Request/response correlation + x-session headers,
+  - Optional GET caching (`cacheTtlMs`),
+  - Standardized `HttpError` objects with retry metadata.
+- `apps/portal/src/lib/api.ts` demonstrates how to adopt the data client: pass the target base URL, forward locale headers, and surface normalized error envelopes for UI layers.
+
+Performance Checks
+- Access Gate scheduler baseline: `npx tsx apps/access-gate/scripts/flush-benchmark.ts --records 500`  
+  Emits JSON throughput metrics for deferral flush; the automated microbench tests enforce p95 tick < 20 ms and ≥200 records/s flush throughput.
+- GP Connect token rotation: configure `GP_CONNECT_TOKEN_URL`, `GP_CONNECT_CLIENT_ID`, and `GP_CONNECT_CLIENT_SECRET` (optional scope/audience) to enable automatic OAuth refresh; monitor `gp_connect_auth_refresh_success_total` / `_error_total`.
+- GP Connect mTLS reload: set `GP_CONNECT_MTLS_CERT_PATH` / `GP_CONNECT_MTLS_KEY_PATH` (optional `GP_CONNECT_MTLS_CA_PATH`) and trigger `SIGHUP` or touch the files (when `GP_CONNECT_MTLS_WATCH=true`) to reload without downtime; metrics `gp_connect_cert_reload_success_total` / `_error_total` record outcomes.
+
+QA Matrix (Accessibility + i18n)
+| Scenario | Assistive Tech | Browser / Device | Last run | Notes |
+|----------|----------------|------------------|----------|-------|
+| Intake happy path (web, interpreter required) | NVDA | Chrome on Windows 11 | 2025‑10‑19 | Focus order, interpreter toggle, and high-contrast verified. |
+| Intake diversion / error state | VoiceOver | Safari on macOS | 2025‑10‑19 | Error alerts announce via live region; pseudo locale fits layout. |
+| Booking flow (slot selection + conflict) | Keyboard only + high zoom (200 %) | Firefox on Windows | 2025‑10‑19 | Zoom fallback keeps layout, conflict banner actionable. |
+| Intake + booking locale switch | VoiceOver | iOS Safari | 2025‑10‑19 | Locale banner and offline cache notice announce once. |
+| Callback windows review | TalkBack | Chrome on Android | 2025‑10‑19 | Ordered lists and aria labels validated; high-contrast readable. |
+| Queue triage filters & actions | None (keyboard focus audit) | Edge on Windows 11 | 2025‑10‑20 | Clinic switcher, ownership radios, and live announcements verified. |
+
+- Revisit the matrix quarterly (next due January 2026) and capture follow-up tickets with the `a11y-qa` tag.
+- Current findings (2025‑10‑20): no outstanding blockers; continue to watch queue filter focus styling after design QA.
+
+Runbook
+- Before releasing new strings: run extraction, regenerate locales, and request translation review via shared glossary.
+- Route new copy through the Content Reviewer lane (see docs/CONVENTIONS.md) and document sign-off in the PR checklist.
+- Record QA runs (matrix above) in the PR checklist; when the optional `team/` backlog is mounted, log defects under `team/frontend/tasks/*` (see `docs/TASK_INDEX.md` for context). Otherwise file issues directly in the tracker.
+- For zoom fallbacks verify `<html data-zoom="high">` is applied at ≥200 % and that header/nav stack vertically (see CSS in `apps/portal/src/styles/global.css`).
+
 Codegen (Contracts)
-- TS contracts from JSON Schemas: npm run codegen
+- TS contracts from JSON Schemas: npm run --workspaces=false codegen
 - Dry check (no generation): npm run codegen:check
-- TS + Python generation (requires datamodel-code-generator): RUN_PY=1 npm run codegen
+- TS + Python generation (requires datamodel-code-generator): RUN_PY=1 npm run --workspaces=false codegen
 
 Generators
 - TypeScript: json-schema-to-typescript (json2ts)
@@ -50,17 +130,39 @@ Makefile Shortcuts
 - make typecheck — TS project references typecheck
 - make lint / make format / make test
 - make codegen / make codegen-check
-- make check-task-cards — verify required sections in team/*/tasks/*.md
+- make check-task-cards — verify required sections in `team/*/tasks/*.md` (command is a no-op if the optional `team/` backlog is absent; see `docs/TASK_INDEX.md`)
 - make py-test — run Python tests via ./services-py/run-tests.sh (manages venv + PYTHONPATH)
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082
 - make dev-run — start Safety Gate + Orchestrator (keeps running)
+  - Note: if `FHIR_BASE_URL` is not set in your shell, dev-run will default to the public HAPI R4 server at `https://hapi.fhir.org/baseR4` for quick end-to-end testing (no auth required). Set a real NHS sandbox URL and token when ready.
 - make dev-stop — stop Safety Gate + Orchestrator started by dev-run
+- One‑shot full dev stack (Portal + Proxy + Orchestrator + Safety Gate + Booking stub):
+  - npm run dev:all — starts everything locally
+  - npm run dev:all:stop — stops all started processes
+  - Prereqs: set FHIR_BASE_URL and FHIR_TOKEN (or FHIR_AUTH_TOKEN). Example:
+    - export FHIR_BASE_URL="https://fhir-dev.example.com"
+    - export FHIR_TOKEN="<bearer token>"
+    - export FHIR_HEALTH_PATH="_ping"  # PDS/NHS INT uses _ping instead of /metadata
+    - export FHIR_API_KEY="<subscription key>"  # required for NHS API Platform gateways
+  - Notes:
+    - Uses BUS_IMPL=memory (no NATS required)
+    - Booking slots served by a local stub on :4002; confirm is proxied stub
+    - Portal points to signing proxy on :4000; proxy injects zero‑trust headers
 - make docker-up / make docker-down — compose lifecycle
 - make demo-docker — end-to-end demo via Docker (safety-check)
 - make demo-local — local demo (uvicorn + orchestrator)
 - make perf-orchestrator — perf harness for /safety-check (requires orchestrator)
- - make agent-closeout — codegen → typecheck → test → update team status
+- make perf-smoke — k6 safety-check + Newman booking smoke (requires k6/newman; set BOOKING_BASE_URL)
+- make agent-closeout — codegen → typecheck → test → update team status
+
+Performance Smoke Checks
+------------------------
+- `qa/perf/k6_safety_check.js` drives `/safety-check` with 2 VUs × 5 iterations by default. Thresholds: `http_req_duration` p50 < 750 ms, p95 < 1500 ms, failure rate < 1 %. Override runtime via `SAFETY_CHECK_*` env vars (e.g., `SAFETY_CHECK_BASE_URL`, `SAFETY_CHECK_VUS`, `SAFETY_CHECK_ITERATIONS`).
+- `qa/perf/newman_collection.json` hits `GET /readyz` and `POST /booking/search`, asserting readiness < 500 ms and search < 1200 ms while preserving `x-correlation-id`. Provide `BOOKING_BASE_URL` (e.g., `http://localhost:4000`) and optionally override `BOOKING_SERVICE_TYPE`, `BOOKING_LOCATION`, `BOOKING_CORRELATION_PREFIX`.
+- Run both smokes together with k6 + newman installed:  
+  `BOOKING_BASE_URL=http://localhost:4000 SAFETY_CHECK_BASE_URL=http://localhost:3001 make perf-smoke`
+
 
 Justfile Shortcuts (if using just)
 - just install / just build / just typecheck / just lint / just format / just test
@@ -75,13 +177,30 @@ Ensure booking proxy vars are configured before running the portal:
 - export `VITE_BOOKING_API_URL` to the orchestrator origin (default `http://localhost:3001`).
 
 1) Start Safety Gate (Python)
-   - uvicorn services-py/safety_gate_service/main:app --reload --port 8081
+   - PYTHONPATH=services-py uvicorn safety_gate_service.main:app --reload --port 8081
+   - Ensure the virtualenv uses Python 3.10–3.12 (run `python3.11 -m venv services-py/.venv` if needed)
 2) Build Orchestrator (TS)
    - npm -w @onecare/app-orchestrator run build
 3) Start Orchestrator
-   - PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 node apps/orchestrator/dist/index.js
+   - PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js
 4) Optional: quick perf
    - make perf-orchestrator
+
+NHS Sandbox (Option 2) — Setup and Token Fetch
+- Set env in `.env.dev` (kept out of Git):
+  - `FHIR_BASE_URL=https://int.api.service.nhs.uk/<service>/FHIR/R4/` (exact path from NHS portal)
+  - `FHIR_API_KEY_HEADER=Ocp-Apim-Subscription-Key`
+  - `FHIR_API_KEY=<your APIM subscription key>`
+  - `FHIR_CLIENT_ID=<sandbox client id>` and `FHIR_CLIENT_SECRET=<sandbox client secret>`
+  - `OIDC_ISSUER=https://identity.ptl.api.platform.nhs.uk/realms/NHS-Login-mock-int` (or the issuer provided)
+- Fetch a system token (client_credentials) and write it into `.env.dev`:
+  - Option A (write to file): `OIDC_ISSUER=... FHIR_CLIENT_ID=... FHIR_CLIENT_SECRET=... scripts/dev/fetch-nhs-token.sh --write-env`
+  - Option B (print only): `... scripts/dev/fetch-nhs-token.sh --print` then export `FHIR_SYSTEM_TOKEN=...`
+- Verify connectivity to the sandbox before starting services:
+  - `set -a; source .env.dev; set +a`
+  - `scripts/dev/fhir_probe.sh` (expects 200 on CapabilityStatement)
+- Start services:
+  - `make dev-run` (or start both processes manually as documented above)
 
 Health checks
 - Orchestrator: curl http://localhost:3001/health
@@ -89,6 +208,7 @@ Health checks
 - Safety Gate docs: curl http://localhost:8081/docs
 
 Run with Docker Compose
+- First-time setup: `bash scripts/ops/generate-dev-certs.sh` (creates self-signed CA + client certs under `infra/tls/dev`)
 - Start: docker-compose up --build
 - Stop: docker-compose down -v
 - Services: orchestrator waits for NATS to become healthy; readiness at /ready only turns green after the bus connects
@@ -109,20 +229,72 @@ Analytics Consumer
 - Configure bus via `NATS_URL` (optional); override sink path with `ANALYTICS_SINK_PATH`.
 - Docker: `docker compose up analytics` starts the worker alongside NATS and writes metrics under the `analytics-metrics` volume.
 - Daily rollups: `npm run metrics:rollup` aggregates counts/p95 per metric into `var/analytics/rollup.jsonl`. Use `--input`, `--output`, or `--date YYYY-MM-DD` to override defaults.
+- Backfill & reprocessing: `npm run analytics:backfill -- --start <YYYY-MM-DD> --end <YYYY-MM-DD>` replays historical metric partitions, appends rollups idempotently, and records job metadata in `var/analytics/backfill-ledger.jsonl` (see `docs/ANALYTICS_BACKFILL.md`).
+- Retention sweep: `npm run analytics:retention -- --vacuum` enforces dataset TTLs (raw, rollup, lineage, ledger), tiers old partitions to cold storage, and vacuums empty directories (see `docs/adr/2025-10-19-analytics-retention.md`).
+- Nightly automation: install the cron entries from `infra/automation/analytics-retention.cron` (dev/staging/prod variants) so retention runs at 03:00 UTC with `ANALYTICS_TIER_ROOT` pointing at the `s3://onecare-analytics-cold-<env>` buckets.
+- Playback harness: `node scripts/bench/analytics_playback.js --fixtures fixtures/analytics/metrics-happy.json,fixtures/analytics/metrics-edge.json` replays deterministic fixtures through the consumer (see `.github/workflows/analytics-playback.yml` for CI wiring).
 - Scheduling: integrate the rollup command into your cron/CI scheduler once the cadence is defined (for example `0 1 * * * npm run metrics:rollup -- --date $(date -I) --output /var/analytics/rollup.$(date -I).jsonl`).
 - Data hygiene: `npm run metrics:quality` produces a markdown report flagging missing fields and numeric outliers. Adjust the z-score threshold via `--zscore` or `ANALYTICS_QUALITY_ZSCORE`.
+- Quarantine export: `npm run analytics:quarantine:export` gzips the NDJSON quarantine file and copies it to long-term storage. Configure destination/retention with `ANALYTICS_QUARANTINE_ARCHIVE_DIR`, `ANALYTICS_QUARANTINE_RETENTION_DAYS`, and `ANALYTICS_QUARANTINE_DELETE_SOURCE`.
 - Feature backfill: `npm run feature:backfill -- --input <events.jsonl> --output <features.jsonl>` hydrates the feature store from historical triage events, validating payloads against `triage-core`.
+- Feature ingest: `npm run feature:ingest -- --input data/feature-stream.jsonl` replays JSONL envelopes through the streaming ingestion worker (`@onecare/feature-store-ingest`) using the in-memory online store adapter.
 - Feature compaction: `node scripts/feature_compact.js --input <features.jsonl> --retention-days 7` enforces retention and deduplicates feature records.
 - Feature purge: `node scripts/feature_store_purge.js --url "$FEATURE_STORE_URL" --retention-days 30` deletes feature rows older than the retention window. The `feature-store-purge` GitHub Action runs this nightly for `dev`, `staging`, and `prod` when the respective `FEATURE_STORE_URL_*` secrets are configured.
+- Feature views: `npm run feature:views -- --input data/triage-core.jsonl --view triage-core.sliding-windows --output var/features/feature-views.jsonl --online` materialises sliding-window aggregates and pushes them into the configured online store. Rebuild `@onecare/feature-store-offline` first (`npx tsc -p packages/feature-store-offline/tsconfig.json`).
 - Drift report: `node scripts/drift_report.js --input data/drift/sample.json --output var/reports/drift-report.md` generates a Markdown summary of distribution drift using PSI/mean/std thresholds.
 
+Kubernetes Deployments
+- Baseline Helm chart: `infra/k8s/helm/onecare-service`. Service-specific overrides live under `apps/<service>/k8s/values.yaml` (and `values-staging.yaml` for staging defaults).
+- Render manifests locally: `helm template orchestrator infra/k8s/helm/onecare-service -f apps/orchestrator/k8s/values.yaml --set image.tag=$(git rev-parse --short HEAD)` → `kubectl apply --dry-run=client` to validate.
+- Apply to a cluster: `helm upgrade --install orchestrator infra/k8s/helm/onecare-service --namespace orchestrator --values apps/orchestrator/k8s/values.yaml --set image.tag=$IMAGE_TAG --atomic`.
+- Smoke test endpoints with `bash scripts/ci/http_smoke.sh --base-url https://orchestrator.staging.onecare.health --endpoint /readyz --endpoint /healthz`.
+
+CI/CD
+- CI (`.github/workflows/ci.yml`) runs codegen/typecheck/tests, generates SBOMs via `bash scripts/sbom-generate.sh artifacts/sbom`, enforces the vulnerability/license policy (`config/security/*.json`), signs container images with cosign, and scans the pushed images using Trivy (blocking on high/critical severities). SBOM, dependency, and image scan reports are uploaded as artefacts tagged per run.
+- CD (`.github/workflows/cd.yml`) verifies cosign signatures, deploys to staging (`KUBE_CONFIG_STAGING`, `STAGING_NAMESPACE`, `STAGING_BASE_URL` secrets), executes HTTP smoke checks via `scripts/ci/http_smoke.sh`, and optionally promotes to production (`KUBE_CONFIG_PRODUCTION`, `PROD_NAMESPACE`, `PROD_BASE_URL`) after environment approval. Failed promotions automatically trigger `helm rollback` to the previous revision.
+
+Operational Automation
+- Nightly backups: `.github/workflows/backup-nightly.yml` captures JetStream/config archives every 6 hours, validates them with `scripts/ops/verify-restore.sh`, and uploads artefacts for 14 days. Trigger `workflow_dispatch` for ad-hoc DR drills.
+- Manual backup: `bash scripts/ops/backup.sh --output /secure/backups --tag manual` followed by `bash scripts/ops/verify-restore.sh <backup-dir>` before uploading to cold storage.
+
+Security Testing
+- HTTP fuzzing: `RUN_SECURITY_TESTS=1 npm run test:fuzz` (requires local stack). Extensible harness under `qa/security/fuzz_http.spec.ts`.
+- SSRF and authz checks: `npm run test:security` (Vitest suite under `qa/security`).
+- ZAP baseline scan: enable `DAST_TARGET_URL` secret to run CI `dast` job against staging.
+
+Security References
+- Threat model & STRIDE notes: `docs/security/THREAT_MODEL.md`
+- Data classification & retention: `docs/security/DATA_CLASSIFICATION.md`
+- TLS / mTLS policy: `docs/security/TLS_POLICY.md`
+- OIDC/JWT verification guidance: `docs/security/OIDC_JWT_HARDENING.md`
+- DPIA template & privacy checklist: `docs/security/DPIA_TEMPLATE.md`, `docs/security/PRIVACY_CHECKLIST.md`
+- Secrets policy & rotation SLAs: `docs/security/SECRETS_POLICY.md`
+- SAST/DAST process: `docs/security/APPLICATION_SECURITY.md`
+- Code scanning policy: `docs/security/CODE_SCANNING.md`
+- Vulnerability remediation SLAs: `docs/security/VULN_MANAGEMENT.md`
+- Access review cadence: `docs/security/ACCESS_REVIEWS.md`
+- Incident response plan: `docs/security/INCIDENT_RESPONSE.md`
+- Audit logging requirements: `docs/security/AUDIT_POLICY.md`
+- Supply-chain controls: `docs/security/SUPPLY_CHAIN.md`
+- Egress/SSRF controls: `docs/security/EGRESS_SSRF_POLICY.md`
+- Secure SDLC & checklists: `docs/security/SECURE_SDLC.md`
+- Secure coding guides: `docs/security/SECURE_CODING_NODE.md`, `docs/security/SECURE_CODING_PY.md`
+- Vendor assessments: `docs/security/VENDOR_RISK.md`
+- Training program: `docs/security/TRAINING.md`
+- Compliance mapping: `docs/security/COMPLIANCE_MAP.md`
+- Dependency policy: `docs/security/DEPENDENCY_POLICY.md`
+- Secrets prevention hooks: `docs/security/SECRETS_PREVENTION.md`
+- HTTP fuzz/DAST guidance: `docs/security/APP_FUZZING.md`
+- WAF & rate limit policy: `docs/security/WAF_POLICY.md`
+
 Team & Status
-- Team status: make team-status
-- Update progress from checkboxes: make team-status-write
-- Export status JSON: make team-status-json
-- Generate GitHub issues from engineer tasks: make team-issues
+- Team tooling is optional. If a `team/` directory is present (see `docs/TASK_INDEX.md`), the following helpers activate; otherwise they print skip notices:
+  - Team status: make team-status
+  - Update progress from checkboxes: make team-status-write
+  - Export status JSON: make team-status-json
+  - Generate GitHub issues from engineer tasks: make team-issues
 - Per‑engineer loop helper: make engineer-loop ENGINEER=<path> TASK='<substring>' SCHEMAS=1 PY=1 RUNTIME=1 SMOKE=1
- - Agent close-out: make agent-closeout (after checking tasks)
+- Agent close-out: make agent-closeout (after checking tasks)
 - Local CI: make ci-local
 - Bring up stack and smoke test: make stack-up && make stack-smoke
 
@@ -140,10 +312,15 @@ HTTP Endpoints (Dev)
     - Request (PortalSubmission): { "practiceId": "p1", "patient": { "id": "abc" }, "narrative": "...", "channel": "web" }
     - Response (SafetyDecision): { "outcome": "SAFE_TO_CONTINUE" | "DIVERTED", "reason"?: string }
     - Required headers: `Authorization: Bearer <token>`, `X-Actor-Type`, `X-Actor-Id`, `X-Request-Id`; optional `X-Auth-Scope` (space-delimited). Correlation ID header remains optional.
-    - Side-effect (dev): on SAFE_TO_CONTINUE, publishes triage.input event using EventEnvelope on in-memory bus
+    - Side-effect (dev): on SAFE_TO_CONTINUE, publishes triage.input and triage.decision events using EventEnvelope on in-memory bus
 
 - Safety Gate (FastAPI)
   - POST /analyze (from PortalSubmission) → SafetyDecision
+
+- Triage Runtime
+  - GET /healthz → `{ ok: true }`
+  - GET /readyz → `{ ok: true }` when the event bus is connected, the FHIR repository responds, and the SLA backlog remains below `TRIAGE_READY_MAX_PENDING`; returns 503 with `{ ok: false, reason }` otherwise.
+  - Shutdown: honours SIGINT/SIGTERM, drains the triage consumer and SLA scheduler before closing the HTTP server (bounded by `TRIAGE_SHUTDOWN_GRACE_MS`).
 
 - Scribe (FastAPI)
   - POST /transcribe (ScribeAudio) → { text }
@@ -160,7 +337,7 @@ Schemas and Contracts
 Dev Bus Demo
 - Build orchestrator and triage: npm -w @onecare/app-orchestrator run build && npm -w @onecare/app-triage run build
 - Start triage dev worker: node apps/triage/dist/dev/worker.js (or npm -w @onecare/app-triage run dev:worker)
-- POST to /safety-check with the zero-trust headers and observe triage worker log the triage.input receipt
+- POST to /safety-check with the zero-trust headers and observe triage worker log the triage.input receipt and analytics observer log the triage.decision publication
 
 CI (GitHub Actions)
 - codegen job: generates TS + Python contracts and auto-commits changes on PRs from same repo
@@ -173,11 +350,20 @@ Manual runs
 - E2E booking flow (slot search → appointment write-back): scripts/e2e/booking_flow.sh
 - k6 baseline load for /safety-check: `SAFETY_CHECK_SECRET=<shared secret> k6 run scripts/perf/safety_check.js`
 - Triage flow load (triage.input → tasks.created via memory bus): `node scripts/perf/triage_flow.js`
+- Triage pipeline microbench (dist build required): `node apps/triage/scripts/triage-bench.js --iterations=500 --warmup=50`
+- Microbench guardrails for scoring/similarity: `npm test -- apps/triage/test/performance.test.ts`
+- FHIR/Object Store serialization microbench: `node scripts/perf/fhir_client_bench.js`
 - Booking flow load (search → create with conflict simulation): `node scripts/perf/booking_flow.js`
 - Telephony parity (IVR → ASR → intent stub pipeline): `node scripts/perf/telephony_parity.js`
 - Triage alert SLO check (breach simulation + report): `node scripts/perf/triage_alert_check.js`
 - Contracts sync check: bash scripts/ci/check_contracts_sync.sh HEAD^ HEAD
 - OpenAPI validation: python scripts/ci/validate_openapi.py
+- Extract triage inputs from operational JSONL dumps: `python3 scripts/triage_dataset/extract_inputs.py --submissions raw/submissions --safety-gate raw/safety --audit raw/audit --output-dir exports --since 2025-01-01T00:00:00Z --until 2025-03-31T23:59:59Z`
+- Or, load sources from config (supports local dirs + S3 prefixes):
+  `python3 scripts/triage_dataset/extract_inputs.py --config config/triage_dataset_sources.example.json --output-dir exports`
+- Build triage dataset snapshot (see `docs/triage/data-schema.md` for file contracts): `TRIAGE_DATASET_SALT=<secret> python3 scripts/triage_dataset/build_dataset.py --submissions exports/triage_submissions.jsonl --safety-gate exports/safety_gate.jsonl --clinician exports/clinician_outcomes.jsonl --output-dir data/triage --dataset-version v20250315 --deident-version deid-v1 --source-range submissions=2025-01-01/2025-03-31`
+- Full pipeline (extract + build in one step): `TRIAGE_DATASET_SALT=<secret> python3 scripts/triage_dataset/run_pipeline.py --config config/triage_dataset_sources.example.json --dataset-version v20250315 --output-dir data/triage --since 2025-01-01T00:00:00Z --until 2025-03-31T23:59:59Z`
+- Event bus guard smoke (requires live NATS; set `NATS_URL`, `NATS_USER`, `NATS_PASS`): `npm run smoke:nats`
 
 Adding a New Service
 1) Create apps/<service> with src/application and src/adapters
@@ -188,7 +374,7 @@ Adding a New Service
 
 Changing Contracts
 1) Edit/add schemas under schemas/
-2) Run npm run codegen (or let CI do it on PRs)
+2) Run npm run --workspaces=false codegen (or let CI do it on PRs)
 3) Update service code to use new/updated contracts
 4) Update docs/USAGE.md and service READMEs if inputs/outputs change
 

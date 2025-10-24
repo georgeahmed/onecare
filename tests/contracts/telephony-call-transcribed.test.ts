@@ -7,11 +7,13 @@ import type { CallTranscribed } from '../../packages/events/src/contracts/call-t
 
 async function loadAjv() {
   try {
-    const [{ default: Ajv2020 }, { default: addFormats }] = await Promise.all([
+    const [{ default: Ajv2020 }, { default: addFormats }, { default: draft7 }] = await Promise.all([
       import('ajv/dist/2020'),
       import('ajv-formats'),
+      import('ajv/dist/refs/json-schema-draft-07.json'),
     ]);
     const ajv = new Ajv2020({ allErrors: true, strict: false });
+    ajv.addMetaSchema(draft7);
     addFormats(ajv);
     return ajv;
   } catch {
@@ -52,4 +54,3 @@ describe('Telephony CallTranscribed contract', () => {
     expect(envelope.correlationId).toBe('corr-telephony-1');
   });
 });
-

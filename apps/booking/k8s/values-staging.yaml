@@ -1,0 +1,18 @@
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: booking.staging.onecare.health
+      paths:
+        - path: /booking
+          pathType: Prefix
+  tls:
+    - hosts:
+        - booking.staging.onecare.health
+      secretName: booking-staging-tls
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 5

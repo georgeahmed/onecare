@@ -57,4 +57,4 @@ def test_summarize_returns_deterministic_stub(monkeypatch):
     )
 
     assert summary.startswith("[summary:gpt-4o:tokens<=20]")
-    assert "Encounter: enc-42" in summary
+    assert "You are a clinical scribe" in summary

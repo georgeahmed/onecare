@@ -1,0 +1,67 @@
+groups:
+  - name: orchestrator-latency
+    rules:
+      - alert: OrchestratorLatencyBurnFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[5m])) by (le)
+          ) > 1500
+        for: 5m
+        labels:
+          severity: critical
+          slo: orchestrator-latency
+          team: orchestrator
+        annotations:
+          summary: "Orchestrator triage latency p95 above target"
+          description: "95th percentile latency for /safety-check has exceeded 1.5s for 5m. Investigate Safety Gate and orchestrator load."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
+      - alert: OrchestratorLatencyBurnSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[30m])) by (le)
+          ) > 1500
+        for: 30m
+        labels:
+          severity: warning
+          slo: orchestrator-latency
+          team: orchestrator
+        annotations:
+          summary: "Orchestrator triage latency trending above SLO"
+          description: "95th percentile latency for /safety-check is above 1.5s over a 30m window."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
+  - name: orchestrator-error-budget
+    rules:
+      - alert: OrchestratorErrorBudgetFast
+        expr: |
+          (
+            rate(http_server_errors_total{service="orchestrator"}[5m])
+            /
+            rate(http_server_requests_total{service="orchestrator"}[5m])
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+          slo: orchestrator-error
+          team: orchestrator
+        annotations:
+          summary: "Orchestrator error rate above burn threshold"
+          description: "Error rate exceeded 1% over 10 minutes (twice the 0.5% SLO budget)."
+          runbook: https://onecare/runbooks/oncall#error-budget-response
+      - alert: OrchestratorErrorBudgetSlow
+        expr: |
+          (
+            rate(http_server_errors_total{service="orchestrator"}[30m])
+            /
+            rate(http_server_requests_total{service="orchestrator"}[30m])
+          ) > 0.005
+        for: 1h
+        labels:
+          severity: warning
+          slo: orchestrator-error
+          team: orchestrator
+        annotations:
+          summary: "Orchestrator error rate approaching budget"
+          description: "Error rate exceeded 0.5% over a 1h window."
+          runbook: https://onecare/runbooks/oncall#error-budget-response

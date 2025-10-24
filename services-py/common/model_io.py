@@ -182,4 +182,3 @@ def _version_sort_key(version: str) -> Sequence[Any]:
 
 
 __all__ = ["ModelArtifact", "save_model_artifact", "load_model_artifact"]
-

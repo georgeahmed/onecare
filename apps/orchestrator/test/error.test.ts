@@ -5,11 +5,15 @@ describe('error envelope', () => {
   it('maps codes to status', () => {
     expect(mapErrorToStatus('forbidden')).toBe(403);
     expect(mapErrorToStatus('invalid_input')).toBe(400);
+    expect(mapErrorToStatus('not_found')).toBe(404);
     expect(mapErrorToStatus('unsupported_media_type')).toBe(415);
     expect(mapErrorToStatus('payload_too_large')).toBe(413);
     expect(mapErrorToStatus('too_many_requests')).toBe(429);
+    expect(mapErrorToStatus('rate_limited')).toBe(429);
     expect(mapErrorToStatus('upstream_timeout')).toBe(504);
     expect(mapErrorToStatus('upstream_unavailable')).toBe(503);
+    expect(mapErrorToStatus('busy')).toBe(503);
+    expect(mapErrorToStatus('over_capacity')).toBe(503);
     expect(mapErrorToStatus('unauthorized')).toBe(401);
     expect(mapErrorToStatus('conflict')).toBe(409);
     expect(mapErrorToStatus('internal_error')).toBe(500);

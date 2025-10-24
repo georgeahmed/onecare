@@ -57,6 +57,7 @@ export interface AutomationRule {
   reason: string;
   when: AutomationConditions;
   create: AutomationTaskTemplate;
+  debounceWindowSeconds?: number;
 }
 
 export interface AutomationTriggerConfig {
@@ -76,6 +77,7 @@ export interface AutomationIntent {
     owner?: string;
   };
   context: Record<string, unknown>;
+  debounceWindowSeconds?: number;
 }
 
 export interface AutomationTaskCreation {
@@ -87,6 +89,7 @@ export interface AutomationTaskCreation {
   correlationId?: string;
   triggeredAt: string;
   context: Record<string, unknown>;
+  debounceWindowSeconds?: number;
 }
 
 export interface BuildAutomationTaskOptions {
@@ -137,6 +140,7 @@ export function evaluateAutomationTriggers(
       correlationId: event.correlationId,
       payload,
       context: buildIntentContext(event, rule),
+      debounceWindowSeconds: rule.debounceWindowSeconds,
     });
     seenRules.add(rule.name);
   }
@@ -172,6 +176,7 @@ export function buildAutomationTaskCreations(
       correlationId: correlationId ?? intent.correlationId,
       triggeredAt: now(),
       context: { ...intent.context },
+      debounceWindowSeconds: intent.debounceWindowSeconds,
     };
   });
 }
@@ -224,6 +229,7 @@ function normaliseRule(raw: unknown, index: number): AutomationRule | undefined 
     reason?: unknown;
     when?: unknown;
     create?: unknown;
+    debounceWindowSeconds?: unknown;
   };
 
   if (typeof candidate.name !== 'string' || candidate.name.trim().length === 0) {
@@ -243,6 +249,7 @@ function normaliseRule(raw: unknown, index: number): AutomationRule | undefined 
   const when = normaliseConditions(candidate.when);
 
   const create = normaliseTaskTemplate(candidate.create, index);
+  const debounceWindowSeconds = normaliseDebounceWindow(candidate.debounceWindowSeconds);
 
   return {
     name,
@@ -250,6 +257,7 @@ function normaliseRule(raw: unknown, index: number): AutomationRule | undefined 
     reason,
     when,
     create,
+    ...(debounceWindowSeconds ? { debounceWindowSeconds } : {}),
   };
 }
 
@@ -295,6 +303,18 @@ function normaliseTaskTemplate(raw: unknown, index: number): AutomationTaskTempl
       : {}),
   };
   return template;
+}
+
+function normaliseDebounceWindow(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string' && value.trim().length === 0) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  const coerced = Math.floor(parsed);
+  const bounded = Math.min(coerced, 30 * 24 * 60 * 60); // cap at 30 days
+  return bounded > 0 ? bounded : undefined;
 }
 
 function normaliseStringArray(value: unknown): string[] | undefined {

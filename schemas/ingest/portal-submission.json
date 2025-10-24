@@ -12,6 +12,7 @@
     },
     "patient": {
       "type": "object",
+      "title": "PortalSubmissionPatient",
       "properties": {
         "id": {
           "type": "string",
@@ -36,6 +37,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "PortalSubmissionAttachment",
         "properties": {
           "contentType": {
             "type": "string",
@@ -47,7 +49,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 2048,
-            "format": "uri",
             "pattern": "^https://"
           }
         },
@@ -55,7 +56,39 @@
         "additionalProperties": false
       }
     },
-    "channel": { "type": "string", "enum": ["web", "ivr"] }
+    "interpreterPreferences": {
+      "type": "object",
+      "title": "PortalSubmissionInterpreterPreferences",
+      "properties": {
+        "requiresInterpreter": {
+          "type": "boolean"
+        },
+        "preferredLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "requiresInterpreterConfirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["requiresInterpreter"],
+      "additionalProperties": false
+    },
+    "channel": {
+      "type": "string",
+      "title": "PortalSubmissionChannel",
+      "enum": ["web", "ivr"]
+    }
   },
   "required": ["practiceId", "patient", "narrative", "channel"],
   "additionalProperties": false

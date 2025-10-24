@@ -13,6 +13,7 @@ import {
 import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import type { MessageBus, Subscription } from '@onecare/bus';
 import { Topics } from '@onecare/events';
+import { hashIdentifier } from '@onecare/security';
 
 function createBusMock() {
   const publish = vi.fn().mockResolvedValue(undefined);
@@ -151,10 +152,14 @@ describe('Booking state machine integration', () => {
     expect(executor).toHaveBeenCalledTimes(2);
     expect(createAppointment).toHaveBeenCalledTimes(1);
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }));
-    expect(queueNotify).toHaveBeenCalledWith('booking.queue', expect.objectContaining({ appointmentId: 'appt-slot-123' }));
+    const expectedPatientHash = hashIdentifier('patient-1');
+    expect(queueNotify).toHaveBeenCalledWith(
+      'booking.queue',
+      expect.objectContaining({ appointmentId: 'appt-slot-123', patientHash: expectedPatientHash }),
+    );
     expect(auditEmit).toHaveBeenCalledWith({
       type: 'booking.appointment.created',
-      payload: expect.objectContaining({ appointmentId: 'appt-slot-123', correlationId: 'corr-123' }),
+      payload: expect.objectContaining({ appointmentId: 'appt-slot-123', correlationId: 'corr-123', patientHash: expectedPatientHash }),
     });
     expect(publish).toHaveBeenCalledWith(
       Topics.booking.appointmentCreated,
@@ -162,7 +167,7 @@ describe('Booking state machine integration', () => {
         payload: expect.objectContaining({ appointmentId: 'appt-slot-123', patientId: 'patient-1' }),
         correlationId: 'corr-123',
       }),
-      { 'x-correlation-id': 'corr-123' },
+      expect.objectContaining({ 'x-correlation-id': 'corr-123', 'x-message-id': expect.any(String) }),
     );
   });
 
@@ -434,5 +439,73 @@ describe('BookedState error handling', () => {
       'booking.create.unavailable',
     );
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('routes failed appointment publish attempts to DLQ with retry metadata', async () => {
+    const client = new GpConnectHttpClient({
+      baseUrl: 'https://gp-connect.example',
+      apiKey: 'key',
+    });
+    vi.spyOn(client, 'createAppointment').mockResolvedValue({
+      appointmentId: 'appt-dlq',
+      slotId: 'slot-dlq',
+      start: '2025-10-13T19:00:00Z',
+      end: '2025-10-13T19:15:00Z',
+    });
+    const { bus, publish } = createBusMock();
+    publish.mockImplementation(async (topic) => {
+      if (topic === Topics.booking.appointmentCreated) {
+        throw Object.assign(new Error('bus-down'), { code: 'nats_unavailable' });
+      }
+      if (topic === Topics.booking.appointmentCreatedDlq) {
+        return;
+      }
+      throw new Error(`unexpected topic ${topic}`);
+    });
+
+    const ctx: BookingContext = {
+      id: 'booking-dlq',
+      client,
+      patientId: 'patient-42',
+      selectedSlot: {
+        id: 'slot-dlq',
+        start: '2025-10-13T19:00:00Z',
+        end: '2025-10-13T19:15:00Z',
+        organisationId: 'org-2',
+      },
+      slots: [
+        {
+          id: 'slot-dlq',
+          start: '2025-10-13T19:00:00Z',
+          end: '2025-10-13T19:15:00Z',
+          organisationId: 'org-2',
+        },
+      ],
+      correlationId: 'corr-dlq',
+      bus,
+      fhirRepository: {
+        createAppointment: vi.fn().mockResolvedValue({ id: 'appt-dlq', resourceType: 'Appointment' }),
+        createTask: vi.fn(),
+        upsertBundle: vi.fn(),
+        createDocumentReference: vi.fn(),
+      } as unknown as FhirRepository,
+    };
+
+    const book = new BookedState();
+    await expect(book.handle(ctx, { type: 'booking.book' })).rejects.toThrow('booking.create.event_failed');
+
+    const dlqCall = publish.mock.calls.find(([topic]) => topic === Topics.booking.appointmentCreatedDlq);
+    expect(dlqCall).toBeDefined();
+    const dlqEnvelope = dlqCall?.[1];
+    expect(dlqEnvelope).toBeDefined();
+    if (dlqEnvelope) {
+      expect(dlqEnvelope.payload).toMatchObject({
+        originalTopic: Topics.booking.appointmentCreated,
+        attempts: 2,
+        payloadRef: { appointmentId: 'appt-dlq', slotId: 'slot-dlq' },
+      });
+    }
+    const headers = dlqCall?.[2];
+    expect(headers).toMatchObject({ 'x-correlation-id': 'corr-dlq', 'x-message-id': expect.any(String) });
   });
 });

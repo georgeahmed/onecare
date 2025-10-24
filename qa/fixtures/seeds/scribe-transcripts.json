@@ -1,0 +1,24 @@
+[
+  {
+    "callId": "call-alpha-001",
+    "transcript": [
+      { "speaker": "PATIENT", "text": "Hi, I have had a dry cough for three days." },
+      { "speaker": "AGENT", "text": "Are you experiencing any breathing trouble?" },
+      { "speaker": "PATIENT", "text": "No, just the cough and a low fever." },
+      { "speaker": "AGENT", "text": "I'll arrange for a clinician to call you back today." }
+    ],
+    "warnings": [],
+    "confidence": 0.94
+  },
+  {
+    "callId": "call-bravo-001",
+    "transcript": [
+      { "speaker": "PARENT", "text": "My child woke up with a small rash on both arms." },
+      { "speaker": "AGENT", "text": "Any swelling or difficulty breathing?" },
+      { "speaker": "PARENT", "text": "No, just itching. OTC cream helps." },
+      { "speaker": "AGENT", "text": "We'll have a nurse review and call you shortly." }
+    ],
+    "warnings": ["no_audio"],
+    "confidence": 0.88
+  }
+]

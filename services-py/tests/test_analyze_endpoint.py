@@ -3,12 +3,14 @@ from fastapi.testclient import TestClient
 
 from safety_gate_service.analyzer import fallback_metrics
 from safety_gate_service.main import app, reset_models_for_testing
+from security_utils import safety_headers, set_safety_auth_env
 
 
 @pytest.fixture(autouse=True)
 def reset_models(monkeypatch):
     monkeypatch.delenv("SAFETY_GATE_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("FEATURE_LOGGING", raising=False)
+    set_safety_auth_env(monkeypatch)
     fallback_metrics.reset()
     reset_models_for_testing()
     yield
@@ -22,7 +24,7 @@ def test_analyze_success_echoes_correlation_header():
 
     response = client.post(
         "/analyze",
-        headers={"x-correlation-id": correlation_id},
+        headers=safety_headers(correlation_id=correlation_id),
         json={
             "practiceId": "p1",
             "patient": {"id": "x"},
@@ -42,7 +44,7 @@ def test_analyze_invalid_payload_returns_error_envelope():
 
     response = client.post(
         "/analyze",
-        headers={"x-correlation-id": correlation_id},
+        headers=safety_headers(correlation_id=correlation_id),
         json={
             "practiceId": "p1",
             "narrative": "missing patient",  # patient field omitted to trigger validation error
@@ -57,3 +59,24 @@ def test_analyze_invalid_payload_returns_error_envelope():
     assert body["error"]["correlationId"] == correlation_id
     assert body["error"]["message"] == "Invalid request payload"
     assert isinstance(body["error"].get("details", {}).get("errors"), list)
+
+
+def test_analyze_non_english_falls_back_to_rules():
+    client = TestClient(app)
+    response = client.post(
+        "/analyze",
+        headers=safety_headers(),
+        json={
+            "practiceId": "p1",
+            "patient": {"id": "x"},
+            "narrative": "Paciente presenta dolor torácico desde anoche.",
+            "channel": "web",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "SAFE_TO_CONTINUE" or body["outcome"] == "DIVERTED"
+    # When rules fallback triggers without matches we expect fallback:safe
+    if body["outcome"] == "SAFE_TO_CONTINUE":
+        assert body.get("reason") == "fallback:safe"

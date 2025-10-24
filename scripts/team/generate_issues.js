@@ -39,7 +39,15 @@ function main() {
   const execute = args.includes('--execute');
   const repo = process.env.GITHUB_REPOSITORY || '';
   const root = process.cwd();
-  const files = listEngineerFiles(path.join(root, 'team'));
+  const teamDir = path.join(root, 'team');
+  if (!fs.existsSync(teamDir)) {
+    fs.mkdirSync(path.join(root, 'var'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'var', 'issues.json'), JSON.stringify([], null, 2));
+    fs.writeFileSync(path.join(root, 'var', 'gh_issues.sh'), '#!/usr/bin/env bash\nset -euo pipefail\necho "Team directory not found; no issues generated." >&2\n');
+    console.log('No team directory found; skipping issue generation.');
+    return;
+  }
+  const files = listEngineerFiles(teamDir);
   const issues = [];
   for (const f of files) {
     const md = fs.readFileSync(f, 'utf8');
@@ -73,4 +81,3 @@ function main() {
 }
 
 main();
-

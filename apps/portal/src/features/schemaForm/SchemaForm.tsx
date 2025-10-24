@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { PortalSubmission } from '../../lib/types';
 import defaultFieldConfig, { type FieldConfig, type FieldConfigMap, type FieldOption } from './fieldMap';
@@ -12,17 +12,23 @@ export interface ObjectJsonSchema extends BaseJsonSchema {
   type: 'object';
   properties?: Record<string, JsonSchema>;
   required?: string[];
+  additionalProperties?: boolean | JsonSchema;
 }
 
 export interface ArrayJsonSchema extends BaseJsonSchema {
   type: 'array';
   items?: JsonSchema;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface StringJsonSchema extends BaseJsonSchema {
   type: 'string';
   enum?: string[];
   format?: string;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
 }
 
 export interface NumberJsonSchema extends BaseJsonSchema {
@@ -66,13 +72,18 @@ export type ValidationIssue =
   | { kind: 'format-uri'; path: string }
   | { kind: 'type'; path: string; expected: string }
   | { kind: 'min-items'; path: string }
+  | { kind: 'max-items'; path: string }
   | { kind: 'minimum'; path: string }
   | { kind: 'maximum'; path: string }
-  | { kind: 'multiple-of'; path: string };
+  | { kind: 'multiple-of'; path: string }
+  | { kind: 'min-length'; path: string }
+  | { kind: 'max-length'; path: string }
+  | { kind: 'pattern'; path: string }
+  | { kind: 'additional-property'; path: string };
 
 const toPathKey = (path: PathSegment[]): string => path.map((segment) => segment.toString()).join('.');
 
-const toFieldId = (key: string): string =>
+export const toFieldId = (key: string): string =>
   key ? `schema-field-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}` : 'schema-field-root';
 
 const normalizeConfigKey = (key: string): string => key.replace(/\.\d+/g, '[]');
@@ -107,11 +118,26 @@ const isValidDate = (value: string): boolean => {
 
 const isValidUrl = (value: string): boolean => {
   try {
-    // eslint-disable-next-line no-new
-    new URL(value);
-    return true;
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
+  }
+};
+
+const patternCache = new Map<string, RegExp>();
+
+const getPattern = (pattern: string): RegExp | null => {
+  const cached = patternCache.get(pattern);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const compiled = new RegExp(pattern);
+    patternCache.set(pattern, compiled);
+    return compiled;
+  } catch {
+    return null;
   }
 };
 
@@ -120,6 +146,15 @@ const humanizeSegment = (segment: string): string =>
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const shallowEqualRecords = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+  return aKeys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
+};
 
 const getValueAtPath = (value: unknown, path: PathSegment[]): unknown =>
   path.reduce<unknown>((current, segment) => {
@@ -198,21 +233,40 @@ const collectIssues = (schema: JsonSchema, value: unknown, path: PathSegment[], 
     }
     const properties = schema.properties ?? {};
     const requiredProps = new Set(schema.required ?? []);
-    return Object.entries(properties).flatMap(([prop, childSchema]) =>
-      collectIssues(childSchema, (value as Record<string, unknown>)[prop], [...path, prop], requiredProps.has(prop))
-    );
+    const issues: ValidationIssue[] = [];
+
+    if (schema.additionalProperties === false) {
+      Object.keys(value as Record<string, unknown>).forEach((prop) => {
+        if (!Object.prototype.hasOwnProperty.call(properties, prop)) {
+          const propPath = key ? `${key}.${prop}` : prop;
+          issues.push({ kind: 'additional-property', path: propPath });
+        }
+      });
+    }
+
+    Object.entries(properties).forEach(([prop, childSchema]) => {
+      issues.push(
+        ...collectIssues(
+          childSchema,
+          (value as Record<string, unknown>)[prop],
+          [...path, prop],
+          requiredProps.has(prop)
+        )
+      );
+    });
+    return issues;
   }
 
   if (isArraySchema(schema)) {
     if (!Array.isArray(value)) {
-      if (required && key) {
-        return [{ kind: 'required', path: key }];
-      }
-      return [{ kind: 'type', path: key, expected: 'array' }];
+      return key ? [{ kind: 'type', path: key, expected: 'array' }] : [];
     }
     const issues: ValidationIssue[] = [];
-    if (required && value.length === 0 && key) {
+    if (typeof schema.minItems === 'number' && key && value.length < schema.minItems) {
       issues.push({ kind: 'min-items', path: key });
+    }
+    if (typeof schema.maxItems === 'number' && key && value.length > schema.maxItems) {
+      issues.push({ kind: 'max-items', path: key });
     }
     if (schema.items) {
       const itemSchema = schema.items;
@@ -230,15 +284,29 @@ const collectIssues = (schema: JsonSchema, value: unknown, path: PathSegment[], 
     if (typeof value !== 'string') {
       return key ? [{ kind: 'type', path: key, expected: 'string' }] : [];
     }
-    if (schema.enum && !schema.enum.includes(value)) {
-      return key ? [{ kind: 'enum', path: key }] : [];
+    const issues: ValidationIssue[] = [];
+    if (schema.enum && key && !schema.enum.includes(value)) {
+      issues.push({ kind: 'enum', path: key });
     }
-    if (schema.format === 'date' && !isValidDate(value)) {
-      return key ? [{ kind: 'format-date', path: key }] : [];
+    if (schema.format === 'date' && key && !isValidDate(value)) {
+      issues.push({ kind: 'format-date', path: key });
     }
-    if (schema.format === 'uri' && !isValidUrl(value)) {
-      return key ? [{ kind: 'format-uri', path: key }] : [];
+    if (schema.format === 'uri' && key && !isValidUrl(value)) {
+      issues.push({ kind: 'format-uri', path: key });
     }
+    if (typeof schema.minLength === 'number' && key && value.length < schema.minLength) {
+      issues.push({ kind: 'min-length', path: key });
+    }
+    if (typeof schema.maxLength === 'number' && key && value.length > schema.maxLength) {
+      issues.push({ kind: 'max-length', path: key });
+    }
+    if (schema.pattern && key) {
+      const pattern = getPattern(schema.pattern);
+      if (pattern && !pattern.test(value)) {
+        issues.push({ kind: 'pattern', path: key });
+      }
+    }
+    return issues;
   }
 
   if (isNumberSchema(schema)) {
@@ -301,12 +369,22 @@ const buildErrorMap = (
         return [issuePath, formatMessage('schemaForm.error.invalidValue')];
       case 'min-items':
         return [issuePath, formatMessage('schemaForm.error.minItems')];
+      case 'max-items':
+        return [issuePath, formatMessage('schemaForm.error.maxItems')];
       case 'minimum':
         return [issuePath, formatMessage('schemaForm.error.minValue')];
       case 'maximum':
         return [issuePath, formatMessage('schemaForm.error.maxValue')];
       case 'multiple-of':
         return [issuePath, formatMessage('schemaForm.error.multipleOf')];
+      case 'min-length':
+        return [issuePath, formatMessage('schemaForm.error.minLength')];
+      case 'max-length':
+        return [issuePath, formatMessage('schemaForm.error.maxLength')];
+      case 'pattern':
+        return [issuePath, formatMessage('schemaForm.error.pattern')];
+      case 'additional-property':
+        return [issuePath, formatMessage('schemaForm.error.additionalProperty')];
       default:
         return [issuePath, formatMessage('schemaForm.error.required')];
     }
@@ -342,6 +420,14 @@ const remapTouchedAfterRemoval = (touched: Set<string>, arrayKey: string, remove
   return next;
 };
 
+export const coerceNumberInput = (raw: string, schemaType: NumberJsonSchema['type']): number | string => {
+  if (schemaType === 'integer') {
+    return /^-?\d+$/.test(raw) ? Number(raw) : raw;
+  }
+  const parsed = Number(raw);
+  return Number.isNaN(parsed) ? raw : parsed;
+};
+
 export const collectValidationIssues = (schema: JsonSchema, value: unknown): ValidationIssue[] =>
   collectIssues(schema, value, [], true);
 
@@ -354,10 +440,11 @@ export interface SchemaFormProps<TValue> {
   value: TValue;
   onChange: (next: TValue) => void;
   fieldConfig?: FieldConfigMap;
+  onErrorsChange?: (errors: Record<string, string>) => void;
 }
 
 const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission>>(
-  ({ schema, value, onChange, fieldConfig = defaultFieldConfig }, ref) => {
+  ({ schema, value, onChange, fieldConfig = defaultFieldConfig, onErrorsChange }, ref) => {
     const intl = useIntl();
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [touched, setTouched] = useState<Set<string>>(() => new Set());
@@ -370,23 +457,36 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
         return next;
       });
 
-    const runValidation = (candidate: PortalSubmission): Record<string, string> => {
-      const issues = collectValidationIssues(schema, candidate);
-      return buildErrorMap(issues, intl, fieldConfig);
-    };
+    const runValidation = useCallback(
+      (candidate: PortalSubmission): Record<string, string> => {
+        const issues = collectValidationIssues(schema, candidate);
+        return buildErrorMap(issues, intl, fieldConfig);
+      },
+      [schema, intl, fieldConfig]
+    );
+
+    const syncErrors = useCallback(
+      (nextErrors: Record<string, string>) => {
+        let emitted = nextErrors;
+        setErrors((prev) => {
+          if (shallowEqualRecords(prev, nextErrors)) {
+            emitted = prev;
+            return prev;
+          }
+          return nextErrors;
+        });
+        if (onErrorsChange) {
+          onErrorsChange(emitted);
+        }
+      },
+      [onErrorsChange]
+    );
 
     const updateValue = (path: PathSegment[], nextValue: unknown): PortalSubmission => {
       const candidate = setValueAtPath(value, path, nextValue);
       onChange(candidate);
-      setErrors((prev) => {
-        const nextErrors = runValidation(candidate);
-        const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(nextErrors);
-        if (prevKeys.length === nextKeys.length && prevKeys.every((key) => prev[key] === nextErrors[key])) {
-          return prev;
-        }
-        return nextErrors;
-      });
+      const nextErrors = runValidation(candidate);
+      syncErrors(nextErrors);
       return candidate;
     };
 
@@ -402,7 +502,7 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
 
     const validateAll = () => {
       const errorMap = runValidation(value);
-      setErrors(errorMap);
+      syncErrors(errorMap);
       const keys = Object.keys(errorMap);
       if (keys.length > 0) {
         setTouched(new Set(keys));
@@ -415,6 +515,12 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
     useImperativeHandle(ref, () => ({
       validateAll
     }));
+
+    useEffect(() => {
+      if (onErrorsChange) {
+        onErrorsChange({});
+      }
+    }, [onErrorsChange]);
 
     const renderObject = (
       currentSchema: ObjectJsonSchema,
@@ -646,7 +752,7 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
             >
               {!required ? (
                 <option value="">
-                  {' '}
+                  {intl.formatMessage({ id: 'schemaForm.select.placeholder' })}
                 </option>
               ) : null}
               {options.map((option) => {
@@ -791,8 +897,8 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
                 updateValue(path, '');
                 return;
               }
-              const parsed = currentSchema.type === 'integer' ? Number.parseInt(raw, 10) : Number(raw);
-              updateValue(path, Number.isNaN(parsed) ? raw : parsed);
+              const coerced = coerceNumberInput(raw, currentSchema.type);
+              updateValue(path, coerced);
             }}
             onBlur={handleBlur}
             aria-invalid={showError ? 'true' : undefined}

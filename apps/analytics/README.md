@@ -7,7 +7,7 @@ Environment
 - `ANALYTICS_SINK_PATH`: Optional override for the sink path. Defaults to `var/analytics/metrics.jsonl` relative to the repo root.
 
 Consumer
-- `startAnalyticsConsumer()` subscribes to `Topics.analytics.metric`, validates payloads against the schema, writes to the configured sink, and ships validation/persistence failures to the DLQ via thrown errors (`AnalyticsMetricValidationError`, `AnalyticsMetricSinkError`).
+- `startAnalyticsConsumer()` subscribes to `Topics.analytics.metric`, validates payloads against the schema, sanitizes labels, writes to the configured sink, and publishes validation/persistence failures to the DLQ (using `AnalyticsMetricValidationError` and `AnalyticsMetricSinkError` internally for classification).
 
 Docker
 - Service name `analytics` is available in `docker-compose.yml`; metrics persist under the `analytics-metrics` volume at `/var/analytics/metrics.jsonl`.
@@ -19,3 +19,5 @@ Rollups
 
 Quality Checks
 - Run `npm run metrics:quality` (or `node scripts/analytics_quality.js`) to generate a markdown report highlighting missing fields and numeric outliers. Configure via `ANALYTICS_QUALITY_ZSCORE`, `ANALYTICS_SINK_PATH`, and `ANALYTICS_QUALITY_REPORT` or CLI flags (`--input`, `--output`, `--zscore`).
+- Set `ANALYTICS_QUALITY_QUARANTINE` (or `--quarantine`) to capture quarantined records as NDJSON for follow-up triage.
+- Run `npm run analytics:quarantine:export` (or `node scripts/analytics_quarantine_export.js`) to compress the NDJSON and copy it to long-term storage. Configure with `ANALYTICS_QUARANTINE_ARCHIVE_DIR`, `ANALYTICS_QUARANTINE_RETENTION_DAYS`, and optional `ANALYTICS_QUARANTINE_DELETE_SOURCE`.

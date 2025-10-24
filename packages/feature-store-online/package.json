@@ -1,0 +1,21 @@
+{
+  "name": "@onecare/feature-store-online",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --pretty",
+    "test": "vitest run --dir test"
+  },
+  "dependencies": {
+    "@onecare/ports": "0.1.0"
+  },
+  "overrides": {
+    "@onecare/events": "file:packages/events"
+  },
+  "devDependencies": {
+    "vitest": "^1.5.0"
+  }
+}

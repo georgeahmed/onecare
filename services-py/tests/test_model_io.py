@@ -53,8 +53,10 @@ def test_save_and_load_versioned_artifact(tmp_path):
 
 
 def test_load_missing_artifact_raises(tmp_path):
+    missing_dir = tmp_path / "missing"
     with pytest.raises(FileNotFoundError):
-        load_model_artifact("nonexistent", models_dir=tmp_path)
+        load_model_artifact("nonexistent", models_dir=missing_dir)
+    assert not missing_dir.exists()
 
 
 def test_metadata_latest_fallback(tmp_path):

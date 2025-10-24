@@ -101,6 +101,11 @@ function updateTask(content, action, matcher) {
 
 function main() {
   const args = parseArgs();
+  const teamRoot = path.join(process.cwd(), 'team');
+  if (!fs.existsSync(teamRoot)) {
+    console.warn('Team directory not found; skipping task update.');
+    return;
+  }
   const { full, content } = loadFile(args.engineer);
   const matcher = { substr: args.task, index: args.index };
   const updated = updateTask(content, args.action, matcher);

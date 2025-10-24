@@ -1,0 +1,42 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-triage-decision-min",
+      "topic": "triage.decision",
+      "timestamp": "2025-10-15T12:00:00.000Z",
+      "correlationId": "corr-min",
+      "payload": {
+        "patientId": "patient-123",
+        "score": 0.72,
+        "priority": "URGENT"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-triage-decision-max",
+      "topic": "triage.decision",
+      "timestamp": "2025-10-15T12:05:00.000Z",
+      "correlationId": "corr-max",
+      "payload": {
+        "patientId": "patient-456",
+        "score": 0.98,
+        "priority": "STAT",
+        "reasons": [
+          "acuity_high",
+          "capacity_low"
+        ],
+        "duplicateOf": "patient-456:1697356800000",
+        "assignment": {
+          "owner": "Organization/demo-triage",
+          "team": "triage.escalations"
+        },
+        "features": {
+          "acuity": 0.98,
+          "risk": 0.85
+        },
+        "generatedAt": "2025-10-15T12:05:00.000Z"
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as configModule from '@onecare/config';
 import {
   CallReceivedState,
   LanguageSelectionState,
@@ -11,12 +12,24 @@ import type { TelephonyContext } from '../src/application/types';
 import { buildCallTranscribed } from '../src/adapters/asr.client';
 import type { MessageBus } from '@onecare/bus';
 import type { IdempotencyStore } from '@onecare/ports';
-import { Topics, type TypedEnvelope, type CallTranscribed, type IntentClassified } from '@onecare/events';
+import {
+  Topics,
+  type TypedEnvelope,
+  type CallTranscribed,
+  type IntentClassified,
+  type TriageInput,
+} from '@onecare/events';
 import {
   applyTelephonyDependencies,
   setIntentClassifier,
   setIntentClassifierFactory,
 } from '../src/application/bootstrap';
+import { TelephonyContractError } from '../src/application/errors';
+import { resetMetrics, getCounterRecords, getHistogramRecords } from '@onecare/observability';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 describe('Telephony state machine', () => {
 let publishSpy: ReturnType<typeof vi.fn>;
@@ -42,6 +55,7 @@ function createIdempotencyStore(): IdempotencyStore {
 }
 
   beforeEach(() => {
+    resetMetrics();
     publishSpy = vi.fn(async () => {});
     classifySpy = vi.fn(async () => ({
       intent: 'telephony.callback',
@@ -85,6 +99,108 @@ function createIdempotencyStore(): IdempotencyStore {
       expect(ctx.audioRef).toBe('memory://call-000');
       expect(ctx.metadata?.callerId).toBe('caller-99');
       expect(ctx.selectedLanguage).toBe('en');
+    });
+  });
+
+  describe('TranscribedState feature flags', () => {
+    it('drops detected language and diarization when feature disabled', async () => {
+      const realLoadConfig = configModule.loadConfig;
+      const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockImplementation((practiceId: string) => {
+        const base = realLoadConfig(practiceId);
+        const telephony = isRecord(base.telephony) ? (base.telephony as Record<string, unknown>) : {};
+        const asr = isRecord(telephony.asr) ? (telephony.asr as Record<string, unknown>) : {};
+        return {
+          ...base,
+          telephony: {
+            ...telephony,
+            asr: {
+              ...asr,
+              lang_detect: false,
+              diarization: false,
+            },
+          },
+        };
+      });
+
+      const transcribe = vi.fn(async () => ({
+        text: 'bonjour',
+        lang: 'fr-FR',
+        diarization: [{ speaker: 'speaker-1', startMs: 0, endMs: 1200 }],
+      }));
+
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
+        id: 'call-lang-disable',
+        callId: 'call-lang-disable',
+        audioRef: 'memory://call-lang-disable',
+        correlationId: 'corr-disable',
+        metadata: { callerId: '+15550000099', practiceId: 'nhs_gp_defaults' },
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+      } as TelephonyContext);
+
+      const state = new TranscribedState();
+      await state.handle(ctx, { type: 'telephony.call.received' });
+
+      expect(ctx.callTranscribed?.lang).toBe('en');
+      expect(ctx.transcription?.lang).toBeUndefined();
+      expect(ctx.diarizationSummary).toBeUndefined();
+
+      loadConfigSpy.mockRestore();
+    });
+
+    it('captures diarization summary when feature enabled', async () => {
+      const realLoadConfig = configModule.loadConfig;
+      const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockImplementation((practiceId: string) => {
+        const base = realLoadConfig(practiceId);
+        const telephony = isRecord(base.telephony) ? (base.telephony as Record<string, unknown>) : {};
+        const asr = isRecord(telephony.asr) ? (telephony.asr as Record<string, unknown>) : {};
+        return {
+          ...base,
+          telephony: {
+            ...telephony,
+            asr: {
+              ...asr,
+              lang_detect: true,
+              diarization: true,
+            },
+          },
+        };
+      });
+
+      const transcribe = vi.fn(async () => ({
+        text: 'hola mundo',
+        lang: 'es-ES',
+        diarization: [
+          { speaker: 'spk1', startMs: 0, endMs: 1000 },
+          { speaker: 'spk2', startMs: 1500, endMs: 2500 },
+        ],
+      }));
+
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
+        id: 'call-lang-enable',
+        callId: 'call-lang-enable',
+        audioRef: 'memory://call-lang-enable',
+        correlationId: 'corr-enable',
+        metadata: { callerId: '+15550000088', practiceId: 'nhs_gp_defaults' },
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+      } as TelephonyContext);
+
+      const state = new TranscribedState();
+      await state.handle(ctx, { type: 'telephony.call.received' });
+
+      expect(ctx.callTranscribed?.lang).toBe('es-ES');
+      expect(ctx.callTranscribed).not.toHaveProperty('diarization');
+      expect(ctx.diarizationSummary).toEqual([
+        { speaker: 'spk1', startMs: 0, endMs: 1000 },
+        { speaker: 'spk2', startMs: 1500, endMs: 2500 },
+      ]);
+
+      loadConfigSpy.mockRestore();
     });
   });
 
@@ -152,13 +268,14 @@ function createIdempotencyStore(): IdempotencyStore {
         lang: 'en-GB',
         patientId: 'patient-9',
       });
-      expect(ctx.intentClassificationInput).toEqual({
+      expect(ctx.intentClassificationInput).toMatchObject({
         callId: 'call-001',
         transcript: 'thank you for calling',
         lang: 'en-GB',
         patientId: 'patient-9',
         correlationId: 'corr-123',
       });
+      expect(ctx.intentClassificationInput?.practiceId).toBeTruthy();
       expect(ctx.intentConfidenceThreshold).toBeCloseTo(0.3);
 
       expect(publishSpy).toHaveBeenCalledTimes(1);
@@ -172,7 +289,7 @@ function createIdempotencyStore(): IdempotencyStore {
         callId: 'call-001',
         transcript: 'thank you for calling',
       });
-      expect(headers).toEqual({ 'x-correlation-id': 'corr-123' });
+      expect(headers).toMatchObject({ 'x-correlation-id': 'corr-123' });
       expect(ctx.callTranscribedEnvelope).toEqual(envelope);
       expect(ctx.callTranscribedPublishedAt).toBe(1_725_000_000_000);
     });
@@ -241,6 +358,34 @@ function createIdempotencyStore(): IdempotencyStore {
       expect(transcribe).toHaveBeenCalledOnce();
       expect(ctx.callTranscribedPublishedAt).toBeUndefined();
     });
+
+    it('rejects invalid call transcribed payloads via schema validation', async () => {
+      const transcribe = vi.fn(async () => ({ text: '  sample transcript  ' }));
+
+      setIntentClassifier({ classify: classifySpy });
+      const ctx = applyTelephonyDependencies({
+        id: 'call-invalid-contract',
+        callId: 'call-invalid-contract',
+        audioRef: 'memory://call-invalid-contract',
+        correlationId: 'corr-invalid',
+        asrClient: { transcribe },
+        buildCallTranscribed: () => ({
+          callId: 'call-invalid-contract',
+        } as unknown as CallTranscribed),
+        bus,
+      } as TelephonyContext);
+
+      const state = new TranscribedState();
+      await state.handle(ctx, { type: 'telephony.call.received' }).then(
+        () => {
+          throw new Error('expected call transcribed validation to fail');
+        },
+        (error) => {
+          expect(error).toBeInstanceOf(TelephonyContractError);
+          expect(error).toMatchObject({ code: 'call_transcribed_invalid' });
+        },
+      );
+    });
   });
 
   describe('IntentClassifiedState', () => {
@@ -269,13 +414,15 @@ function createIdempotencyStore(): IdempotencyStore {
       const next = await intentState.handle(ctx, { type: 'telephony.intent.classified' });
 
       expect(next).toBe('Routed');
-      expect(classifySpy).toHaveBeenCalledWith({
-        callId: 'call-003',
-        transcript: 'check symptoms',
-        lang: 'en',
-        patientId: 'patient-X',
-        correlationId: 'corr-789',
-      });
+      expect(classifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callId: 'call-003',
+          transcript: 'check symptoms',
+          lang: 'en',
+          patientId: 'patient-X',
+          correlationId: 'corr-789',
+        }),
+      );
       expect(ctx.intentClassificationResult).toEqual({
         intent: 'telephony.callback',
         confidence: 0.42,
@@ -300,13 +447,18 @@ function createIdempotencyStore(): IdempotencyStore {
       });
       expect(ctx.intentRoutingDecision).toBe('auto');
       expect(publishSpy).toHaveBeenCalledTimes(3);
-      expect(publishSpy).toHaveBeenCalledWith(
-        Topics.telephony.intentClassified,
-        expect.objectContaining({
-          payload: expect.objectContaining({ callId: 'call-003', intent: 'telephony.callback' }),
-        }) as TypedEnvelope<IntentClassified>,
-        { 'x-correlation-id': 'corr-789' },
-      );
+      const classificationCall = publishSpy.mock.calls.find((call) => call[0] === Topics.telephony.intentClassified);
+      expect(classificationCall).toBeDefined();
+      const [, classificationEnvelope, classificationHeaders] = classificationCall as [
+        string,
+        TypedEnvelope<IntentClassified>,
+        Record<string, string> | undefined,
+      ];
+      expect(classificationEnvelope.payload).toMatchObject({
+        callId: 'call-003',
+        intent: 'telephony.callback',
+      });
+      expect(classificationHeaders).toMatchObject({ 'x-correlation-id': 'corr-789' });
       const publishTopics = publishSpy.mock.calls.map((call) => call[0]);
       expect(publishTopics).toContain(Topics.triage.input);
     });
@@ -349,6 +501,78 @@ function createIdempotencyStore(): IdempotencyStore {
       await intentState.handle(duplicateCtx, { type: 'telephony.intent.classified' });
 
       expect(publishSpy.mock.calls.length).toBe(publishCount);
+    });
+
+    it('records telemetry metrics for a successful pipeline', async () => {
+      const transcribe = vi.fn(async () => ({ text: 'metrics pipeline run' }));
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-metrics',
+        callId: 'call-metrics',
+        audioRef: 'memory://call-metrics',
+        correlationId: 'corr-metrics',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        intentClassifier: { classify: classifySpy },
+      } as TelephonyContext);
+
+      const callState = new CallReceivedState();
+      const languageState = new LanguageSelectionState();
+      const transcribedState = new TranscribedState();
+      const intentState = new IntentClassifiedState();
+
+      await callState.handle(ctx, { type: 'telephony.call.received' });
+      await languageState.handle(ctx, { type: 'telephony.language.selection' });
+      await transcribedState.handle(ctx, { type: 'telephony.call.transcribed' });
+      await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      const asrRecords = getCounterRecords('telephony.asr.calls');
+      expect(asrRecords).toHaveLength(1);
+      expect(asrRecords[0]?.attributes?.outcome).toBe('ok');
+
+      const intentRecords = getCounterRecords('telephony.intent.calls');
+      expect(intentRecords).toHaveLength(1);
+      expect(intentRecords[0]?.attributes?.outcome).toBe('ok');
+
+      const pipelineRecords = getHistogramRecords('telephony.pipeline_duration_ms');
+      expect(pipelineRecords.length).toBeGreaterThan(0);
+    });
+
+    it('short-circuits the pipeline when duplicate flag is set', async () => {
+      const transcribe = vi.fn(async () => ({ text: 'unique transcript' }));
+      const classify = vi.fn(async () => ({ intent: 'telephony.callback', confidence: 0.82 }));
+      const enqueuePrompt = vi.fn(async () => {});
+
+      const languageSelection = new LanguageSelectionState();
+      const transcribed = new TranscribedState();
+      const intentState = new IntentClassifiedState();
+
+      const duplicateCtx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-dup-secondary',
+        callId: 'call-dup-secondary',
+        audioRef: 'memory://call-dup-secondary',
+        correlationId: 'corr-dup',
+        asrClient: { transcribe },
+        intentClassifier: { classify },
+        buildCallTranscribed,
+        bus,
+        enqueuePrompt,
+      } as TelephonyContext);
+
+      duplicateCtx.pipelineDuplicate = true;
+      duplicateCtx.pipelineIdempotencyReserved = false;
+
+      const publishCount = publishSpy.mock.calls.length;
+
+      await languageSelection.handle(duplicateCtx, { type: 'telephony.language.selection' });
+      await transcribed.handle(duplicateCtx, { type: 'telephony.call.transcribed' });
+      await intentState.handle(duplicateCtx, { type: 'telephony.intent.classified' });
+
+      expect(transcribe).not.toHaveBeenCalled();
+      expect(classify).not.toHaveBeenCalled();
+      expect(publishSpy.mock.calls.length).toBe(publishCount);
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+      expect(duplicateCtx.intentClassified).toBeUndefined();
     });
 
     it('publishes triage input with narrative when patient present', async () => {
@@ -429,6 +653,32 @@ function createIdempotencyStore(): IdempotencyStore {
       );
       expect(ctx.intentClassifiedPublishedAt).toBeUndefined();
       expect(publishSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects invalid intent classified payloads via schema validation', async () => {
+      const intentState = new IntentClassifiedState();
+      const classify = vi.fn(async () => ({ intent: 'telephony.callback', confidence: 0.7 }));
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-invalid-intent',
+        callId: 'call-invalid-intent',
+        intentClassificationInput: {
+          callId: '',
+          transcript: 'hello world',
+        },
+        intentClassifier: { classify },
+        bus,
+        intentConfidenceThreshold: 0.5,
+      } as TelephonyContext);
+
+      await intentState.handle(ctx, { type: 'telephony.intent.classified' }).then(
+        () => {
+          throw new Error('expected intent classified validation to fail');
+        },
+        (error) => {
+          expect(error).toBeInstanceOf(TelephonyContractError);
+          expect(error).toMatchObject({ code: 'intent_classified_invalid' });
+        },
+      );
     });
 
     it('throws when intent classification input is missing', async () => {
@@ -579,6 +829,60 @@ function createIdempotencyStore(): IdempotencyStore {
       expect(ctx.triageInput).toBeUndefined();
       expect(publishSpy).toHaveBeenCalledTimes(2);
       expect(ctx.callbackWindowOptions).toBeUndefined();
+    });
+
+    it('builds callback window choices from config', async () => {
+      const realLoadConfig = configModule.loadConfig;
+      const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockImplementation((practiceId: string) => {
+        const base = realLoadConfig(practiceId);
+        return {
+          ...base,
+          telephony: {
+            ...(isRecord(base.telephony) ? base.telephony : {}),
+            callback_windows_by_priority: {
+              routine: [
+                { code: 'within_48h', label: 'Within 48 hours' },
+                { code: 'next_week' },
+              ],
+            },
+          },
+        };
+      });
+
+      classifySpy.mockResolvedValueOnce({ intent: 'telephony.callback', confidence: 0.5 });
+      const transcribe = vi.fn(async () => ({ text: 'follow up' }));
+
+      const ctx: TelephonyContext = applyTelephonyDependencies({
+        id: 'call-windows',
+        callId: 'call-windows',
+        audioRef: 'memory://call-windows',
+        correlationId: 'corr-windows',
+        metadata: { callerId: '+15550000077', practiceId: 'nhs_gp_defaults' },
+        patientId: 'patient-77',
+        asrClient: { transcribe },
+        buildCallTranscribed,
+        bus,
+        intentClassifier: { classify: classifySpy },
+        intentConfidenceThreshold: 0.4,
+      } as TelephonyContext);
+
+      const transcribedState = new TranscribedState();
+      await transcribedState.handle(ctx, { type: 'telephony.call.received' });
+
+      const intentState = new IntentClassifiedState();
+      await intentState.handle(ctx, { type: 'telephony.intent.classified' });
+
+      expect(ctx.callbackWindowChoices).toEqual([
+        { priority: 'routine', windowCode: 'within_48h', windowLabel: 'Within 48 hours' },
+        { priority: 'routine', windowCode: 'next_week', windowLabel: 'Next Week' },
+      ]);
+      expect(ctx.callbackWindowOptions).toEqual({
+        priority: 'routine',
+        windowCode: 'within_48h',
+        windowLabel: 'Within 48 hours',
+      });
+
+      loadConfigSpy.mockRestore();
     });
   });
 

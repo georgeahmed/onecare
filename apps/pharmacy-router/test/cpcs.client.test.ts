@@ -42,6 +42,7 @@ describe('CpcsHttpClient', () => {
     expect(client.getHeaders()).toMatchObject({
       Authorization: 'Bearer demo-key',
       'Content-Type': 'application/json',
+      Accept: 'application/json',
       'X-Test': 'value',
     });
     const result = await client.sendReferral('org-1', serviceRequest, summary, undefined, { correlationId: 'corr-env' });
@@ -126,6 +127,20 @@ describe('CpcsHttpClient', () => {
     });
   });
 
+  it('rejects non-https base urls', () => {
+    expect(() => new CpcsHttpClient({ baseUrl: 'http://cpcs.internal' })).toThrow('cpcs_base_url_insecure');
+  });
+
+  it('rejects loopback or private endpoints', () => {
+    expect(() => new CpcsHttpClient({ baseUrl: 'https://127.0.0.1' })).toThrow('cpcs_base_url_blocked');
+    expect(() => new CpcsHttpClient({ baseUrl: 'https://10.0.0.5' })).toThrow('cpcs_base_url_blocked');
+  });
+
+  it('normalises base url paths', () => {
+    const client = new CpcsHttpClient({ baseUrl: 'https://cpcs.test/api/v1/' });
+    expect(client.getBaseUrl()).toBe('https://cpcs.test/api/v1');
+  });
+
   it('throws typed error on invalid arguments', async () => {
     const client = CpcsHttpClient.fromEnv();
     await expect(client.sendReferral('', serviceRequest, summary)).rejects.toThrow(CpcsClientError);
@@ -170,6 +185,39 @@ describe('CpcsHttpClient', () => {
     const timeoutRecords = getCounterRecords('integration.call.timeout_total');
     expect(timeoutRecords).toHaveLength(1);
     expect(timeoutRecords[0].attributes).toMatchObject({ provider: 'cpcs', operation: 'slotless' });
+  });
+
+  it('refreshes credentials without recreating client', async () => {
+    const dispatcher = vi.fn(async (_org, payload: CpcsDispatchPayload, _slot, context) => {
+      return {
+        status: 'accepted' as const,
+        reference: payload.id,
+        message: context?.headers.Authorization,
+      };
+    });
+    const client = new CpcsHttpClient({
+      baseUrl: 'https://override.test',
+      headers: { 'X-Env': 'true', Authorization: 'Bearer initial' },
+      dispatcher,
+    });
+    const result1 = await client.sendReferral('org-1', serviceRequest, summary);
+    expect(result1.reference).toBe(serviceRequest.id);
+    dispatcher.mockClear();
+
+    client.refreshCredentials({
+      headers: { Authorization: 'Bearer rotated', 'X-Env': 'true' },
+      correlationHeader: 'x-corr-2',
+    });
+    const result2 = await client.sendReferral('org-1', serviceRequest, summary, undefined, { correlationId: 'corr-2' });
+    expect(result2.reference).toBe(serviceRequest.id);
+    const lastCall = dispatcher.mock.calls.at(-1);
+    expect(lastCall?.[3]?.headers.Authorization).toBe('Bearer rotated');
+    expect(lastCall?.[3]?.headers['x-corr-2']).toBe('corr-2');
+    expect(client.getHeaders()).toMatchObject({
+      Authorization: 'Bearer rotated',
+      'X-Env': 'true',
+      Accept: 'application/json',
+    });
   });
 
   it('maps 5xx errors to upstream_unavailable', async () => {

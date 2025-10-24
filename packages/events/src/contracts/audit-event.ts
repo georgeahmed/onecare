@@ -2,9 +2,12 @@
 
 export interface AuditEvent {
   type: string;
-  timestamp: string;
+  ts: string;
   correlationId?: string | null;
-  actor?: string | null;
+  actorRef?: string | null;
+  subjectRef?: string | null;
+  outcome?: string | null;
+  reasonCode?: string | null;
   details?: {
     [k: string]: unknown;
   } | null;

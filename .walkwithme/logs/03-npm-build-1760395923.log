@@ -1,0 +1,123 @@
+
+> @onecare/app-access-gate@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-analytics@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-billing@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-booking@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-capacity@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-ics-hub@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-orchestrator@0.1.0 build
+> tsc -p tsconfig.json
+
+src/adapters/persistence/fhir.repository.test.ts(34,44): error TS2559: Type '{ resourceType: string; type: string; entry: never[]; }' has no properties in common with type 'FhirBundle'.
+src/index.ts(1401,47): error TS2559: Type 'FhirBundle' has no properties in common with type 'FhirBundle'.
+npm error Lifecycle script `build` failed with error:
+npm error code 2
+npm error path /Users/test/Code/onecare/onecare/apps/orchestrator
+npm error workspace @onecare/app-orchestrator@0.1.0
+npm error location /Users/test/Code/onecare/onecare/apps/orchestrator
+npm error command failed
+npm error command sh -c tsc -p tsconfig.json
+
+
+> @onecare/app-pharmacy-router@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-portal@0.1.0 build
+> tsc -b && vite build
+
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+vite v5.4.20 building for production...
+transforming...
+✓ 127 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.41 kB │ gzip:  0.28 kB
+dist/assets/index-BfcZwI0S.css    5.12 kB │ gzip:  1.64 kB
+dist/assets/index-DH6ttn4O.js   294.47 kB │ gzip: 90.41 kB
+✓ built in 600ms
+
+> @onecare/app-scribe@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-telephony@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/app-triage@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/bus@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/config@0.1.0 build
+> tsc -p tsconfig.json
+
+src/index.ts(3,36): error TS2307: Cannot find module 'yaml' or its corresponding type declarations.
+npm error Lifecycle script `build` failed with error:
+npm error code 2
+npm error path /Users/test/Code/onecare/onecare/packages/config
+npm error workspace @onecare/config@0.1.0
+npm error location /Users/test/Code/onecare/onecare/packages/config
+npm error command failed
+npm error command sh -c tsc -p tsconfig.json
+
+
+> @onecare/domain@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/events@0.1.0 build
+> tsc -p tsconfig.json
+
+src/contracts/index.ts(19,15): error TS2307: Cannot find module './triage-core-features' or its corresponding type declarations.
+src/contracts/index.ts(20,15): error TS2307: Cannot find module './acuity-signal-features' or its corresponding type declarations.
+npm error Lifecycle script `build` failed with error:
+npm error code 2
+npm error path /Users/test/Code/onecare/onecare/packages/events
+npm error workspace @onecare/events@0.1.0
+npm error location /Users/test/Code/onecare/onecare/packages/events
+npm error command failed
+npm error command sh -c tsc -p tsconfig.json
+
+
+> @onecare/feature-store-memory@0.1.0 build
+> tsc -b tsconfig.json
+
+
+> @onecare/observability@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/ports@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/security@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @onecare/statekit@0.1.0 build
+> tsc -p tsconfig.json
+

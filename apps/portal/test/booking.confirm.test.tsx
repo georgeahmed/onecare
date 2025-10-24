@@ -33,6 +33,7 @@ describe('Booking confirmation', () => {
           slot={demoSlot}
           patientId="patient-a"
           idempotencyKey="bk_test"
+          timezone="UTC"
           isSubmitting
           statusMessageId="status"
           onBack={() => undefined}

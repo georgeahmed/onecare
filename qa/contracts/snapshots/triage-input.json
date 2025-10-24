@@ -1,0 +1,9 @@
+{
+  "patientId": "patient-alpha",
+  "narrative": "Persistent cough for three days with mild fever.",
+  "features": {
+    "symptomDurationHours": 72,
+    "temperatureC": 37.8,
+    "hasBreathlessness": false
+  }
+}

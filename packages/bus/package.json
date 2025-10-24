@@ -4,9 +4,17 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --pretty"
   },
   "dependencies": {
-    "nats": "^2.17.0"
+    "nats": "^2.17.0",
+    "@onecare/ports": "0.1.0",
+    "@onecare/observability": "0.1.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "json-schema-to-typescript": "^13.1.2",
+    "vitest": "^1.5.0"
   }
 }

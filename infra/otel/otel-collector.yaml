@@ -12,6 +12,23 @@ processors:
   batch:
     timeout: 5s
     send_batch_size: 512
+  tail_sampling:
+    decision_wait: 5s
+    num_traces: 10000
+    expected_new_traces_per_sec: 200
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: slow-traces
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: baseline-sampling
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 20
 
 exporters:
   logging:
@@ -25,7 +42,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [tail_sampling, batch]
       exporters: [logging]
     metrics:
       receivers: [otlp]

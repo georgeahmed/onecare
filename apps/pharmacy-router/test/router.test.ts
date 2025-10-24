@@ -52,8 +52,9 @@ function createContext(overrides: Partial<PharmacyContext> = {}): PharmacyContex
 
   return {
     id: 'ctx-test',
+    patientId: 'patient-ctx',
     document: { conditionCode: 'UTI', severity: 'mild' },
-    patient: { ageYears: 30, sex: 'female' },
+    patient: { id: 'patient-ctx', ageYears: 30, sex: 'female' },
     config,
     cpcsClient,
     fhirRepository,
@@ -116,6 +117,7 @@ describe('handlePharmacyReferral', () => {
     const notifier = createNotifier();
     const result = await handlePharmacyReferral(
       {
+        patientId: 'patient-201',
         document: { conditionCode: 'UTI', severity: 'mild' },
         patient: { ageYears: 28, sex: 'female' },
         organisationId: 'ORG1',
@@ -135,5 +137,13 @@ describe('handlePharmacyReferral', () => {
     expect(fhirRepository.upsertBundle).toHaveBeenCalled();
     expect(notifier.notifyReferral).toHaveBeenCalled();
     expect(result.context.serviceRequest).toBeDefined();
+    expect(result.context.referralPayload).toMatchObject({
+      patientId: 'patient-201',
+      condition: 'UTI',
+      pharmacyOrg: 'ORG1',
+      patientAgeYears: 28,
+      patientSex: 'female',
+      severity: 'mild',
+    });
   });
 });

@@ -1,7 +1,13 @@
 /// <reference types="vitest/globals" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyDocumentLanguage, LOCALE_STORAGE_KEY, persistLocaleValue, resolveInitialLocale } from './index';
+import {
+  applyDocumentDirection,
+  applyDocumentLanguage,
+  LOCALE_STORAGE_KEY,
+  persistLocaleValue,
+  resolveInitialLocale
+} from './index';
 
 const stubWindow = (overrides: Partial<Window> = {}) => {
   const store = new Map<string, string>();
@@ -72,7 +78,7 @@ describe('i18n locale resolution', () => {
 
   it('applies language attribute when document is available', () => {
     const documentMock = {
-      documentElement: { lang: 'en' }
+      documentElement: { lang: 'en', dir: 'ltr' }
     } as unknown as Document;
 
     vi.stubGlobal('document', documentMock);
@@ -80,5 +86,17 @@ describe('i18n locale resolution', () => {
     applyDocumentLanguage('es');
 
     expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('applies direction attribute when document is available', () => {
+    const documentMock = {
+      documentElement: { lang: 'en', dir: 'ltr' }
+    } as unknown as Document;
+
+    vi.stubGlobal('document', documentMock);
+
+    applyDocumentDirection('rtl');
+
+    expect(document.documentElement.dir).toBe('rtl');
   });
 });

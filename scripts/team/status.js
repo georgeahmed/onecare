@@ -15,6 +15,7 @@ function listEngineerFiles(root) {
       }
     }
   }
+  if (!fs.existsSync(root)) return files;
   walk(root);
   return files;
 }
@@ -101,6 +102,18 @@ function main() {
     target = args[idx + 1];
   }
   const root = path.join(process.cwd(), 'team');
+  if (!fs.existsSync(root)) {
+    const msg = 'Team directory not found; skipping team status aggregation.';
+    if (json) {
+      console.log('[]');
+    } else {
+      console.log('Engineer Status');
+      console.log(msg);
+      fs.mkdirSync(path.join(process.cwd(), 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(process.cwd(), 'docs', 'TEAM_STATUS.md'), `TEAM STATUS\n\n${msg}\n`);
+    }
+    return;
+  }
   let files = listEngineerFiles(root);
   if (target) files = files.filter((f) => f.includes(target));
   const rows = [];
@@ -126,4 +139,3 @@ function main() {
 }
 
 main();
-

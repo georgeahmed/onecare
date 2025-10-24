@@ -6,10 +6,13 @@
   "properties": {
     "taskId": { "type": "string" },
     "patientId": { "type": "string" },
-    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "priority": {
+      "type": "string",
+      "title": "TaskCreatedPriority",
+      "enum": ["STAT", "URGENT", "SOON", "ROUTINE"]
+    },
     "owner": { "type": "string" }
   },
   "required": ["taskId", "patientId", "priority"],
   "additionalProperties": false
 }
-

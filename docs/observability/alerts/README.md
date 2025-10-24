@@ -1,11 +1,13 @@
 # Alert Templates
 
-These templates cover the two most user-visible reliability risks called out in the SLOs: triage (safety gate) tail latency and scribe backlog growth. Each file is a PrometheusRule definition that you can adapt to Prometheus Operator, Grafana Mimir/Alerting, or cloud-managed monitoring stacks.
+These templates cover the two most user-visible reliability risks called out in the SLOs: triage (safety gate) tail latency and scribe backlog growth. Each file is a PrometheusRule definition that you can adapt to Prometheus Operator, Grafana Mimir/Alerting, or cloud-managed monitoring stacks. The applied rules live in `infra/monitoring/alerts/*.yaml` and are mounted into Prometheus via docker-compose.
 
 ## Files
 
 - `TRIAGE_LATENCY.yaml` — fires when the configured latency quantile breaches the SLO target over short (warning) and longer (critical) windows.
 - `SCRIBE_BACKLOG.yaml` — tracks sustained queue depth and forward-projected growth for the scribe pipeline.
+- `FEATURE_VIEWS.yaml` — ensures the feature-view materialiser runs on schedule and stays within the expected duration budget.
+- Refer to [`../ALERTING.md`](../ALERTING.md) for alert hygiene, dedupe settings, and on-call response guidance. Populate the `runbook` annotation in each template with the relevant URL from that guide.
 
 All placeholders follow the `{{PLACEHOLDER}}` pattern. Replace them with concrete values before applying:
 

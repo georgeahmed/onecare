@@ -1,0 +1,23 @@
+{
+  "name": "@onecare/feature-store-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --pretty",
+    "test": "vitest run --dir test"
+  },
+  "dependencies": {
+    "@onecare/bus": "0.1.0",
+    "@onecare/feature-store-online": "0.1.0",
+    "@onecare/ports": "0.1.0"
+  },
+  "overrides": {
+    "@onecare/events": "file:packages/events"
+  },
+  "devDependencies": {
+    "vitest": "^1.5.0"
+  }
+}

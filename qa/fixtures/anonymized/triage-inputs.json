@@ -1,0 +1,22 @@
+[
+  {
+    "patientId": "patient-alpha",
+    "narrative": "Persistent cough for three days with mild fever.",
+    "features": {
+      "symptomDurationHours": 72,
+      "temperatureC": 37.8,
+      "heartRateBpm": 84,
+      "hasBreathlessness": false
+    }
+  },
+  {
+    "patientId": "patient-bravo",
+    "narrative": "Child with localized rash and mild itching controlled with over-the-counter cream.",
+    "features": {
+      "symptomDurationHours": 24,
+      "hasFever": false,
+      "hasSwelling": false,
+      "requiresInPerson": false
+    }
+  }
+]

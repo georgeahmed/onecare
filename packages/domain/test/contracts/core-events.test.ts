@@ -8,8 +8,10 @@ const FIXTURE_ROOT = path.join(__dirname, '..', 'fixtures', 'events');
 const EVENT_ENVELOPE_ID = 'https://onecare/schemas/common/event-envelope.json';
 const TRIAGE_INPUT_ID = 'https://onecare/schemas/triage/triage-input.json';
 const TASK_CREATED_ID = 'https://onecare/schemas/tasks/task-created.json';
+const TRIAGE_DECISION_ID = 'https://onecare/schemas/triage/triage-decision.json';
 const APPOINTMENT_CREATED_ID = 'https://onecare/schemas/booking/appointment-created.json';
 const PHARMACY_REFERRAL_ID = 'https://onecare/schemas/pharmacy/pharmacy-referral.json';
+const PHARMACY_OUTCOME_ID = 'https://onecare/schemas/pharmacy/pharmacy-outcome.json';
 const ICS_REFERRAL_REQUEST_ID = 'https://onecare/schemas/ics/referral-request.json';
 const ICS_REFERRAL_ACK_ID = 'https://onecare/schemas/ics/referral-ack.json';
 
@@ -116,6 +118,32 @@ describe('core event contracts', () => {
           },
         ]
       `);
+    });
+  });
+
+  describe('triage.decision', () => {
+    const fixture = loadFixture('triage.decision.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(TRIAGE_DECISION_ID, env.payload);
+      }
+    });
+
+    it('rejects invalid priority or missing fields', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      invalidPayload.priority = 'INVALID';
+      delete invalidPayload.patientId;
+
+      const errors = collectErrorShape(TRIAGE_DECISION_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: '/priority', keyword: 'enum' }),
+          expect.objectContaining({ path: '/patientId', keyword: 'required' }),
+        ]),
+      );
     });
   });
 
@@ -294,6 +322,63 @@ describe('core event contracts', () => {
               "format": "date-time",
             },
             "path": "/slot/start",
+          },
+        ]
+      `);
+    });
+  });
+
+  describe('pharmacy.outcome', () => {
+    const fixture = loadFixture('pharmacy.outcome.json');
+
+    it('accepts minimal and maximal payloads', () => {
+      for (const variant of [fixture.minimal, fixture.maximal]) {
+        const env = variant.envelope;
+        expectValidEnvelope(env);
+        expectValidPayload(PHARMACY_OUTCOME_ID, env.payload);
+      }
+    });
+
+    it('rejects missing required fields and additional properties', () => {
+      const invalidPayload = clone(fixture.minimal.envelope.payload);
+      delete invalidPayload.referralReference;
+      // @ts-expect-error - injecting invalid property for test
+      invalidPayload.extra = 'unexpected';
+
+      const errors = collectErrorShape(PHARMACY_OUTCOME_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "additionalProperties",
+            "params": {
+              "additionalProperty": "extra",
+            },
+            "path": "/extra",
+          },
+          {
+            "keyword": "required",
+            "params": {
+              "missingProperty": "referralReference",
+            },
+            "path": "/referralReference",
+          },
+        ]
+      `);
+    });
+
+    it('requires RFC3339 recordedAt timestamps', () => {
+      const invalidPayload = clone(fixture.maximal.envelope.payload);
+      invalidPayload.recordedAt = '07-01-2025 11:05:05';
+
+      const errors = collectErrorShape(PHARMACY_OUTCOME_ID, invalidPayload as Record<string, unknown>);
+      expect(errors).toMatchInlineSnapshot(`
+        [
+          {
+            "keyword": "format",
+            "params": {
+              "format": "date-time",
+            },
+            "path": "/recordedAt",
           },
         ]
       `);

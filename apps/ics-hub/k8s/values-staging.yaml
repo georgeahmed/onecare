@@ -1,0 +1,18 @@
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: ics.staging.onecare.health
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - ics.staging.onecare.health
+      secretName: ics-hub-staging-tls
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4

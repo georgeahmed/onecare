@@ -11,6 +11,15 @@ type AxeResults = Awaited<ReturnType<typeof axe.run>>;
 type AxeViolation = AxeResults['violations'][number];
 
 const runAxeForRoute = async (initialPath: string): Promise<AxeViolation[]> => {
+  const url = new URL(`http://localhost${initialPath}`);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (url.searchParams.has('locale')) {
+      window.localStorage.setItem('onecare.portal.locale', url.searchParams.get('locale') ?? 'en');
+    } else {
+      window.localStorage.removeItem('onecare.portal.locale');
+    }
+  }
+
   const markup = renderToStaticMarkup(
     createElement(
       MemoryRouter,
@@ -53,7 +62,8 @@ const describeViolations = (violations: AxeViolation[]): string =>
 describe('Accessibility audit (axe)', () => {
   const routes: Array<[string, string]> = [
     ['/intake', 'Intake landing'],
-    ['/booking', 'Booking start']
+    ['/booking', 'Booking start'],
+    ['/booking?locale=ar', 'Booking RTL']
   ];
 
   it.each(routes)('has no serious accessibility violations: %s (%s)', async (path) => {

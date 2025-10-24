@@ -1,0 +1,176 @@
+{
+  "analytics-ingest": {
+    "description": "Write-only access to hot JSONL metric drops and lineage append logs.",
+    "policyDocument": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "HotBucketWrite",
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject",
+            "s3:PutObjectAcl"
+          ],
+          "Resource": [
+            "arn:aws:s3:::onecare-analytics-hot-prod/metrics/*",
+            "arn:aws:s3:::onecare-analytics-hot-prod/backfill/*",
+            "arn:aws:s3:::onecare-analytics-hot-prod/lineage/*"
+          ],
+          "Condition": {
+            "Bool": {
+              "aws:SecureTransport": "true"
+            }
+          }
+        },
+        {
+          "Sid": "HotBucketList",
+          "Effect": "Allow",
+          "Action": ["s3:ListBucket"],
+          "Resource": ["arn:aws:s3:::onecare-analytics-hot-prod"],
+          "Condition": {
+            "StringLike": {
+              "s3:prefix": [
+                "metrics/*",
+                "backfill/*",
+                "lineage/*"
+              ]
+            }
+          }
+        },
+        {
+          "Sid": "EncryptHotWrites",
+          "Effect": "Allow",
+          "Action": [
+            "kms:GenerateDataKey",
+            "kms:Encrypt"
+          ],
+          "Resource": ["arn:aws:kms:us-west-2:123456789012:key/alias/analytics-hot-prod"]
+        }
+      ]
+    }
+  },
+  "analytics-rollup": {
+    "description": "Read access to hot metrics and write access to warm Parquet lake.",
+    "policyDocument": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "ReadHotMetrics",
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject"
+          ],
+          "Resource": [
+            "arn:aws:s3:::onecare-analytics-hot-prod/metrics/*",
+            "arn:aws:s3:::onecare-analytics-hot-prod/backfill/*"
+          ],
+          "Condition": {
+            "Bool": {
+              "aws:SecureTransport": "true"
+            }
+          }
+        },
+        {
+          "Sid": "WriteWarmLake",
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject",
+            "s3:DeleteObject"
+          ],
+          "Resource": ["arn:aws:s3:::onecare-analytics-warm-prod/lake/*"]
+        },
+        {
+          "Sid": "ListWarmLake",
+          "Effect": "Allow",
+          "Action": ["s3:ListBucket"],
+          "Resource": ["arn:aws:s3:::onecare-analytics-warm-prod"],
+          "Condition": {
+            "StringLike": {
+              "s3:prefix": ["lake/*"]
+            }
+          }
+        },
+        {
+          "Sid": "WarmKms",
+          "Effect": "Allow",
+          "Action": [
+            "kms:GenerateDataKey",
+            "kms:Encrypt",
+            "kms:Decrypt"
+          ],
+          "Resource": ["arn:aws:kms:us-west-2:123456789012:key/alias/analytics-warm-prod"]
+        }
+      ]
+    }
+  },
+  "analytics-retention": {
+    "description": "Tier or delete aged artefacts and compact ledgers.",
+    "policyDocument": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "TierWarmToCold",
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:DeleteObject"
+          ],
+          "Resource": [
+            "arn:aws:s3:::onecare-analytics-hot-prod/*",
+            "arn:aws:s3:::onecare-analytics-warm-prod/*"
+          ]
+        },
+        {
+          "Sid": "WriteColdTier",
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject"
+          ],
+          "Resource": ["arn:aws:s3:::onecare-analytics-cold-prod/*"]
+        },
+        {
+          "Sid": "ColdKms",
+          "Effect": "Allow",
+          "Action": ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"],
+          "Resource": ["arn:aws:kms:us-west-2:123456789012:key/alias/analytics-cold-prod"]
+        }
+      ]
+    }
+  },
+  "analytics-audit-readonly": {
+    "description": "Break-glass read-only auditor role with MFA requirement.",
+    "sessionPolicy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "ReadAllTiers",
+          "Effect": "Allow",
+          "Action": ["s3:GetObject", "s3:ListBucket"],
+          "Resource": [
+            "arn:aws:s3:::onecare-analytics-hot-prod",
+            "arn:aws:s3:::onecare-analytics-hot-prod/*",
+            "arn:aws:s3:::onecare-analytics-warm-prod",
+            "arn:aws:s3:::onecare-analytics-warm-prod/*",
+            "arn:aws:s3:::onecare-analytics-cold-prod",
+            "arn:aws:s3:::onecare-analytics-cold-prod/*"
+          ]
+        },
+        {
+          "Sid": "DecryptAll",
+          "Effect": "Allow",
+          "Action": ["kms:Decrypt"],
+          "Resource": [
+            "arn:aws:kms:us-west-2:123456789012:key/alias/analytics-hot-prod",
+            "arn:aws:kms:us-west-2:123456789012:key/alias/analytics-warm-prod",
+            "arn:aws:kms:us-west-2:123456789012:key/alias/analytics-cold-prod"
+          ],
+          "Condition": {
+            "Bool": {
+              "aws:MultiFactorAuthPresent": "true"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import type { IdempotencyStore } from './idempotency';
+import { reserveIdempotency, releaseIdempotency } from './idempotency';
 
 export interface IdempotencyExecutionResult<T> {
   status: 'executed' | 'skipped';
@@ -29,41 +30,17 @@ export async function executeWithIdempotency<T>(
   }
 
   const { key, ttlSeconds } = options;
-  const reserveSupported = typeof store.reserve === 'function';
-  const deleteSupported = typeof store.delete === 'function';
-
-  if (reserveSupported) {
-    const outcome = await store.reserve!(key, ttlSeconds);
-    if (outcome === 'exists') {
-      await Promise.resolve(options.onDuplicate?.());
-      return { status: 'skipped' };
-    }
-    try {
-      const result = await options.execute();
-      return { status: 'executed', result };
-    } catch (error) {
-      if (deleteSupported) {
-        await store.delete!(key).catch(() => undefined);
-      }
-      await Promise.resolve(options.onError?.(error));
-      throw error;
-    }
-  }
-
-  const exists = await store.exists(key);
-  if (exists) {
+  const reservation = await reserveIdempotency(store, key, { ttlSeconds });
+  if (reservation === 'exists') {
     await Promise.resolve(options.onDuplicate?.());
     return { status: 'skipped' };
   }
 
   try {
     const result = await options.execute();
-    await store.put(key, ttlSeconds);
     return { status: 'executed', result };
   } catch (error) {
-    if (deleteSupported) {
-      await store.delete!(key).catch(() => undefined);
-    }
+    await releaseIdempotency(store, key).catch(() => undefined);
     await Promise.resolve(options.onError?.(error));
     throw error;
   }

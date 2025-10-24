@@ -1,0 +1,89 @@
+groups:
+  - name: ics-latency
+    rules:
+      - alert: IcsRoutingLatencyFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(ics_routing_latency_ms_bucket[5m])) by (le)
+          ) > 750
+        for: 5m
+        labels:
+          severity: critical
+          slo: ics-routing
+          team: ics
+        annotations:
+          summary: "ICS routing latency above target"
+          description: "ICS routing p95 exceeded 750ms for 5 minutes."
+          runbook: https://onecare/runbooks/oncall#ics-acknowledgements
+      - alert: IcsAckLatencyFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(ics_ack_latency_ms_bucket[5m])) by (le)
+          ) > 500
+        for: 5m
+        labels:
+          severity: critical
+          slo: ics-ack
+          team: ics
+        annotations:
+          summary: "ICS acknowledgement latency above target"
+          description: "ICS ack p95 exceeded 500ms for 5 minutes."
+          runbook: https://onecare/runbooks/oncall#ics-acknowledgements
+      - alert: IcsLatencySlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(ics_ack_latency_ms_bucket[30m])) by (le)
+          ) > 500
+        for: 30m
+        labels:
+          severity: warning
+          slo: ics-ack
+          team: ics
+        annotations:
+          summary: "ICS acknowledgement latency trending high"
+          description: "ICS ack p95 stayed above 500ms for 30 minutes."
+          runbook: https://onecare/runbooks/oncall#ics-acknowledgements
+      - alert: AutomationLatencyFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(automation_publish_latency_ms_bucket[5m])) by (le)
+          ) > 120000
+        for: 10m
+        labels:
+          severity: critical
+          slo: automation-latency
+          team: automation
+        annotations:
+          summary: "Automation task publish latency above target"
+          description: "Automation publish p95 exceeded 2 minutes for 10 minutes."
+          runbook: https://onecare/runbooks/oncall#automation-latency
+  - name: ics-dlq
+    rules:
+      - alert: IcsDlqGrowthFast
+        expr: |
+          increase(broker_dlq_pending{topic=~"ics.*"}[10m]) > 50
+        for: 10m
+        labels:
+          severity: critical
+          slo: ics-dlq
+          team: ics
+        annotations:
+          summary: "ICS DLQ growth above threshold"
+          description: "ICS DLQ backlog grew by more than 50 messages in 10 minutes."
+          runbook: https://onecare/runbooks/oncall#dlq-remediation
+      - alert: IcsDlqSustained
+        expr: |
+          max_over_time(broker_dlq_pending{topic=~"ics.*"}[30m]) > 200
+        for: 30m
+        labels:
+          severity: warning
+          slo: ics-dlq
+          team: ics
+        annotations:
+          summary: "ICS DLQ backlog sustained above 200"
+          description: "ICS DLQ backlog remained above 200 messages for 30 minutes."
+          runbook: https://onecare/runbooks/oncall#dlq-remediation

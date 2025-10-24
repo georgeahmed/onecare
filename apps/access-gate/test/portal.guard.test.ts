@@ -114,6 +114,23 @@ const BASE_CONFIG = {
   },
 } as unknown as ResolvedConfig;
 
+function createMonotonicStepper(stepMs: number): () => number {
+  let current = 0;
+  return () => {
+    current += stepMs;
+    return current;
+  };
+}
+
+function createMonotonicSequence(values: number[]): () => number {
+  let index = 0;
+  return () => {
+    const value = values[Math.min(index, values.length - 1)];
+    index += 1;
+    return value;
+  };
+}
+
 describe('ensurePortalState', () => {
   it('opens portal within configured hours', () => {
     const decision = ensurePortalState({
@@ -253,6 +270,7 @@ describe('portal uptime guard scheduler', () => {
       correlationIdFactory: () => 'corr-1',
       singleflightTtlMs: 5_000,
       portalNotifyPublisher: notifier,
+      monotonicNow: createMonotonicStepper(60_000),
     });
 
     await vi.runOnlyPendingTimersAsync();
@@ -272,6 +290,8 @@ describe('portal uptime guard scheduler', () => {
 
     const tickRecords = getCounterRecords('portal.tick');
     expect(tickRecords.length).toBeGreaterThanOrEqual(2);
+    const schedulerTickRecords = getCounterRecords('scheduler.tick');
+    expect(schedulerTickRecords.length).toBeGreaterThanOrEqual(2);
   });
 
   it('skips duplicate work within TTL', async () => {
@@ -293,6 +313,7 @@ describe('portal uptime guard scheduler', () => {
       now: () => times[Math.min(i++, times.length - 1)],
       singleflightTtlMs: 120_000,
       correlationIdFactory: () => 'corr-ttl',
+      monotonicNow: createMonotonicSequence([0, 5_000, 10_000, 130_000, 250_000]),
     });
 
     await vi.runOnlyPendingTimersAsync();
@@ -303,12 +324,15 @@ describe('portal uptime guard scheduler', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.runOnlyPendingTimersAsync();
-    expect(loadConfig).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.runOnlyPendingTimersAsync();
     expect(loadConfig).toHaveBeenCalledTimes(2);
     guard.cancel();
+    const skipRecords = getCounterRecords('scheduler.skip.singleflight');
+    expect(skipRecords.find((entry) => entry.attributes?.reason === 'lease_active')).toBeDefined();
+    const schedulerTickRecords = getCounterRecords('scheduler.tick');
+    expect(schedulerTickRecords.length).toBe(2);
   });
 
   it('does not publish portal notify when state unchanged', async () => {
@@ -330,6 +354,7 @@ describe('portal uptime guard scheduler', () => {
       correlationIdFactory: () => 'corr-unchanged',
       singleflightTtlMs: 5_000,
       portalNotifyPublisher: notifier,
+      monotonicNow: createMonotonicStepper(60_000),
     });
 
     await vi.runOnlyPendingTimersAsync();
@@ -337,6 +362,80 @@ describe('portal uptime guard scheduler', () => {
 
     expect(adapter.applyIntents).not.toHaveBeenCalled();
     expect(notifier.publish).not.toHaveBeenCalled();
+    const noopRecords = getCounterRecords('scheduler.idempotent.noop');
+    expect(noopRecords).toHaveLength(1);
+    expect(noopRecords[0].attributes?.practiceId).toBe('practice-1');
+  });
+
+  it('collapses concurrent ticks via singleflight lease', async () => {
+    Math.random = vi.fn(() => 0);
+    vi.useFakeTimers();
+
+    let resolveConfig: (() => void) | undefined;
+    const loadConfig = vi.fn(
+      () =>
+        new Promise<ResolvedConfig>((resolve) => {
+          resolveConfig = () => resolve(BASE_CONFIG);
+        }),
+    );
+
+    const guard = startPortalUptimeGuard('practice-1', {
+      loadConfig,
+      adapter,
+      now: () => new Date('2025-01-01T08:30:00Z'),
+      singleflightTtlMs: 5_000,
+      correlationIdFactory: () => 'corr-singleflight',
+      monotonicNow: createMonotonicStepper(60_000),
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    const trigger = (guard as unknown as { __trigger: () => Promise<void> }).__trigger;
+    await trigger();
+
+    const skipRecords = getCounterRecords('scheduler.skip.singleflight');
+    expect(skipRecords.find((entry) => entry.attributes?.reason === 'in_flight')).toBeDefined();
+
+    resolveConfig?.();
+    await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
+    guard.cancel();
+  });
+
+  it('tolerates wall clock skew using monotonic timers', async () => {
+    Math.random = vi.fn(() => 0);
+    vi.useFakeTimers();
+
+    const loadConfig = vi.fn(async () => BASE_CONFIG);
+    const nowValues = [
+      new Date('2025-01-01T08:30:00Z'),
+      new Date('2025-01-01T08:29:30Z'),
+      new Date('2025-01-01T08:45:00Z'),
+    ];
+    let index = 0;
+
+    const guard = startPortalUptimeGuard('practice-1', {
+      loadConfig,
+      adapter,
+      now: () => nowValues[Math.min(index++, nowValues.length - 1)],
+      singleflightTtlMs: 120_000,
+      correlationIdFactory: () => 'corr-skew',
+      monotonicNow: createMonotonicSequence([0, 5_000, 10_000, 130_000, 250_000]),
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.runOnlyPendingTimersAsync();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(loadConfig).toHaveBeenCalledTimes(2);
+    guard.cancel();
+
+    const schedulerTickRecords = getCounterRecords('scheduler.tick');
+    expect(schedulerTickRecords.length).toBe(2);
   });
 
   it('flushes deferrals when entering core hours', async () => {
@@ -374,6 +473,7 @@ describe('portal uptime guard scheduler', () => {
       deferralPublisher: publisher,
       correlationIdFactory: () => 'corr-flush',
       singleflightTtlMs: 5_000,
+      monotonicNow: createMonotonicStepper(60_000),
     });
 
     await vi.runOnlyPendingTimersAsync();
@@ -409,6 +509,7 @@ describe('portal uptime guard scheduler', () => {
       deferralStore: store,
       correlationIdFactory: () => 'corr-expire',
       singleflightTtlMs: 5_000,
+      monotonicNow: createMonotonicStepper(60_000),
     });
 
     await vi.runOnlyPendingTimersAsync();

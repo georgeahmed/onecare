@@ -13,6 +13,10 @@ function writeYaml(root: string, relativePath: string, contents: string) {
 function setupLayeredConfigFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'config-fixture-'));
 
+  const redFlagDir = join(root, 'red_flags');
+  mkdirSync(redFlagDir, { recursive: true });
+  writeFileSync(join(redFlagDir, 'core.json'), JSON.stringify(['core-flag']), 'utf8');
+
   writeYaml(root, 'nhs_gp_defaults.yaml', `
 core_hours:
   start: "08:00"
@@ -20,8 +24,8 @@ core_hours:
 enhanced_access_windows:
   - "weekdays_evening"
   - "saturday"
-red_flag_set:
-  - "base-flag"
+red_flag_source: core
+red_flag_set: []
 safety_gate:
   red_flag_threshold: 0.65
   emergency_confidence: 0.70
@@ -82,6 +86,26 @@ safety_gate:
   acuity_threshold_emergency: 1.2
 idempotency:
   ttl_seconds: 15
+access_gate:
+  rate_limit:
+    tenant:
+      capacity: 80
+      refill_per_second: 1.5
+      ttl_seconds: 480
+      max_entries: 1500
+    account:
+      capacity: 5
+      refill_per_second: 0.2
+      ttl_seconds: 300
+      max_entries: 800
+`);
+
+  writeYaml(root, 'practices/pcn-west/practice-02.yaml', `
+__meta:
+  pcn: "west-1"
+  ics: "west.yml"
+core_hours:
+  start: "08:30"
 `);
 
   return root;
@@ -122,9 +146,44 @@ describe('loadConfig', () => {
     expect(cfg.safety_gate?.emergency_confidence).toBeGreaterThan(0);
     expect(cfg.safety_gate?.acuity_threshold_emergency).toBeGreaterThan(0);
     expect(cfg.idempotency?.ttlSeconds).toBe(900);
+    expect(cfg.triageFallback?.enabled).toBe(true);
+    expect(cfg.triageFallback?.timeBudgetMs).toBeGreaterThan(0);
+    expect(cfg.triageFallback?.scoreDeltaTolerance).toBeGreaterThan(0);
+    expect(cfg.triageFallback?.maxReasons).toBeGreaterThan(0);
     const lineage = cfg._lineage as Record<string, unknown> | undefined;
     expect(Array.isArray(lineage?.sources)).toBe(true);
     expect((lineage?.sources as unknown[] | undefined)?.length).toBeGreaterThan(0);
+    expect(cfg.access_gate).toBeDefined();
+    expect(cfg.access_gate?.rateLimit.tenant.capacity).toBe(120);
+    expect(cfg.access_gate?.rateLimit.tenant.refillPerSecond).toBeCloseTo(2);
+    expect(cfg.access_gate?.rateLimit.tenant.ttlSeconds).toBe(600);
+    expect(cfg.access_gate?.rateLimit.tenant.maxEntries).toBe(2000);
+    expect(cfg.access_gate?.rateLimit.account.capacity).toBe(12);
+    expect(cfg.access_gate?.rateLimit.account.refillPerSecond).toBeCloseTo(0.3, 5);
+    expect(cfg.access_gate?.rateLimit.account.ttlSeconds).toBe(600);
+    expect(cfg.access_gate?.rateLimit.account.maxEntries).toBe(10000);
+  });
+
+  it('allows overriding triage fallback configuration', () => {
+    const cfg = loadConfig('demo-fallback-override', {
+      overrides: {
+        triage: {
+          fallback: {
+            enabled: false,
+            time_budget_ms: 45,
+            score_delta_tolerance: 0.3,
+            max_reasons: 3,
+          },
+        },
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.triageFallback).toMatchObject({
+      enabled: false,
+      timeBudgetMs: 45,
+      scoreDeltaTolerance: 0.3,
+      maxReasons: 3,
+    });
   });
 
   it('merges layered YAML with additive arrays and lineage tracking', () => {
@@ -144,7 +203,7 @@ describe('loadConfig', () => {
         'practice-window',
       ]);
       expect(cfg.red_flag_set).toEqual([
-        'base-flag',
+        'core-flag',
         'global-flag',
         'pcn-flag',
         'practice-flag',
@@ -154,6 +213,15 @@ describe('loadConfig', () => {
       expect(cfg.safety_gate?.red_flag_threshold).toBe(0.9);
       expect(cfg.safety_gate?.emergency_confidence).toBe(0.9);
       expect(cfg.safety_gate?.acuity_threshold_emergency).toBeCloseTo(0.97, 5);
+      expect(cfg.access_gate).toBeDefined();
+      expect(cfg.access_gate?.rateLimit.tenant.capacity).toBe(80);
+      expect(cfg.access_gate?.rateLimit.tenant.refillPerSecond).toBeCloseTo(1.5);
+      expect(cfg.access_gate?.rateLimit.tenant.ttlSeconds).toBe(480);
+      expect(cfg.access_gate?.rateLimit.tenant.maxEntries).toBe(1500);
+      expect(cfg.access_gate?.rateLimit.account.capacity).toBe(5);
+      expect(cfg.access_gate?.rateLimit.account.refillPerSecond).toBeCloseTo(0.2);
+      expect(cfg.access_gate?.rateLimit.account.ttlSeconds).toBe(300);
+      expect(cfg.access_gate?.rateLimit.account.maxEntries).toBe(800);
 
       const lineage = cfg._lineage as Record<string, unknown> | undefined;
       expect(lineage?.pcn).toBe('west-1');
@@ -216,6 +284,36 @@ describe('loadConfig', () => {
       ORG2: {
         endpoint: 'https://ics.example/org2',
       },
+    });
+  });
+
+  it('normalises safety gate shadow configuration', () => {
+    const cfg = loadConfig('shadow-demo', {
+      overrides: {
+        safety_gate: {
+          shadow: {
+            enabled: true,
+            endpoint: ' https://shadow.example/safety ',
+            sample_rate: 0.42,
+            variant: 'next',
+            timeout_ms: 420,
+            max_retries: 1,
+            base_delay_ms: 15,
+            audit_event: 'custom.shadow.audit',
+          },
+        },
+      },
+    });
+
+    expect(cfg.safety_gate?.shadow).toEqual({
+      enabled: true,
+      endpoint: 'https://shadow.example/safety',
+      sampleRate: 0.42,
+      variant: 'next',
+      timeoutMs: 420,
+      maxRetries: 1,
+      baseDelayMs: 15,
+      auditEvent: 'custom.shadow.audit',
     });
   });
 
@@ -284,5 +382,135 @@ describe('loadConfig', () => {
     rules?.conditions?.soreThroat?.sex?.push('unknown');
     expect(config.pharmacy?.eligibility?.defaultRule?.age?.min).toBe(10);
     expect(config.pharmacy?.eligibility?.conditions?.soreThroat?.sex).toEqual(['male', 'female']);
+  });
+
+  it('exposes messaging send document config and feature flags', () => {
+    const cfg = loadConfig('demo-messaging', {
+      overrides: {
+        messaging: {
+          send_document: {
+            mesh: {
+              workflow_id: 'GPCONNECT_SEND_DOCUMENT',
+              sender_mailbox: 'SENDER123',
+            },
+            pdf_max_mb: 8,
+          },
+        },
+        feature_flags: {
+          gp_connect_booking: false,
+        },
+      },
+    });
+
+    expect(cfg.messaging?.send_document?.mesh?.workflow_id).toBe('GPCONNECT_SEND_DOCUMENT');
+    expect(cfg.messaging?.send_document?.mesh?.sender_mailbox).toBe('SENDER123');
+    expect(cfg.messaging?.send_document?.pdf_max_mb).toBe(8);
+    expect(cfg.feature_flags?.gp_connect_booking).toBe(false);
+  });
+
+  it('interprets shadow sample rates provided as whole percentages', () => {
+    const cfg = loadConfig('shadow-percent', {
+      overrides: {
+        safety_gate: {
+          shadow: {
+            enabled: true,
+            sample_rate: 75,
+          },
+        },
+      },
+    });
+
+    expect(cfg.safety_gate?.shadow?.sampleRate).toBeCloseTo(0.75);
+  });
+
+  it('rounds idempotency TTL values to whole seconds', () => {
+    const cfg = loadConfig('ttl-rounding', {
+      overrides: {
+        idempotency: {
+          ttlSeconds: '45.4',
+        },
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.idempotency?.ttlSeconds).toBe(45);
+  });
+
+  it('allows access gate to be disabled explicitly', () => {
+    const cfg = loadConfig('access-gate-off', {
+      overrides: {
+        access_gate: null,
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.access_gate).toBeUndefined();
+  });
+
+  it('replaces arrays when overrides are supplied', () => {
+    const cfg = loadConfig('array-override', {
+      overrides: {
+        enhanced_access_windows: ['override-only'],
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.enhanced_access_windows).toEqual(['override-only']);
+  });
+
+  it('resolves layers referenced with .yml suffix', () => {
+    const root = setupLayeredConfigFixture();
+    try {
+      const cfg = loadConfig('pcn-west/practice-02', { configRoot: root });
+      expect(cfg.core_hours?.start).toBe('08:30');
+      const lineage = cfg._lineage as Record<string, unknown> | undefined;
+      expect(lineage?.ics).toBe('west.yml');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps triage fallback references isolated', () => {
+    const cfg = loadConfig('triage-fallback-clone');
+    expect(cfg.triageFallback).not.toBe(cfg.triage?.fallback);
+    cfg.triageFallback!.enabled = false;
+    expect(cfg.triage?.fallback?.enabled).toBe(true);
+  });
+
+  it('rejects pharmacy eligibility with inverted age bounds', () => {
+    expect(() =>
+      loadConfig('pharmacy-invalid', {
+        overrides: {
+          pharmacy: {
+            eligibility: {
+              defaultRule: { age: { min: 40, max: 30 } },
+            },
+          },
+        } as Partial<ResolvedConfig>,
+      }),
+    ).toThrowError(/pharmacy_age_bounds_invalid/);
+  });
+
+  it('applies ICS env overrides when route names include hyphens', () => {
+    const root = setupLayeredConfigFixture();
+    process.env.ICS_NORTH_WEST_HEADER_NAME = 'X-Test';
+    process.env.ICS_NORTH_WEST_HEADER_VALUE = 'enabled';
+    try {
+      writeYaml(root, 'ics/north-west.yaml', `
+routes:
+  default:
+    endpoint: "https://ics.example/default"
+`);
+      writeYaml(root, 'practices/pcn-west/practice-03.yaml', `
+__meta:
+  ics: "north-west"
+core_hours:
+  start: "09:00"
+`);
+      const cfg = loadConfig('pcn-west/practice-03', { configRoot: root });
+      const headers = cfg.ics?.routes?.default?.headers;
+      expect(headers).toMatchObject({ 'X-Test': 'enabled' });
+    } finally {
+      delete process.env.ICS_NORTH_WEST_HEADER_NAME;
+      delete process.env.ICS_NORTH_WEST_HEADER_VALUE;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

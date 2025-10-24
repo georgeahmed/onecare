@@ -5,7 +5,7 @@ Purpose
 
 How To Use
 - For each row below, provide: sample valid payload(s), negative cases, and a contract test that validates against JSON Schemas using the compiled validators.
-- Run locally and in CI: `npm run codegen:check && npm test` (include contract tests). No network calls.
+- Run locally and in CI: `npm run codegen:check && npm test` (include contract tests). When updating schemas, regenerate artifacts with `npm run --workspaces=false codegen`. No network calls.
 
 Contracts To Validate
 - Orchestrator
@@ -16,16 +16,20 @@ Contracts To Validate
   - Egress: `schemas/portal/notify.json` for `Topics.portal.notify`. Validate idempotency key computation (minute-truncated timestamp).
 - Triage
   - Ingress: `schemas/triage/triage-input.json` from bus.
-  - Egress: `schemas/tasks/task-created.json` on successful Task creation; `tasks.updated` for SLA aging.
+  - Egress: `schemas/triage/triage-decision.json` for decision envelopes and `schemas/tasks/task-created.json` on successful Task creation; `tasks.updated` for SLA aging.
 - Booking
   - Ingress: `schemas/booking/booking-search-request.json` for search handler.
   - Egress: `schemas/booking/appointment-created.json` after write-back.
+  - Assisted: `schemas/booking/assisted-outcome.json` emitted on `Topics.booking.assistedCompleted` when staff confirm/decline slots; ensure assisted payloads, queue notifications, and audit logs stay in sync.
 - Pharmacy Router
   - Ingress: `schemas/pharmacy/pharmacy-referral.json` for referral.
   - Egress: `schemas/pharmacy/pharmacy-outcome.json` (if present) after outcome write-back.
 - ICS Hub
   - Ingress: `schemas/ics/referral-request.json`.
   - Egress: `schemas/ics/referral-ack.json`.
+- Messaging — Send Document
+  - Ingress: `schemas/messaging/send-document-request.json` for the HTTP adapter.
+  - Egress: `schemas/messaging/send-document-requested.json` (requested) and `schemas/messaging/send-document-sent.json` (post-dispatch). Prepare fixtures covering happy-path, missing NHS number, and oversized PDF scenarios. Reserve `ack`/`nack`/`retry` schemas for future consumer contract suites.
 - Common
   - Envelope: `schemas/common/event-envelope.json` for all published events.
   - DLQ: `schemas/common/dlq-event.json` for poison messages.
@@ -40,4 +44,3 @@ Execution Notes
 - Place tests near services under `apps/*/test` or a shared `tests/contracts/*` suite.
 - Keep tests deterministic; use fixtures committed in `tests/fixtures/*`.
 - Avoid network access; use fakes for ports/bus.
-

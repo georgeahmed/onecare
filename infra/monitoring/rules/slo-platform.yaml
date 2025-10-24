@@ -1,0 +1,29 @@
+groups:
+  - name: platform-slo
+    rules:
+      - alert: PlatformBusReconnects
+        expr: sum(rate(bus_reconnect_events_total[5m])) > 1
+        for: 15m
+        labels:
+          severity: warning
+          slo: platform-bus
+          team: devops-sre
+        annotations:
+          summary: "Frequent bus reconnects detected"
+          description: "Bus reconnect events exceeded 1 per second over 15 minutes."
+          runbook: https://onecare/runbooks/bus-operations
+      - alert: PlatformDlqDepth
+        expr: |
+          (
+            sum(rate(bus_nats_pending_lag_sum[5m])) /
+            clamp_min(sum(rate(bus_nats_pending_lag_count[5m])), 1)
+          ) > 200
+        for: 15m
+        labels:
+          severity: critical
+          slo: platform-dlq
+          team: devops-sre
+        annotations:
+          summary: "DLQ backlog critical"
+          description: "Average DLQ backlog exceeded 200 messages for 15 minutes."
+          runbook: https://onecare/runbooks/oncall#dlq-remediation

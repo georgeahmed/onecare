@@ -23,6 +23,7 @@ const CONSENT_MAP: Record<string, ReturnType<typeof buildConsentEntries>> = {
   'patient-123': buildConsentEntries('patient-123'),
   'patient-1': buildConsentEntries('patient-1'),
   'patient-42': buildConsentEntries('patient-42'),
+  'patient-rate': buildConsentEntries('patient-rate'),
 };
 
 export const CONSENT_FIXTURE = JSON.stringify(CONSENT_MAP);

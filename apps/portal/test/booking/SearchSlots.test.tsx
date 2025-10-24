@@ -44,10 +44,11 @@ describe('SearchSlots component', () => {
     expect(html).toContain('booking-slot skeleton');
   });
 
-  it('renders empty state when no slots match filter', () => {
+  it('renders empty state guidance when no slots match filter', () => {
     const html = renderWithIntl(createElement(SearchSlots, { slots: [], isLoading: false }));
 
     expect(html).toContain('No appointment slots match your filters yet.');
+    expect(html).toContain('Try adjusting your filters or request a callback so we can follow up as soon as possible.');
   });
 
   it('renders supplied error message', () => {
@@ -62,5 +63,32 @@ describe('SearchSlots component', () => {
     );
 
     expect(html).toContain('aria-selected="true"');
+  });
+
+  it('shows fairness note when provided', () => {
+    const html = renderWithIntl(
+      createElement(SearchSlots, {
+        slots,
+        fairnessNote: 'We reserve at least 15% of appointments for phone consultations.',
+      })
+    );
+
+    expect(html).toContain('Fair access');
+    expect(html).toContain('15% of appointments');
+  });
+
+  it('virtualizes rendering for large slot lists', () => {
+    const manySlots: BookingSlot[] = Array.from({ length: 60 }, (_, index) => ({
+      id: `slot-${index}`,
+      start: `2025-10-14T09:${(index % 60).toString().padStart(2, '0')}:00Z`,
+      end: `2025-10-14T09:${((index + 1) % 60).toString().padStart(2, '0')}:00Z`,
+      modality: index % 2 === 0 ? 'phone' : 'in_person',
+      location: `Clinic ${index}`,
+    }));
+
+    const html = renderWithIntl(createElement(SearchSlots, { slots: manySlots }));
+
+    expect(html).toContain('booking-slots--virtualized');
+    expect(html).toContain('booking-slot-spacer');
   });
 });

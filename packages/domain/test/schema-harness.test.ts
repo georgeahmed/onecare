@@ -6,6 +6,7 @@ const APPOINTMENT_CREATED_ID = 'https://onecare/schemas/booking/appointment-crea
 const ERROR_ENVELOPE_ID = 'https://onecare/schemas/common/error-envelope.json';
 const DLQ_EVENT_ID = 'https://onecare.example/schemas/common/dlq-event.json';
 const ANALYTICS_METRIC_ID = 'https://onecare/schemas/analytics/metric.json';
+const TASK_UPDATED_VERSIONED_ID = 'https://onecare/schemas/tasks/task-updated/2024-12-01';
 
 describe('schema validation harness', () => {
   describe('triage.input', () => {
@@ -146,6 +147,7 @@ describe('schema validation harness', () => {
                 "unauthorized",
                 "forbidden",
                 "invalid_input",
+                "not_found",
                 "unsupported_media_type",
                 "payload_too_large",
                 "conflict",
@@ -153,7 +155,9 @@ describe('schema validation harness', () => {
                 "upstream_unavailable",
                 "internal_error",
                 "too_many_requests",
+                "rate_limited",
                 "busy",
+                "over_capacity",
                 "invalid_fhir",
               ],
             },
@@ -278,5 +282,17 @@ describe('schema validation harness', () => {
         ]
       `);
     });
+  });
+
+  it('loads schemas referenced by canonical IDs with version segments', () => {
+    const payload = {
+      taskId: 'task-123',
+      patientId: 'patient-999',
+      priority: 'URGENT',
+      reason: 'triage_updated',
+    };
+
+    const result = validate(TASK_UPDATED_VERSIONED_ID, payload);
+    expect(result).toEqual({ ok: true });
   });
 });

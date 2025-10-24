@@ -82,8 +82,14 @@
           }
         }
       }
+    },
+    "booking": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "availabilityTimeoutMs": { "type": "integer", "minimum": 200, "maximum": 10000, "default": 2000 }
+      }
     }
   },
   "required": ["practiceId"]
 }
-

@@ -1,0 +1,89 @@
+fullnameOverride: ics-hub
+nameOverride: ics-hub
+component: ics
+
+image:
+  repository: ghcr.io/onecare/ics-hub
+  tag: latest
+
+replicaCount: 2
+
+service:
+  port: 8080
+  targetPort: http
+
+probes:
+  readiness:
+    path: /readyz
+    port: http
+  liveness:
+    path: /healthz
+    port: http
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 65
+
+resources:
+  requests:
+    cpu: 400m
+    memory: 768Mi
+  limits:
+    cpu: 800m
+    memory: 1.5Gi
+
+env:
+  - name: NODE_ENV
+    value: production
+  - name: ICS_CONFIG
+    valueFrom:
+      configMapKeyRef:
+        name: ics-hub-config
+        key: resolved.yaml
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    enabled: true
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: messaging
+        ports:
+          - protocol: TCP
+            port: 4222
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: observability
+        ports:
+          - protocol: TCP
+            port: 4317
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: automation
+        ports:
+          - protocol: TCP
+            port: 443
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: ics.onecare.health
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - ics.onecare.health
+      secretName: ics-hub-ingress-tls

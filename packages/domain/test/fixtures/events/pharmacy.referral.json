@@ -8,7 +8,9 @@
       "payload": {
         "patientId": "patient-200",
         "condition": "flu-like symptoms",
-        "pharmacyOrg": "pharmacy/demo"
+        "pharmacyOrg": "pharmacy/demo",
+        "patientAgeYears": null,
+        "patientSex": "unknown"
       }
     }
   },
@@ -22,9 +24,15 @@
         "patientId": "patient-201",
         "condition": "suspected strep throat",
         "pharmacyOrg": "pharmacy/demo",
+        "patientAgeYears": 32,
+        "patientSex": "female",
+        "severity": "moderate",
+        "exclusionFlags": ["pregnant", "allergy-penicillin"],
         "slot": {
           "start": "2025-01-08T09:00:00.000Z",
-          "end": "2025-01-08T09:15:00.000Z"
+          "end": "2025-01-08T09:15:00.000Z",
+          "locationOdsCode": "ODS1",
+          "reference": "slot-1"
         }
       }
     }

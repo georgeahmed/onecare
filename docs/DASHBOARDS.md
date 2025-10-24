@@ -1,6 +1,6 @@
 # ML Services Dashboards
 
-Baseline Grafana dashboards to monitor the Python ML services. These definitions assume OTEL → Prometheus metrics using the naming produced by the `instrument_fastapi` middleware (`http_server_duration_ms` counter emitted as histogram) and standard OTEL semantic conventions.
+Baseline Grafana dashboards to monitor the Python ML services. These definitions assume the Safety Gate service exposes Prometheus metrics via `safety_gate_request_latency_seconds` / `safety_gate_requests_total` (see `services-py/safety_gate_service/metrics.py`) and that Scribe exports similar HTTP metrics.
 
 ## Prerequisites
 
@@ -12,14 +12,18 @@ Baseline Grafana dashboards to monitor the Python ML services. These definitions
 
 | Panel | Query (PromQL) | Notes |
 | --- | --- | --- |
-| Safety Gate latency p50 | `histogram_quantile(0.5, sum(rate(http_server_duration_ms_bucket{service="safety-gate", route="/analyze"}[$__interval])) by (le))` | Shows median latency over the selected interval. |
-| Safety Gate latency p95 | `histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{service="safety-gate", route="/analyze"}[$__interval])) by (le))` | Track tail latency spikes; alert when >1500 ms. |
-| Safety Gate error rate | `sum(rate(http_server_requests_total{service="safety-gate", route="/analyze", status_code=~"5.."}[$__interval])) / sum(rate(http_server_requests_total{service="safety-gate", route="/analyze"}[$__interval]))` | Displays % of requests failing due to server errors. |
-| Safety Gate throughput | `sum(rate(http_server_requests_total{service="safety-gate", route="/analyze"}[$__interval]))` | Requests per second; overlay deployment markers. |
+| Safety Gate latency p50 | `histogram_quantile(0.5, sum(rate(safety_gate_request_latency_seconds_bucket{endpoint="analyze"}[$__interval])) by (le))` | Shows median latency over the selected interval. |
+| Safety Gate latency p95 | `histogram_quantile(0.95, sum(rate(safety_gate_request_latency_seconds_bucket{endpoint="analyze"}[$__interval])) by (le))` | Track tail latency spikes; alert when >900 ms. |
+| Safety Gate error rate | `sum(rate(safety_gate_requests_total{endpoint="analyze",status=~"server_error|dropped"}[$__interval])) / sum(rate(safety_gate_requests_total{endpoint="analyze"}[$__interval]))` | Displays % of requests failing due to server errors or dropped due to overload. |
+| Safety Gate throughput | `sum(rate(safety_gate_requests_total{endpoint="analyze"}[$__interval]))` | Requests per second; overlay deployment markers. |
 | Scribe draft latency p50 | `histogram_quantile(0.5, sum(rate(http_server_duration_ms_bucket{service="scribe", route="/draft"}[$__interval])) by (le))` | Median LLM response latency. |
 | Scribe draft latency p95 | `histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{service="scribe", route="/draft"}[$__interval])) by (le))` | Tail latency; alert if >10 s. |
 | Scribe draft error rate | `sum(rate(http_server_requests_total{service="scribe", route="/draft", status_code=~"5.."}[$__interval])) / sum(rate(http_server_requests_total{service="scribe", route="/draft"}[$__interval]))` | Server error percentage. |
 | Scribe throughput | `sum(rate(http_server_requests_total{service="scribe"}[$__interval]))` | Total requests per second (all endpoints). |
+| Booking latency p95 | `histogram_quantile(0.95, sum(rate(booking_http_duration_ms_bucket{route="/booking/appointments"}[$__interval])) by (le))` | Booking handler tail latency; target < 1500 ms. |
+| Booking backpressure (rate) | `rate(booking_http_backpressure_total[$__interval])` | Highlights sustained 429 responses from concurrency caps. |
+| Booking event DLQ | `rate(booking_event_dlq_total[$__interval])` | Monitors DLQ throughput; sustained >0 suggests retry/backoff tuning. |
+| GP Connect conflicts | `rate(gp_connect_create_conflict_total[$__interval])` | Track frequency of 409 conflicts returned by GP Connect. |
 
 Adjust label names if your exporter uses different label keys (e.g., `http_route`, `http_status_code`).
 

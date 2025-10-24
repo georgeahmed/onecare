@@ -61,9 +61,15 @@ describe('ReliablePortalNotifyPublisher', () => {
       at: '2025-01-01T08:15:45Z',
     });
 
+    expect(envelope.metadata).toMatchObject({
+      attempt: 1,
+      firstSeenAt: '2025-01-01T08:16:00.000Z',
+    });
     expect(entry.headers).toMatchObject({
       'x-correlation-id': 'corr-test',
       'x-idempotency-key': 'portal.notify:prac-001:UP:2025-01-01T08:15:00Z',
+      'x-attempt': '1',
+      'x-first-seen-at': '2025-01-01T08:16:00.000Z',
     });
   });
 
@@ -85,6 +91,12 @@ describe('ReliablePortalNotifyPublisher', () => {
     expect(bus.published[0].topic).toBe(Topics.portal.notify);
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(200);
+
+    const envelope = bus.published[0].payload as TypedEnvelope<PortalNotify>;
+    expect(envelope.metadata).toMatchObject({ attempt: 2 });
+    expect(bus.published[0].headers).toMatchObject({
+      'x-attempt': '2',
+    });
   });
 
   it('routes to DLQ after retries exhausted', async () => {

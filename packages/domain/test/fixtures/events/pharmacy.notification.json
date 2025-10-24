@@ -1,0 +1,37 @@
+{
+  "minimal": {
+    "envelope": {
+      "id": "evt-pharmacy-notify-minimal",
+      "topic": "pharmacy.notification",
+      "timestamp": "2025-01-07T12:00:00.000Z",
+      "correlationId": "corr-pharmacy-notify-min",
+      "payload": {
+        "serviceRequestId": "sr-200",
+        "organisationId": "pharmacy/demo",
+        "status": "accepted",
+        "summary": "Referral accepted",
+        "recordedAt": "2025-01-07T12:00:01.000Z"
+      }
+    }
+  },
+  "maximal": {
+    "envelope": {
+      "id": "evt-pharmacy-notify-maximal",
+      "topic": "pharmacy.notification",
+      "timestamp": "2025-01-07T12:05:00.000Z",
+      "correlationId": "corr-pharmacy-notify-max",
+      "payload": {
+        "serviceRequestId": "sr-201",
+        "organisationId": "pharmacy/demo",
+        "status": "rejected",
+        "summary": "Referral rejected: slot_not_available",
+        "recordedAt": "2025-01-07T12:05:02.000Z",
+        "channel": "sms",
+        "metadata": {
+          "template": "pharmacy_referral_status",
+          "locale": "en"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "patientId": "patient-alpha",
+    "decision": {
+      "outcome": "SAFE_TO_CONTINUE",
+      "reason": "MOCK_ALLOW"
+    }
+  },
+  {
+    "patientId": "patient-bravo",
+    "decision": {
+      "outcome": "DIVERTED",
+      "reason": "CHILD_RASH_REVIEW"
+    }
+  }
+]
