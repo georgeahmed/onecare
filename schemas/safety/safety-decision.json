@@ -4,10 +4,13 @@
   "title": "SafetyDecision",
   "type": "object",
   "properties": {
-    "outcome": { "type": "string", "enum": ["DIVERTED", "SAFE_TO_CONTINUE"] },
+    "outcome": {
+      "type": "string",
+      "title": "SafetyDecisionOutcome",
+      "enum": ["DIVERTED", "SAFE_TO_CONTINUE"]
+    },
     "reason": { "type": ["string", "null"] }
   },
   "required": ["outcome"],
   "additionalProperties": false
 }
-

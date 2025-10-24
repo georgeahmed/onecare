@@ -35,6 +35,7 @@ const AppLayout = () => {
       <header>
         <nav
           id="primary-navigation"
+          tabIndex={-1}
           aria-label={intl.formatMessage({ id: 'app.primaryNavigation' })}
         >
           <Link to="/intake">{intl.formatMessage({ id: 'app.nav.intake' })}</Link>

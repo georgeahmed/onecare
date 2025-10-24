@@ -13,7 +13,7 @@ At a glance
   - `CpcsHttpClient` for CPCS integration with retries, circuit breakers, and slotless fallback.
   - `PharmacyRouterConsumer` for event ingestion, bounded concurrency, retries, and DLQ routing.
   - `PatientNotificationAdapter` for consent-aware, idempotent patient notifications.
-- **Contracts first**: schemas live in `schemas/pharmacy/*.json`; run `npm run codegen` to regenerate
+- **Contracts first**: schemas live in `schemas/pharmacy/*.json`; run `npm run --workspaces=false codegen` to regenerate
   TypeScript models under `packages/events/src/contracts/*`.
 
 Events & contracts
@@ -37,7 +37,7 @@ Running locally
 npm install
 
 # Regenerate TypeScript (and optional Python) contracts after schema edits.
-npm run codegen
+npm run --workspaces=false codegen
 
 # Execute the service test suite (state machine, adapters, consumer, notifier).
 npm run test -- apps/pharmacy-router/test

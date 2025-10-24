@@ -4,8 +4,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir --target /opt/python uvicorn fastapi "pydantic>=1.10,<2"
-COPY services-py/common ./common
-COPY services-py/scribe_service ./scribe_service
+COPY common ./common
+COPY scribe_service ./scribe_service
 
 FROM gcr.io/distroless/python3-debian12
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/opt/python

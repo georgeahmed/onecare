@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import Ajv2020 from 'ajv/dist/2020';
 import metaDraft7 from 'ajv/dist/refs/json-schema-draft-07.json';
@@ -65,11 +65,29 @@ function resolveSchemaPath(schemaId: string): string {
     relative = relative.slice('schemas/'.length);
   }
 
-  if (!relative.endsWith('.json')) {
-    throw new Error(`Schema identifier must point to a JSON file: ${schemaId}`);
+  const candidates: string[] = [];
+  if (relative.endsWith('.json')) {
+    candidates.push(relative);
+  } else {
+    candidates.push(`${relative}.json`);
+    const parts = relative.split('/').filter(Boolean);
+    if (parts.length > 1) {
+      const last = parts[parts.length - 1]!;
+      if (/^(v\d+(?:\.\d+)*)$/.test(last) || /^[0-9][0-9\-]*$/.test(last)) {
+        const withoutLast = parts.slice(0, -1).join('/');
+        candidates.push(`${withoutLast}.json`);
+      }
+    }
   }
 
-  return safeJoinSchemaPath(relative);
+  for (const candidate of candidates) {
+    const full = safeJoinSchemaPath(candidate);
+    if (existsSync(full)) {
+      return full;
+    }
+  }
+
+  throw new Error(`Schema identifier must point to a JSON file: ${schemaId}`);
 }
 
 function loadSchema(schemaId: string): { schema: JSONSchema; canonicalId: string } {
@@ -122,12 +140,27 @@ function ensureCompiledValidator(schemaId: string): SchemaValidator {
   return validator;
 }
 
+function escapePointerSegment(segment: string): string {
+  return segment.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function joinPointer(base: string, segment: string): string {
+  const escaped = escapePointerSegment(segment);
+  if (!base) {
+    return `/${escaped}`;
+  }
+  if (base.endsWith('/')) {
+    return `${base}${escaped}`;
+  }
+  return `${base}/${escaped}`;
+}
+
 function pointerForError(error: ErrorObject): string {
   const basePath = error.instancePath || '';
 
   if (error.keyword === 'required' && typeof (error.params as Record<string, unknown>).missingProperty === 'string') {
     const missing = (error.params as Record<string, unknown>).missingProperty as string;
-    return `${basePath}/${missing}`.replace(/\/{2,}/g, '/') || `/${missing}`;
+    return joinPointer(basePath, missing);
   }
 
   if (
@@ -135,7 +168,7 @@ function pointerForError(error: ErrorObject): string {
     typeof (error.params as Record<string, unknown>).additionalProperty === 'string'
   ) {
     const prop = (error.params as Record<string, unknown>).additionalProperty as string;
-    return `${basePath}/${prop}`.replace(/\/{2,}/g, '/') || `/${prop}`;
+    return joinPointer(basePath, prop);
   }
 
   return basePath || error.schemaPath || '';

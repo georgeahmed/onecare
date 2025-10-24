@@ -102,7 +102,7 @@ describe('ICS routed state resilience', () => {
     const failingContext = createContext({ client, bus, idempotencyStore: store }, envelope);
 
     await expect(state.handle(failingContext, baseEvent)).rejects.toThrow('upstream_unavailable');
-    const failureRecords = getCounterRecords('ics.ack.failed_total');
+    const failureRecords = getCounterRecords('ics_ack_failed_total');
     expect(failureRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ attributes: expect.objectContaining({ destinationOrgId: 'dest-1' }) }),
@@ -114,7 +114,7 @@ describe('ICS routed state resilience', () => {
     await expect(state.handle(recoveryContext, baseEvent)).resolves.toBe('Acked');
     expect(sendReferral).toHaveBeenCalledTimes(2);
     expect(recoveryBus.publishes).toHaveLength(1);
-    const ackRecords = getCounterRecords('ics.ack.published_total');
+    const ackRecords = getCounterRecords('ics_ack_published_total');
     expect(ackRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ attributes: expect.objectContaining({ destinationOrgId: 'dest-1' }) }),

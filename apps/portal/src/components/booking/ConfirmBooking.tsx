@@ -13,6 +13,7 @@ import {
 import { createCorrelationId, recordRumEvent, safeLog, startTimer } from '../../lib/telemetry';
 import { formatAccessibleDateTime, formatDate, formatTimeRange, formatTimeZoneName } from '../../lib/format';
 import { useLocale } from '../../i18n';
+import { formatSlotModalityLabel } from '../../lib/bookingLabels';
 
 const BASE_BACKOFF_MS = 1_500;
 const MAX_BACKOFF_MS = 30_000;
@@ -137,7 +138,7 @@ export const ConfirmBookingContent = ({
   const accessibleRange = useMemo(() => `${accessibleStart} – ${accessibleEnd}`, [accessibleStart, accessibleEnd]);
   const timeZoneLabel = useMemo(() => formatTimeZoneName(timezone, { locale }), [timezone, locale]);
 
-  const modalityLabel = intl.formatMessage({ id: `booking.modality.${slot.modality}` });
+  const modalityLabel = formatSlotModalityLabel(intl, slot);
   const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
 
   const submittingLabel = intl.formatMessage({ id: 'booking.confirm.submitting' });
@@ -280,7 +281,13 @@ const getFocusableElements = (container: HTMLElement): HTMLElement[] =>
     container.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     )
-  ).filter((element) => !element.hasAttribute('disabled') && !element.getAttribute('aria-hidden'));
+  ).filter((element) => {
+    if (element.hasAttribute('disabled')) {
+      return false;
+    }
+    const ariaHidden = element.getAttribute('aria-hidden');
+    return !(ariaHidden && ariaHidden.toLowerCase() === 'true');
+  });
 
 const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onSuccess, onError }: ConfirmBookingProps) => {
   const intl = useIntl();
@@ -402,11 +409,19 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
             : fallbackMessage;
         const attempts = job.attempt + 1;
         const jitter = Math.floor(Math.random() * RETRY_JITTER_MAX_MS);
-        const delay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempts) + jitter;
+        const baseDelay = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempts) + jitter;
+        const retryAfterSeconds =
+          typeof (error as BookingApiError).retryAfterSeconds === 'number'
+            ? (error as BookingApiError).retryAfterSeconds
+            : undefined;
+        const enforcedDelay =
+          retryAfterSeconds && retryAfterSeconds > 0
+            ? Math.max(baseDelay, retryAfterSeconds * 1_000)
+            : baseDelay;
         const next = updateOfflineJob(job.id, {
           attempt: attempts,
           lastError: message,
-          nextAttemptAt: Date.now() + delay,
+          nextAttemptAt: Date.now() + enforcedDelay,
         });
         setQueueJob(next ?? job);
         setQueueStatus('queued');
@@ -420,6 +435,7 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
           correlationId: job.correlationId,
           durationMs,
           message,
+          retryAfterSeconds,
         });
       }
     },

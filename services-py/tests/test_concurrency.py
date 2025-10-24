@@ -27,6 +27,16 @@ def test_concurrency_limiter_times_out_waiters():
     limiter.release()
 
 
+def test_concurrency_limiter_zero_timeout():
+    limiter = ConcurrencyLimiter(max_concurrency=1, max_queue=0, wait_timeout_ms=0)
+
+    first = asyncio.run(limiter.acquire())
+    assert first is None
+    second = asyncio.run(limiter.acquire())
+    assert second in {"timeout", "queue"}
+    limiter.release()
+
+
 def test_analyze_returns_429_when_limiter_reports_queue(monkeypatch):
     set_safety_auth_env(monkeypatch)
     monkeypatch.setenv("SAFETY_GATE_ENABLE_BATCHING", "0")

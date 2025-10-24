@@ -101,7 +101,11 @@ function createKeepAliveFetch(baseUrl: string, timeoutMs: number): FetchImpl {
       }
 
       const signal = init.signal;
-      const onAbort = () => request.destroy(new Error('AbortError'));
+      const onAbort = () => {
+        const abortError = new Error('AbortError');
+        abortError.name = 'AbortError';
+        request.destroy(abortError);
+      };
       if (signal) {
         if (signal.aborted) {
           onAbort();

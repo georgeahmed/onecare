@@ -9,7 +9,16 @@ export interface ReserveIdempotencyOptions {
   ttlSeconds: number;
 }
 
-const inflightReservations = new Map<string, Promise<void>>();
+const inflightReservations = new WeakMap<IdempotencyStore, Map<string, Promise<void>>>();
+
+function getInflightMap(store: IdempotencyStore): Map<string, Promise<void>> {
+  let map = inflightReservations.get(store);
+  if (!map) {
+    map = new Map<string, Promise<void>>();
+    inflightReservations.set(store, map);
+  }
+  return map;
+}
 
 export async function reserveIdempotency(
   store: IdempotencyStore,
@@ -24,7 +33,8 @@ export async function reserveIdempotency(
     return 'exists';
   }
 
-  const existing = inflightReservations.get(key);
+  const reservations = getInflightMap(store);
+  const existing = reservations.get(key);
   if (existing) {
     await existing;
     return (await store.exists(key)) ? 'exists' : reserveWithoutNative(store, key, options.ttlSeconds);
@@ -34,7 +44,7 @@ export async function reserveIdempotency(
   const lock = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
-  inflightReservations.set(key, lock);
+  reservations.set(key, lock);
 
   try {
     if (await store.exists(key)) {
@@ -43,7 +53,7 @@ export async function reserveIdempotency(
     await store.put(key, options.ttlSeconds);
     return 'reserved';
   } finally {
-    inflightReservations.delete(key);
+    reservations.delete(key);
     releaseLock();
   }
 }
@@ -66,7 +76,7 @@ export async function releaseIdempotency(store: IdempotencyStore, key: string): 
     return;
   }
   try {
-    await store.put(key, 0);
+    await store.put(key, 1);
   } catch {
     // ignore best-effort fallback failures
   }

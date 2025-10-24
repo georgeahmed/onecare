@@ -31,9 +31,14 @@ const es = {
   'case.resolve.outcome': 'Resultado',
   'case.resolve.submit': 'Confirmar resolución',
   'case.status.updated': 'Caso actualizado',
+  'case.error.scheduleInvalid': 'Introduce una fecha y hora válidas antes de programar.',
+  'case.error.assistMissingTime': 'Selecciona una hora de inicio y fin antes de completar la reserva asistida.',
+  'case.error.assistInvalid': 'Asegúrate de que la hora de fin sea posterior a la de inicio.',
+  'case.assisted.validation': 'Asegúrate de que la hora de fin sea posterior a la de inicio.',
+  'case.assisted.validation.missing': 'Selecciona una hora de inicio y fin.',
+  'case.assisted.valid': 'La selección se ve bien.',
   'loading': 'Cargando…',
   'error.generic': 'Algo salió mal',
 } as const;
 
 export default es;
-

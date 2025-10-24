@@ -97,11 +97,15 @@ const InterpreterPreferences = ({ config, value, onChange, allowPersistence = fa
               onChange={handleLanguageChange}
               aria-describedby={helpTextId}
             >
-              {languages.map((lang) => (
-                <option key={lang} value={lang}>
-                  {lang}
-                </option>
-              ))}
+              {languages.map((lang) => {
+                const label = intl.formatMessage({ id: `locale.name.${lang}`, defaultMessage: lang });
+                const optionLang = lang.split('-')[0] ?? lang;
+                return (
+                  <option key={lang} value={lang} lang={optionLang}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
             <p id={helpTextId} className="field-hint">
               {intl.formatMessage({ id: 'intake.interpreter.language.multipleHint' })}

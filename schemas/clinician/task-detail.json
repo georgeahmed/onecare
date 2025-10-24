@@ -7,8 +7,16 @@
   "properties": {
     "id": { "type": "string", "minLength": 1, "maxLength": 64 },
     "clinicId": { "type": "string", "minLength": 1, "maxLength": 64 },
-    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
-    "status": { "type": "string", "enum": ["NEW", "IN_PROGRESS", "DONE"] },
+    "priority": {
+      "type": "string",
+      "title": "ClinicianTaskPriority",
+      "enum": ["STAT", "URGENT", "SOON", "ROUTINE"]
+    },
+    "status": {
+      "type": "string",
+      "title": "ClinicianTaskStatus",
+      "enum": ["NEW", "IN_PROGRESS", "DONE"]
+    },
     "shortReason": { "type": "string", "minLength": 1, "maxLength": 256 },
     "patientId": { "type": "string", "minLength": 1, "maxLength": 64 },
     "waitMs": { "type": "integer", "minimum": 0 },
@@ -20,6 +28,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "ClinicianTaskAttachment",
         "additionalProperties": false,
         "properties": {
           "contentType": {
@@ -48,6 +57,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "ClinicianTaskAuditItem",
         "additionalProperties": false,
         "properties": {
           "when": { "type": "string", "format": "date-time" },

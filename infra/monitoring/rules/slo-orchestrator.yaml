@@ -5,7 +5,7 @@ groups:
         expr: |
           histogram_quantile(
             0.95,
-            sum(rate(http_server_duration_ms_bucket{route="/safety-check"}[10m])) by (le)
+            sum(rate(http_server_duration_ms_bucket{service="orchestrator",route="/safety-check"}[10m])) by (le)
           ) > 1500
         for: 15m
         labels:
@@ -16,11 +16,11 @@ groups:
         annotations:
           summary: "Orchestrator p95 latency >1.5s"
           description: "Orchestrator /safety-check latency breached 1.5s for 15 minutes."
-          runbook: https://onecare/runbooks/triage-latency
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
       - alert: OrchestratorAvailabilityBudget
         expr: |
-          sum(rate(orchestrator_decision_failures_total[5m])) /
-          clamp_min(sum(rate(orchestrator_decision_attempts_total[5m])), 1) > 0.01
+          sum(rate(http_server_errors_total{service="orchestrator"}[5m])) /
+          clamp_min(sum(rate(http_server_requests_total{service="orchestrator"}[5m])), 1) > 0.01
         for: 10m
         labels:
           severity: critical
@@ -29,5 +29,5 @@ groups:
           service: orchestrator
         annotations:
           summary: "Orchestrator failure rate >1%"
-          description: "Decision failure rate exceeded 1% for 10 minutes."
-          runbook: https://onecare/runbooks/triage-latency
+          description: "Error rate exceeded 1% for 10 minutes."
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency

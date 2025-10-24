@@ -16,6 +16,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
+        "title": "FhirTransactionEntry",
         "required": ["fullUrl", "request", "resource"],
         "properties": {
           "fullUrl": {
@@ -24,10 +25,12 @@
           },
           "request": {
             "type": "object",
+            "title": "FhirTransactionRequest",
             "required": ["method", "url"],
             "properties": {
               "method": {
-                "enum": ["POST", "PUT"]
+                "enum": ["POST", "PUT"],
+                "title": "FhirTransactionMethod"
               },
               "url": {
                 "type": "string",
@@ -37,7 +40,7 @@
             "additionalProperties": true
           },
           "resource": {
-            "$ref": "bundle-entry-resource.json"
+            "$ref": "./bundle-entry-resource.json"
           }
         },
         "additionalProperties": true

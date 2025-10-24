@@ -1,40 +1,32 @@
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: slo-analytics
-  labels:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/name: slo-analytics
-spec:
-  groups:
-    - name: analytics-materialiser
-      rules:
-        - alert: AnalyticsMaterialiserLatency
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum(rate(analytics_ingest_lag_ms_bucket[15m])) by (metricName, le)
-            ) > 120000
-          for: 15m
-          labels:
-            severity: critical
-            slo: analytics-materialiser
-            team: analytics
-          annotations:
-            summary: "Feature materialiser latency above target"
-            description: "Materialiser p95 latency exceeded 120s for at least 15 minutes."
-            runbook: https://onecare/runbooks/oncall#analytics-materialiser
-        - alert: AnalyticsFreshnessLag
-          expr: |
-            (
-              sum(increase(analytics_ingest_ok_total[30m])) by (metricName)
-            ) == bool 0
-          for: 10m
-          labels:
-            severity: warning
-            slo: analytics-freshness
-            team: analytics
-          annotations:
-            summary: "Feature materialiser freshness lagging"
-            description: "No successful analytics.metric ingests recorded in the past 30 minutes."
-            runbook: https://onecare/runbooks/oncall#analytics-materialiser
+groups:
+  - name: analytics-materialiser
+    rules:
+      - alert: AnalyticsMaterialiserLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(analytics_ingest_lag_ms_bucket[15m])) by (metricName, le)
+          ) > 120000
+        for: 15m
+        labels:
+          severity: critical
+          slo: analytics-materialiser
+          team: analytics
+        annotations:
+          summary: "Feature materialiser latency above target"
+          description: "Materialiser p95 latency exceeded 120s for at least 15 minutes."
+          runbook: https://onecare/runbooks/oncall#analytics-materialiser
+      - alert: AnalyticsFreshnessLag
+        expr: |
+          (
+            sum(increase(analytics_ingest_ok_total[30m])) by (metricName)
+          ) == bool 0
+        for: 10m
+        labels:
+          severity: warning
+          slo: analytics-freshness
+          team: analytics
+        annotations:
+          summary: "Feature materialiser freshness lagging"
+          description: "No successful analytics.metric ingests recorded in the past 30 minutes."
+          runbook: https://onecare/runbooks/oncall#analytics-materialiser

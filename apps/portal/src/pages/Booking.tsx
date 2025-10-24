@@ -30,6 +30,8 @@ interface BookingErrorState {
   retryUntil?: number;
 }
 
+import { readPatientContext, PATIENT_CONTEXT_EVENT, PATIENT_CONTEXT_KEY } from '../lib/session';
+
 const BookingScreen = () => {
   const intl = useIntl();
   const { direction } = useLocale();
@@ -38,7 +40,6 @@ const BookingScreen = () => {
     putSlots,
     lastConfirmResult,
     setLastConfirmResult,
-    clear: clearFlow,
   } = useBookingFlow();
 
   const [slots, setSlots] = useState<BookingSlot[]>([]);
@@ -51,7 +52,7 @@ const BookingScreen = () => {
   const [selectionTimestamp, setSelectionTimestamp] = useState<number | null>(null);
   const [confirmationResult, setConfirmationResult] = useState<ConfirmBookingResult | null>(lastConfirmResult ?? null);
   const [confirmationError, setConfirmationError] = useState<BookingErrorState | null>(null);
-  const patientId = 'demo-patient-001';
+  const [patientId, setPatientId] = useState<string | null>(() => readPatientContext()?.id ?? null);
   const successStatusId = useId();
   const mainRef = useRef<HTMLElement | null>(null);
   const searchCorrelationRef = useRef<string | null>(null);
@@ -60,11 +61,47 @@ const BookingScreen = () => {
     mainRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    const refreshPatientContext = () => {
+      setPatientId(readPatientContext()?.id ?? null);
+    };
+
+    refreshPatientContext();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handlePatientEvent: EventListener = () => {
+      refreshPatientContext();
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === PATIENT_CONTEXT_KEY) {
+        refreshPatientContext();
+      }
+    };
+
+    window.addEventListener(PATIENT_CONTEXT_EVENT, handlePatientEvent);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener(PATIENT_CONTEXT_EVENT, handlePatientEvent);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
   const enhancedAccessConfig = useMemo(() => getEnhancedAccessConfig(), []);
   const fairnessConfig = useMemo(() => getFairnessConfig(), []);
 
   const fairnessNote = useMemo(() => {
-    const percentage = Math.round(fairnessConfig.telephoneMinFraction * 100);
+    const fraction = fairnessConfig.telephoneMinFraction;
+    if (fraction <= 0) {
+      return null;
+    }
+    const percentage = Math.round(fraction * 100);
+    if (percentage <= 0) {
+      return null;
+    }
     return intl.formatMessage({ id: 'booking.fairness.note' }, { percentage });
   }, [fairnessConfig, intl]);
 
@@ -176,6 +213,9 @@ const BookingScreen = () => {
   };
 
   const handleSelectSlot = (slot: BookingSlot) => {
+    if (!patientId) {
+      return;
+    }
     const timestamp = Date.now();
     setSelectedSlot(slot);
     setSelectionTimestamp(timestamp);
@@ -203,6 +243,17 @@ const BookingScreen = () => {
       retryUntil,
     });
   };
+
+  if (!patientId) {
+    return (
+      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="booking-missing-patient">
+        <section role="alert" aria-live="assertive">
+          <h1>{intl.formatMessage({ id: 'booking.missingPatient.title' })}</h1>
+          <p>{intl.formatMessage({ id: 'booking.missingPatient.body' })}</p>
+        </section>
+      </main>
+    );
+  }
 
   if (confirmationResult) {
     const calendarTitle = intl.formatMessage({ id: 'booking.confirm.success.calendarTitle' });

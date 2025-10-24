@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from .asr_chunking import ChunkTranscript, ChunkWindow, concat_transcripts, generate_windows
-from .diarize import DiarizationSegment, diarize
+from .diarize import DiarizationResult, DiarizationSegment, diarize
 
 DEFAULT_MODEL_NAME = "base"
 DEFAULT_REPO_ID = "openai/whisper-base"
@@ -76,6 +76,7 @@ def transcribe(
     *,
     model: WhisperModel | None = None,
     chunk_seconds: float = 30.0,
+    enable_diarization: bool = True,
 ) -> TranscriptionResult:
     """
     Generate a deterministic transcription stub for the given audio reference.
@@ -93,13 +94,18 @@ def transcribe(
     identifier = normalized_ref.get("id") or "audio"
 
     windows = _determine_windows(duration, chunk_seconds)
-    diarization = diarize(normalized_ref)
+    diarization: DiarizationResult | None = None
+    if enable_diarization:
+        diarization = diarize(normalized_ref)
 
     chunk_transcripts: list[ChunkTranscript] = []
     result_chunks: list[TranscriptionChunk] = []
     for window in windows:
-        speaker = _resolve_speaker_for_range(window.start, window.end, diarization.segments)
-        chunk_text = f"[{speaker}] {identifier} chunk={window.index + 1}"
+        speaker: Optional[str] = None
+        if diarization is not None:
+            speaker = _resolve_speaker_for_range(window.start, window.end, diarization.segments)
+        prefix = f"[{speaker}] " if speaker else ""
+        chunk_text = f"{prefix}{identifier} chunk={window.index + 1}"
         chunk_transcripts.append(ChunkTranscript(window=window, text=chunk_text))
         result_chunks.append(
             TranscriptionChunk(

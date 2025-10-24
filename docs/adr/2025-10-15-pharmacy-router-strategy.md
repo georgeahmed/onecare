@@ -14,7 +14,7 @@ Decision
 - Run all router ingestion through `PharmacyRouterConsumer`, enforcing topic allowlists, correlation propagation, DLQ routing, and concurrency throttling.
 
 Consequences
-- Schema changes must run through `npm run codegen` and extend contract tests (`packages/domain/test/contracts/core-events.test.ts`) for referral/outcome/notification payloads.
+- Schema changes must run through `npm run --workspaces=false codegen` and extend contract tests (`packages/domain/test/contracts/core-events.test.ts`) for referral/outcome/notification payloads.
 - Operators gain metrics covering CPCS calls, referral processing, and patient notifications for SLO monitoring.
 - Consent failures skip notifications without surfacing as errors; transient publish failures retry with jittered backoff before surfacing to the state machine.
 - Bus implementations must respect message IDs / idempotency headers; production deployments should wire `NatsBus`, while tests remain on `MemoryBus`.

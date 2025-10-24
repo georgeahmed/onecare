@@ -17,7 +17,7 @@ This document describes the current SLO catalogue across OneCare services. A con
 |-----------|-----------|-------------|-------------------------|
 | Search Latency | p95 ≤ **800 ms** for `POST /booking/search` | `histogram_quantile(0.95, sum(rate(booking_http_duration_ms_bucket{route="/booking/search"}[5m])) by (le))` | 5 % over 30 days. Burn-rate > 2.0 over 1 h ⇒ page booking on-call; consider bumping GP Connect timeout/backoff. |
 | Create Latency | p95 ≤ **1.2 s** for `POST /booking/appointments` | same histogram expression for route `/booking/appointments` | Same as above; if conflict retries dominate, review provider availability or throttle concurrency. |
-| Error Rate | ≤ **1 %** non-4xx responses | `rate(http_server_errors_total{service="booking"}[5m]) / rate(http_server_requests_total{service="booking"}[5m])` | 1 % budget / 30 days. >1% for 15 m triggers alert and auto-enables conflict refresh instrumentation. |
+| Error Rate | ≤ **1 %** non-4xx responses | `sum(rate(booking_http_requests_total{status=~"5.."}[5m])) / sum(rate(booking_http_requests_total[5m]))` | 1 % budget / 30 days. >1% for 15 m triggers alert and auto-enables conflict refresh instrumentation. |
 | DLQ Backlog | < **100 messages** sustained < **15 m** | `max_over_time(broker_dlq_pending{topic=~"booking.*"}[15m])` | If backlog ≥100 for >15 m page SRE + booking; drain and run post-mortem. |
 
 ## ICS Hub & Automation
@@ -41,7 +41,7 @@ This document describes the current SLO catalogue across OneCare services. A con
 | Dimension | Objective | Measurement | Error Budget & Response |
 |-----------|-----------|-------------|-------------------------|
 | Call Ingest Latency | p95 ≤ **10 s** (`POST /calls`) | `histogram_quantile(0.95, sum(rate(telephony_http_duration_ms_bucket{path="/calls"}[10m])) by (le))` | Monitor ASR + routing latency; breach drives IVR fallback discussion. |
-| Ingress Error Rate | ≤ **5 %** `server_error` or `fatal_error` responses | `sum(rate(telephony_http_requests_total{path="/calls",status=~"server_error|fatal_error"}[5m])) / sum(rate(telephony_http_requests_total{path="/calls"}[5m]))` | Sustained overage pages telephony on-call to inspect dependencies and idempotency. |
+| Ingress Error Rate | ≤ **5 %** `error` or `fatal_error` outcomes | `sum(rate(telephony_http_requests_total{path="/calls",outcome=~"error|fatal_error"}[5m])) / sum(rate(telephony_http_requests_total{path="/calls"}[5m]))` | Sustained overage pages telephony on-call to inspect dependencies and idempotency. |
 
 ## Scribe Service
 

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GpConnectHttpClient, type GpConnectTransportResponse, normalizeFingerprint } from '../src/gp-connect';
+import {
+  GpConnectHttpClient,
+  type GpConnectLogEntry,
+  type GpConnectTransportResponse,
+  normalizeFingerprint,
+} from '../src/gp-connect';
 
 describe('GpConnectHttpClient', () => {
   it('rejects absolute URLs to prevent SSRF', async () => {
@@ -164,5 +169,40 @@ describe('GpConnectHttpClient', () => {
 
     await client.request('/ping', { timeoutMs: 2500 });
     expect(transport).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 2500 }));
+  });
+
+  it('omits query parameters from log path entries', async () => {
+    const logs: GpConnectLogEntry[] = [];
+    const client = new GpConnectHttpClient({
+      baseUrl: 'https://gp-connect.example',
+      onLog: (entry) => logs.push(entry),
+      pinnedFingerprints: ['AA:BB'],
+      transport: async () => ({
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from('{}'),
+        fingerprint: normalizeFingerprint('AA BB'),
+      }),
+    });
+
+    await client.request('/search?patient=12345&nhs=6789');
+
+    const loggedPaths = logs
+      .filter((entry) => entry.event !== 'error')
+      .map((entry) => entry.path);
+    expect(loggedPaths.every((value) => value !== undefined && !value.includes('?'))).toBe(true);
+  });
+
+  it('rejects scheme-relative URLs that drop the configured port', async () => {
+    const transport = vi.fn();
+    const client = new GpConnectHttpClient({
+      baseUrl: 'https://gp-connect.example:8443',
+      transport,
+    });
+
+    await expect(client.request('//gp-connect.example/resource')).rejects.toMatchObject({
+      code: 'gp_connect_host_blocked',
+    });
+    expect(transport).not.toHaveBeenCalled();
   });
 });

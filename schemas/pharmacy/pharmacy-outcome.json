@@ -7,6 +7,7 @@
     "serviceRequestId": { "type": "string", "minLength": 1 },
     "organisationId": { "type": "string", "minLength": 1 },
     "status": {
+      "title": "PharmacyOutcomeStatus",
       "type": "string",
       "enum": ["accepted", "queued", "rejected"]
     },
@@ -18,6 +19,7 @@
     "severity": { "type": "string", "minLength": 1 },
     "slot": {
       "type": ["object", "null"],
+      "title": "PharmacyOutcomeSlot",
       "properties": {
         "start": { "type": "string", "format": "date-time" },
         "end": { "type": "string", "format": "date-time" }

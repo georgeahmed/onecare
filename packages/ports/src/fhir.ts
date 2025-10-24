@@ -152,13 +152,28 @@ function decodeAttachmentData(source: unknown): Uint8Array | null {
   if (typeof source === 'string') {
     const trimmed = source.trim();
     if (!trimmed) return null;
-    try {
-      return Buffer.from(trimmed, 'base64');
-    } catch {
-      return null;
+    const normalised = trimmed.replace(/\s+/g, '');
+    if (!isStrictBase64(normalised)) {
+      throw new Error('document_reference_attachment_invalid_base64');
     }
+    const decoded = Buffer.from(normalised, 'base64');
+    const withoutPadding = normalised.replace(/=+$/, '');
+    const roundTrip = decoded.toString('base64').replace(/=+$/, '');
+    if (roundTrip !== withoutPadding) {
+      throw new Error('document_reference_attachment_invalid_base64');
+    }
+    return decoded;
   }
   return null;
+}
+
+function isStrictBase64(value: string): boolean {
+  if (!value) return false;
+  const remainder = value.length % 4;
+  if (remainder === 1) {
+    return false;
+  }
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(value);
 }
 
 type BinaryResource = Record<string, unknown> & { id?: string; resourceType?: string };
@@ -402,8 +417,13 @@ export function withFhirValidation(repository: FhirRepository, options?: FhirVal
     createAppointment: async (appointment) =>
       createAppointmentResource(repository, appointment, { profile: pickProfile(profiles, 'Appointment') }),
 
-    createDocumentReference: async (document) =>
-      createDocumentReferenceResource(repository, document, { profile: pickProfile(profiles, 'DocumentReference') }),
+    createDocumentReference: async (document: unknown, documentOptions?: DocumentReferenceCreateOptions) => {
+      const profile = pickProfile(profiles, 'DocumentReference');
+      return createDocumentReferenceResource(repository, document, {
+        ...(documentOptions ?? {}),
+        ...(profile ? { profile } : {}),
+      });
+    },
 
     ...(typeof repository.updateTask === 'function'
       ? {

@@ -11,4 +11,4 @@ groups:
         annotations:
           summary: "Readiness probes flapping in namespace onecare*"
           description: "More than six readiness transitions detected across onecare namespaces in 30 minutes."
-          runbook: https://onecare/runbooks/oncall-protocol
+          runbook: https://onecare/runbooks/oncall#incident-intake

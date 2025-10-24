@@ -166,12 +166,17 @@ class GuardedMessageBus implements MessageBus {
     headers: Record<string, string> | undefined,
     incoming: boolean
   ): Record<string, string> | undefined {
-    if (!this.options.requireCorrelationHeader || correlationId === undefined) {
+    if (!this.options.requireCorrelationHeader) {
       return headers;
+    }
+    if (correlationId === undefined) {
+      const phase = incoming ? 'incoming' : 'publish';
+      throw new Error(`[MessageBusGuard] envelope_correlation_missing (${phase})`);
     }
     const trimmed = correlationId.trim();
     if (trimmed.length === 0) {
-      return headers;
+      const phase = incoming ? 'incoming' : 'publish';
+      throw new Error(`[MessageBusGuard] envelope_correlation_missing (${phase})`);
     }
     if (!headers) {
       if (incoming) {

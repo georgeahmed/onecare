@@ -31,8 +31,11 @@ const ar: Record<string, string> = {
   'booking.filter.from': 'من تاريخ',
   'booking.filter.to': 'إلى تاريخ',
   'booking.filter.apply': 'تطبيق الفلاتر',
+  'booking.missingPatient.title': 'نحتاج إلى بيانات المريض قبل الحجز',
+  'booking.missingPatient.body': 'أكمِل نموذج الطلب حتى نعرف لمن الموعد، ثم يمكنك اختيار الوقت المناسب.',
   'booking.modality.phone': 'استشارة هاتفية',
   'booking.modality.in_person': 'زيارة حضورية',
+  'booking.modality.unknown': 'طريقة أخرى',
   'booking.location.unassigned': 'سيتم تحديد المكان لاحقًا',
   'booking.slots.listLabel': 'قائمة المواعيد المتاحة',
   'booking.slots.empty': 'لا توجد مواعيد تطابق فلاترك حاليًا.',
@@ -139,7 +142,9 @@ const ar: Record<string, string> = {
   'app.fallback.reload': 'إعادة تحميل الصفحة',
   'app.fallback.intake': 'العودة إلى نموذج الطلب',
   'booking.confirm.selectionTimestamp': 'تم تسجيل الاختيار في {timestamp}',
-  'booking.confirm.offline.retry.cancelled': 'تم إلغاء إرسال التأكيد المعلّق.'
+  'booking.confirm.offline.retry.cancelled': 'تم إلغاء إرسال التأكيد المعلّق.',
+  'schemaForm.select.placeholder': 'اختر خيارًا',
+  'schemaForm.error.additionalProperty': 'أزل الحقول غير المدعومة.'
 };
 
 export default ar;

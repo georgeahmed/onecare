@@ -19,7 +19,7 @@
 
 ## Schema Evolution
 - Additive only; bump schema `$id` for breaking changes and record update in `docs/ADR/2025-10-12-feature-offline-store.md`.
-- Regenerate contracts: `npm run codegen`.
+- Regenerate contracts: `npm run --workspaces=false codegen`.
 - Ensure registry entry (`schemas/features/registry.json`) updated to reflect new partitioning or TTL semantics.
 
 ## Validation & Tests

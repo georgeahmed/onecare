@@ -9,6 +9,31 @@ const formatDateForCalendar = (iso: string): string => {
   ).padStart(2, '0')}${String(date.getUTCSeconds()).padStart(2, '0')}Z`;
 };
 
+const MAX_ICS_LINE_LENGTH = 75;
+
+const escapeIcsText = (value: string): string =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/\r?\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+
+const foldIcsLine = (line: string): string => {
+  if (line.length <= MAX_ICS_LINE_LENGTH) {
+    return line;
+  }
+  const segments: string[] = [];
+  let remaining = line;
+  while (remaining.length > MAX_ICS_LINE_LENGTH) {
+    segments.push(remaining.slice(0, MAX_ICS_LINE_LENGTH));
+    remaining = remaining.slice(MAX_ICS_LINE_LENGTH);
+  }
+  segments.push(remaining);
+  return segments.join('\r\n ');
+};
+
+const foldIcsLines = (lines: string[]): string[] => lines.map((line) => foldIcsLine(line));
+
 interface CalendarEventOptions {
   title: string;
   description?: string;
@@ -52,15 +77,15 @@ export const buildIcsDataUri = (
     `DTSTAMP:${dtStamp}`,
     `DTSTART:${start}`,
     `DTEND:${end}`,
-    `SUMMARY:${options.title}`
+    `SUMMARY:${escapeIcsText(options.title)}`
   ];
   if (options.description) {
-    lines.push(`DESCRIPTION:${options.description.replace(/\n/g, '\\n')}`);
+    lines.push(`DESCRIPTION:${escapeIcsText(options.description)}`);
   }
   if (options.location) {
-    lines.push(`LOCATION:${options.location}`);
+    lines.push(`LOCATION:${escapeIcsText(options.location)}`);
   }
   lines.push('END:VEVENT', 'END:VCALENDAR');
-  const payload = lines.join('\r\n');
+  const payload = `${foldIcsLines(lines).join('\r\n')}\r\n`;
   return `data:text/calendar;charset=utf-8,${encodeURIComponent(payload)}`;
 };

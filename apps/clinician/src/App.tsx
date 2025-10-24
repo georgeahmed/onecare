@@ -32,7 +32,9 @@ const AppShell = () => {
     <div className="app-shell">
       <div className="skip-links" aria-label={intl.formatMessage({ id: 'app.skip.links' })}>
         <a className="skip-link" href="#main-content">{intl.formatMessage({ id: 'app.skip.main' })}</a>
-        <a className="skip-link" href="#primary-navigation">{intl.formatMessage({ id: 'app.skip.nav' })}</a>
+        {status === 'authenticated' ? (
+          <a className="skip-link" href="#primary-navigation">{intl.formatMessage({ id: 'app.skip.nav' })}</a>
+        ) : null}
       </div>
       <header>
         <div className="app-header-bar">
@@ -53,7 +55,7 @@ const AppShell = () => {
       </header>
       <main id="main-content" tabIndex={-1}>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Route path="/login" element={status === 'authenticated' ? <Navigate to="/queue" replace /> : <LoginPage />} />
           <Route element={<ProtectedRoute />}> 
             <Route path="/queue" element={<QueuePage />} />
             <Route path="/case/:id" element={<CasePage />} />

@@ -35,6 +35,7 @@ import {
   type IntakeWizardStepId
 } from '../application/wizard/intakeWizard';
 import { ensureHttpsUrl, sanitizeMultilineText, sanitizeText } from '../lib/security';
+import { persistPatientContext, clearPatientContext } from '../lib/session';
 // Import JSON Schema directly (tsconfig resolves JSON modules)
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
@@ -369,6 +370,10 @@ const IntakeForm = () => {
     () => (interpreterPreferences.preferredLanguages ?? []).join('|'),
     [interpreterPreferences.preferredLanguages]
   );
+  const sanitizedPatientId = useMemo(
+    () => sanitizeText(formData.patient.id ?? '', 120),
+    [formData.patient.id]
+  );
   const handleInterpreterPreferencesChange = useCallback(
     (next: InterpreterPreferencesValue) => {
       const normalizedLanguages = Array.from(
@@ -564,6 +569,13 @@ const IntakeForm = () => {
   }, [formErrors]);
 
   useEffect(() => {
+    if (!sanitizedPatientId) {
+      return;
+    }
+    persistPatientContext({ id: sanitizedPatientId });
+  }, [sanitizedPatientId]);
+
+  useEffect(() => {
     if (!allowInterpreterPersistence) {
       setInterpreterPreferences((prev) =>
         prev.rememberSelection
@@ -709,6 +721,7 @@ const IntakeForm = () => {
     setAutosaveStatus('idle');
     setLastSavedAt(null);
     skipNextAutosaveRef.current = true;
+    clearPatientContext();
   };
 
   const mapIssuesToErrors = useCallback(
@@ -739,6 +752,9 @@ const IntakeForm = () => {
           case 'min-items':
             messageId = 'schemaForm.error.minItems';
             break;
+          case 'max-items':
+            messageId = 'schemaForm.error.maxItems';
+            break;
           case 'minimum':
             messageId = 'schemaForm.error.minValue';
             break;
@@ -747,6 +763,18 @@ const IntakeForm = () => {
             break;
           case 'multiple-of':
             messageId = 'schemaForm.error.multipleOf';
+            break;
+          case 'min-length':
+            messageId = 'schemaForm.error.minLength';
+            break;
+          case 'max-length':
+            messageId = 'schemaForm.error.maxLength';
+            break;
+          case 'pattern':
+            messageId = 'schemaForm.error.pattern';
+            break;
+          case 'additional-property':
+            messageId = 'schemaForm.error.additionalProperty';
             break;
           default:
             messageId = 'schemaForm.error.required';
@@ -1018,6 +1046,11 @@ const IntakeForm = () => {
           defaultMessage: formData.patient.locale
         })
       : emptyValue;
+    const patientDobLabel = formData.patient.dob
+      ? intl.formatDate(`${formData.patient.dob}T00:00:00Z`, {
+          timeZone: 'UTC'
+        })
+      : emptyValue;
     const interpreterLanguagesList = (interpreterPreferences.preferredLanguages ?? []).map((lang) =>
       intl.formatMessage({ id: `locale.name.${lang}`, defaultMessage: lang })
     );
@@ -1079,9 +1112,7 @@ const IntakeForm = () => {
             <div>
               <dt>{intl.formatMessage({ id: 'intake.patient.dob.label' })}</dt>
               <dd>
-                {formData.patient.dob
-                  ? intl.formatDate(new Date(formData.patient.dob))
-                  : emptyValue}
+                {patientDobLabel}
               </dd>
             </div>
             <div>

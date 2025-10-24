@@ -15,7 +15,7 @@ Accurate, privacy-safe fixtures keep contract and E2E coverage deterministic. Fo
   2. Run `./qa/env/seed.sh` to sync `qa/env/mock-data/*` and verify mocks respond with the new data.
   3. Update `qa/fixtures/CHANGELOG.md` with the date, task, and key changes.
   4. Execute `npm run test:e2e` and `node scripts/ci/run-vitest-flake-check.mjs` locally to confirm stability.
-  5. For schema changes, rerun `npm run codegen` and adjust generators if new fields appear.
+  5. For schema changes, rerun `npm run --workspaces=false codegen` and adjust generators if new fields appear.
 
 ## Sanitization Checklist
 - No real names, MRNs, addresses, phone numbers, or free-text copied from production.

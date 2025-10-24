@@ -13,13 +13,14 @@ const resolveEnvValue = (key: string, fallback: string): string => {
 export const DEFAULT_BOOKING_SERVICE_TYPE = resolveEnvValue('VITE_BOOKING_SERVICE_TYPE', 'gp-consult');
 export const DEFAULT_BOOKING_LOCATION = resolveEnvValue('VITE_BOOKING_LOCATION', 'demo-clinic');
 
-export type BookingModality = 'phone' | 'in_person';
+export type BookingModality = 'phone' | 'in_person' | 'unknown';
 
 export interface BookingSlot {
   id: string;
   start: string; // ISO string
   end: string; // ISO string
   modality: BookingModality;
+  originalModality?: string;
   serviceType?: string;
   location?: string;
 }

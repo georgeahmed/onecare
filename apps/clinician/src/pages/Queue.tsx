@@ -12,11 +12,16 @@ type StatusFilter = 'ALL' | TaskStatus;
 type OwnershipFilter = 'any' | 'mine' | 'unassigned';
 type TimeFilter = 'any' | 'under15' | 'under60' | 'over60';
 
-const timeThresholdMinutes: Record<TimeFilter, { min?: number; max?: number }> = {
+interface TimeThreshold {
+  minInclusive?: number;
+  maxExclusive?: number;
+}
+
+const timeThresholdMinutes: Record<TimeFilter, TimeThreshold> = {
   any: {},
-  under15: { max: 15 },
-  under60: { max: 60 },
-  over60: { min: 60 }
+  under15: { maxExclusive: 15 },
+  under60: { minInclusive: 15, maxExclusive: 60 },
+  over60: { minInclusive: 60 }
 };
 
 const QueuePage = () => {
@@ -69,7 +74,7 @@ const QueuePage = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeClinicId, priority, status]);
+  }, [activeClinicId, priority, session?.userId, status]);
 
   const filteredItems = useMemo(() => {
     const currentUserId = session?.userId;
@@ -84,10 +89,10 @@ const QueuePage = () => {
         return true;
       })
       .filter((item) => {
-        const minutes = Math.floor(item.waitMs / 60000);
-        const { min, max } = timeThresholdMinutes[timeRange];
-        if (typeof min === 'number' && minutes < min) return false;
-        if (typeof max === 'number' && minutes > max) return false;
+        const minutes = item.waitMs / 60000;
+        const { minInclusive, maxExclusive } = timeThresholdMinutes[timeRange];
+        if (typeof minInclusive === 'number' && minutes < minInclusive) return false;
+        if (typeof maxExclusive === 'number' && minutes >= maxExclusive) return false;
         return true;
       })
       .sort((a, b) => b.waitMs - a.waitMs);
@@ -344,7 +349,7 @@ const QueuePage = () => {
                   <td>{statusLabel(item.status)}</td>
                   <td className="queue-actions">
                     <Link
-                      to={`/case/${item.id}`}
+                      to={`/case/${encodeURIComponent(item.id)}`}
                       className="ui-button"
                       aria-label={intl.formatMessage({ id: 'queue.action.openWithId' }, { id: item.id })}
                     >

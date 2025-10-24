@@ -13,6 +13,8 @@ const root = process.cwd();
 const schemaDir = path.join(root, 'schemas');
 
 const mappings = [
+  { in: 'billing/claim.json', out: 'packages/events/src/contracts/billing-claim.ts' },
+  { in: 'billing/response.json', out: 'packages/events/src/contracts/billing-response.ts' },
   { in: 'common/event-envelope.json', out: 'packages/events/src/contracts/envelope.ts' },
   { in: 'common/error-envelope.json', out: 'packages/events/src/contracts/error-envelope.ts' },
   { in: 'common/dlq-event.json', out: 'packages/events/src/contracts/dlq-event.ts' },
@@ -21,6 +23,7 @@ const mappings = [
   { in: 'triage/triage-decision.json', out: 'packages/events/src/contracts/triage-decision.ts' },
   { in: 'booking/booking-search-request.json', out: 'packages/events/src/contracts/booking.ts' },
   { in: 'booking/booking-search-response.json', out: 'packages/events/src/contracts/booking-search-response.ts' },
+  { in: 'booking/assisted-outcome.json', out: 'packages/events/src/contracts/booking-assisted-outcome.ts' },
   { in: 'pharmacy/pharmacy-referral.json', out: 'packages/events/src/contracts/pharmacy.ts' },
   { in: 'pharmacy/pharmacy-notification.json', out: 'packages/events/src/contracts/pharmacy-notification.ts' },
   { in: 'pharmacy/pharmacy-outcome.json', out: 'packages/events/src/contracts/pharmacy-outcome.ts' },
@@ -38,6 +41,17 @@ const mappings = [
   { in: 'analytics/metric.json', out: 'packages/events/src/contracts/metric.ts' },
   { in: 'ics/referral-request.json', out: 'packages/events/src/contracts/ics-referral-request.ts' },
   { in: 'ics/referral-ack.json', out: 'packages/events/src/contracts/ics-referral-ack.ts' },
+  { in: 'messaging/send-document-request.json', out: 'packages/events/src/contracts/send-document-request.ts' },
+  { in: 'messaging/send-document-requested.json', out: 'packages/events/src/contracts/send-document-requested.ts' },
+  { in: 'messaging/send-document-sent.json', out: 'packages/events/src/contracts/send-document-sent.ts' },
+  { in: 'messaging/send-document-ack.json', out: 'packages/events/src/contracts/send-document-ack.ts' },
+  { in: 'messaging/send-document-nack.json', out: 'packages/events/src/contracts/send-document-nack.ts' },
+  { in: 'messaging/send-document-retry.json', out: 'packages/events/src/contracts/send-document-retry.ts' },
+  { in: 'fhir/patient.json', out: 'packages/events/src/contracts/fhir-patient.ts' },
+  { in: 'fhir/communication.json', out: 'packages/events/src/contracts/fhir-communication.ts' },
+  { in: 'fhir/document-reference.json', out: 'packages/events/src/contracts/fhir-document-reference.ts' },
+  { in: 'fhir/bundle-entry-resource.json', out: 'packages/events/src/contracts/fhir-bundle-entry-resource.ts' },
+  { in: 'fhir/bundle-transaction.json', out: 'packages/events/src/contracts/fhir-bundle-transaction.ts' },
   { in: 'config/orchestrator.json', out: 'packages/config/src/contracts/orchestrator.ts' },
   { in: 'portal/notify.json', out: 'packages/events/src/contracts/portal.ts' },
   { in: 'clinician/task-summary.json', out: 'packages/events/src/contracts/clinician-task-summary.ts' },
@@ -47,6 +61,129 @@ const mappings = [
   { in: 'clinician/schedule-callback.json', out: 'packages/events/src/contracts/clinician-schedule-callback.ts' },
   { in: 'clinician/book-slot.json', out: 'packages/events/src/contracts/clinician-book-slot.ts' },
 ];
+
+const schemaSkipList = new Set(['features/registry.json']);
+
+function isExecutable(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    const stat = fs.statSync(filePath);
+    return stat.isFile();
+  } catch (err) {
+    return false;
+  }
+}
+
+function findExecutable(cmd) {
+  if (!cmd) {
+    return null;
+  }
+  if (path.isAbsolute(cmd) && isExecutable(cmd)) {
+    return cmd;
+  }
+
+  const pathEnv = process.env.PATH || '';
+  const paths = pathEnv.split(path.delimiter).filter(Boolean);
+  if (paths.length === 0) {
+    return null;
+  }
+
+  const isWin = process.platform === 'win32';
+  const extensions = isWin
+    ? (process.env.PATHEXT ? process.env.PATHEXT.split(';') : ['.EXE', '.CMD', '.BAT', '.COM'])
+    : [''];
+
+  const candidates = new Set();
+  candidates.add(cmd);
+  if (isWin) {
+    const lowerCmd = cmd.toLowerCase();
+    for (const ext of extensions) {
+      if (!ext) continue;
+      if (lowerCmd.endsWith(ext.toLowerCase())) {
+        candidates.add(cmd);
+      } else {
+        candidates.add(`${cmd}${ext}`);
+      }
+    }
+  }
+
+  for (const dir of paths) {
+    for (const candidate of candidates) {
+      const fullPath = path.join(dir, candidate);
+      if (isExecutable(fullPath)) {
+        return fullPath;
+      }
+    }
+  }
+  return null;
+}
+
+function pythonCanImport(moduleName, pythonBin) {
+  const python = pythonBin || 'python3';
+  const probe = spawnSync(
+    python,
+    ['-c', `import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("${moduleName}") else 1)`],
+    { stdio: 'ignore' }
+  );
+  return probe.status === 0;
+}
+
+function resolveDatamodelCodegenInvoker() {
+  const envCmd = process.env.DATAMODEL_CODEGEN_BIN;
+  if (envCmd) {
+    return { command: envCmd, args: [] };
+  }
+
+  const cliPath = findExecutable('datamodel-codegen');
+  if (cliPath) {
+    return { command: cliPath, args: [] };
+  }
+
+  // Attempt to inspect pipx venvs for datamodel-code-generator
+  const pipxPath = findExecutable('pipx');
+  if (pipxPath) {
+    try {
+      const pipxList = spawnSync(pipxPath, ['list', '--json'], { encoding: 'utf8', stdio: 'pipe' });
+      if (pipxList.status === 0 && pipxList.stdout) {
+        const data = JSON.parse(pipxList.stdout);
+        const venvs = data && data.venvs ? data.venvs : {};
+        const entry = venvs['datamodel-code-generator'];
+        if (entry && entry.metadata && entry.metadata.source_interpreter && entry.metadata.source_interpreter.__Path__) {
+          const interpreter = entry.metadata.source_interpreter.__Path__;
+          if (pythonCanImport('datamodel_code_generator', interpreter)) {
+            return { command: interpreter, args: ['-m', 'datamodel_code_generator'] };
+          }
+        }
+        if (entry && entry.metadata && entry.metadata.main_package && Array.isArray(entry.metadata.main_package.app_paths)) {
+          for (const item of entry.metadata.main_package.app_paths) {
+            if (item && item.__Path__ && isExecutable(item.__Path__)) {
+              return { command: item.__Path__, args: [] };
+            }
+          }
+        }
+      }
+    } catch (err) {
+      // ignore pipx inspection failures
+    }
+  }
+
+  const pythonCandidates = [
+    process.env.DATAMODEL_CODEGEN_PYTHON,
+    process.env.PYTHON_CODEGEN,
+    process.env.PYTHON,
+    'python3',
+  ].filter(Boolean);
+
+  for (const python of pythonCandidates) {
+    if (pythonCanImport('datamodel_code_generator', python)) {
+      return { command: python, args: ['-m', 'datamodel_code_generator'] };
+    }
+  }
+
+  throw new Error(
+    'datamodel-code-generator is required for Python model generation. Install it via `python3 -m pip install --user datamodel-code-generator`, or ensure the `datamodel-codegen` CLI is on PATH (e.g., `pipx install datamodel-code-generator && pipx ensurepath`).'
+  );
+}
 
 function ensureDir(p) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -85,7 +222,11 @@ function generateTS() {
     ensureDir(output);
     const banner = '// AUTO-GENERATED from schemas. DO NOT EDIT.\n';
     const args = ['-i', input, '-o', output, '--bannerComment', banner];
-    const res = spawnSync(json2tsBin, args, { stdio: 'inherit', shell: process.platform === 'win32' });
+    const res = spawnSync(json2tsBin, args, {
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+      cwd: path.dirname(input),
+    });
     if (res.status !== 0) {
       console.error(`Failed generating TS from ${input}`);
       process.exit(res.status || 1);
@@ -103,13 +244,20 @@ function generatePy() {
     console.log('RUN_PY not set; skipping Python model generation.');
     return;
   }
+  let invoker;
+  try {
+    invoker = resolveDatamodelCodegenInvoker();
+  } catch (err) {
+    console.error(String(err));
+    process.exit(1);
+  }
   const out = path.join(root, 'services-py/common/contracts/models.py');
   const schemaFiles = collectSchemaFiles(schemaDir);
   if (schemaFiles.length === 0) {
     console.warn('No JSON Schemas found for Python generation.');
     return;
   }
-  const combined = buildPythonModels(schemaFiles);
+  const combined = buildPythonModels(schemaFiles, invoker);
   ensureDir(out);
   fs.writeFileSync(out, combined, 'utf8');
 }
@@ -123,13 +271,15 @@ function collectSchemaFiles(dir) {
     if (entry.isDirectory()) {
       files.push(...collectSchemaFiles(fullPath));
     } else if (entry.isFile() && entry.name.endsWith('.json')) {
+      const relative = path.relative(schemaDir, fullPath);
+      if (schemaSkipList.has(relative)) continue;
       files.push(fullPath);
     }
   }
   return files;
 }
 
-function buildPythonModels(schemaFiles) {
+function buildPythonModels(schemaFiles, invoker) {
   const fromImports = new Map();
   const plainImports = new Set();
   const sections = [];
@@ -140,15 +290,16 @@ function buildPythonModels(schemaFiles) {
     const tmpFile = path.join(tmpDir, 'model.py');
     ensureDir(tmpFile);
     const res = spawnSync(
-      'python3',
+      invoker.command,
       [
-        '-m', 'datamodel_code_generator',
+        ...invoker.args,
         '--input', filePath,
         '--input-file-type', 'jsonschema',
         '--output', tmpFile,
         '--target-python-version', '3.11',
         '--use-standard-collections',
         '--collapse-root-models',
+        '--use-title-as-name',
       ],
       { stdio: 'inherit' }
     );
@@ -160,7 +311,10 @@ function buildPythonModels(schemaFiles) {
     const raw = fs.readFileSync(tmpFile, 'utf8');
     cleanupDir(tmpDir);
     const relativeLabel = path.relative(schemaDir, filePath);
-    const sectionLines = extractPythonSection(raw, fromImports, plainImports);
+    const sectionLines = postProcessSection(
+      relativeLabel,
+      extractPythonSection(raw, fromImports, plainImports)
+    );
     if (sectionLines.length > 0) {
       sections.push(`# --- ${relativeLabel} ---`, ...sectionLines, '');
     }
@@ -183,7 +337,10 @@ function buildPythonModels(schemaFiles) {
 
   const combinedImports = importLines.length > 0 ? [...importLines, ''] : [];
   const body = sections.length > 0 ? sections : [];
-  return [...header, ...combinedImports, ...body].join('\n').replace(/\n+$/u, '\n');
+  const combined = [...header, ...combinedImports, ...body]
+    .join('\n')
+    .replace(/\n+$/u, '\n');
+  return dedupePythonOutput(combined);
 }
 
 function extractPythonSection(content, fromImports, plainImports) {
@@ -219,6 +376,83 @@ function extractPythonSection(content, fromImports, plainImports) {
     section.pop();
   }
   return section;
+}
+
+function postProcessSection(relativeLabel, sectionLines) {
+  if (sectionLines.length === 0) {
+    return sectionLines;
+  }
+  if (relativeLabel === 'fhir/bundle-entry-resource.json') {
+    const replacementMap = {
+      BundleEntryPatient: 'Patient',
+      BundleEntryCommunication: 'Communication',
+      BundleEntryDocumentReference: 'DocumentReference',
+    };
+    let currentClass = null;
+    return sectionLines.map((line) => {
+      const classMatch = line.match(/^class\s+(\w+)/);
+      if (classMatch) {
+        currentClass = classMatch[1];
+        return line;
+      }
+      if (
+        currentClass &&
+        line.includes("-datamodel-code-generator-#-allOf-#-special-#") &&
+        replacementMap[currentClass]
+      ) {
+        return line.replace(
+          /Literal\['[^']+'\]/,
+          `Literal['${replacementMap[currentClass]}']`
+        );
+      }
+      return line;
+    });
+  }
+
+  if (relativeLabel === 'common/event-envelope.json') {
+    sectionLines = sectionLines.map((line) => {
+      const match = /^(\s*)payload:\s*Optional\[Union\[(.+)\]\]$/u.exec(line);
+      if (match) {
+        return `${match[1]}payload: Union[${match[2]}, None]`;
+      }
+      return line;
+    });
+  }
+
+  return sectionLines;
+}
+
+function dedupePythonOutput(content) {
+  const lines = content.split('\n');
+  const result = [];
+  const seen = new Set();
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const classMatch = /^class\s+(\w+)/.exec(line);
+    if (classMatch) {
+      const name = classMatch[1];
+      let j = i + 1;
+      while (
+        j < lines.length &&
+        !/^class\s+\w+/.test(lines[j]) &&
+        !/^# --- /.test(lines[j])
+      ) {
+        j += 1;
+      }
+      if (!seen.has(name)) {
+        seen.add(name);
+        result.push(...lines.slice(i, j));
+      }
+      i = j;
+      continue;
+    }
+    result.push(line);
+    i += 1;
+  }
+
+  return result.join('\n').replace(/\n+$/u, '\n');
 }
 
 function cleanupDir(dir) {

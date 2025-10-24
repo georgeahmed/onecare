@@ -1,104 +1,94 @@
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: slo-booking
-  labels:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/name: slo-booking
-spec:
-  groups:
-    - name: booking-latency
-      rules:
-        - alert: BookingSearchLatencyFast
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum(rate(booking_http_duration_ms_bucket{route="/booking/search"}[5m])) by (le)
-            ) > 800
-          for: 5m
-          labels:
-            severity: critical
-            slo: booking-latency
-            team: booking
-          annotations:
-            summary: "Booking search latency above target"
-            description: "Booking search p95 exceeded 800ms for more than 5 minutes."
-            runbook: https://onecare/runbooks/oncall#booking-latency
-        - alert: BookingCreateLatencyFast
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum(rate(booking_http_duration_ms_bucket{route="/booking/appointments"}[5m])) by (le)
-            ) > 1200
-          for: 5m
-          labels:
-            severity: critical
-            slo: booking-latency
-            team: booking
-          annotations:
-            summary: "Booking create latency above target"
-            description: "Appointment creation p95 exceeded 1.2s for more than 5 minutes."
-            runbook: https://onecare/runbooks/oncall#booking-latency
-        - alert: BookingLatencySlow
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum(rate(booking_http_duration_ms_bucket{route=~"/booking/(search|appointments)"}[30m])) by (le)
-            ) > 1200
-          for: 30m
-          labels:
-            severity: warning
-            slo: booking-latency
-            team: booking
-          annotations:
-            summary: "Booking latency trending high"
-            description: "Booking p95 latency stayed above target for 30m."
-            runbook: https://onecare/runbooks/oncall#booking-latency
-    - name: booking-errors
-      rules:
-        - alert: BookingErrorRateFast
-          expr: |
-            (
-              rate(http_server_errors_total{service="booking"}[5m])
-              /
-              rate(http_server_requests_total{service="booking"}[5m])
-            ) > 0.02
-          for: 10m
-          labels:
-            severity: critical
-            slo: booking-error
-            team: booking
-          annotations:
-            summary: "Booking error rate above threshold"
-            description: "Booking error rate exceeded 2% (twice the 1% budget) for 10 minutes."
-            runbook: https://onecare/runbooks/oncall#error-budget-response
-        - alert: BookingErrorRateSlow
-          expr: |
-            (
-              rate(http_server_errors_total{service="booking"}[30m])
-              /
-              rate(http_server_requests_total{service="booking"}[30m])
-            ) > 0.01
-          for: 1h
-          labels:
-            severity: warning
-            slo: booking-error
-            team: booking
-          annotations:
-            summary: "Booking error rate approaching budget"
-            description: "Booking error rate exceeded 1% over the past hour."
-            runbook: https://onecare/runbooks/oncall#error-budget-response
-    - name: booking-dlq
-      rules:
-        - alert: BookingDlqGrowthFast
-          expr: |
-            max_over_time(broker_dlq_pending{topic=~"booking.*"}[15m]) >= 100
-          for: 15m
-          labels:
-            severity: critical
-            slo: booking-dlq
-            team: booking
-          annotations:
-            summary: "Booking DLQ backlog sustained above 100"
-            description: "Booking DLQ backlog exceeded 100 messages for 15 minutes."
-            runbook: https://onecare/runbooks/oncall#dlq-remediation
+groups:
+  - name: booking-latency
+    rules:
+      - alert: BookingSearchLatencyFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(booking_http_duration_ms_bucket{route="/booking/search"}[5m])) by (le)
+          ) > 800
+        for: 5m
+        labels:
+          severity: critical
+          slo: booking-latency
+          team: booking
+        annotations:
+          summary: "Booking search latency above target"
+          description: "Booking search p95 exceeded 800ms for more than 5 minutes."
+          runbook: https://onecare/runbooks/oncall#booking-latency
+      - alert: BookingCreateLatencyFast
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(booking_http_duration_ms_bucket{route="/booking/appointments"}[5m])) by (le)
+          ) > 1200
+        for: 5m
+        labels:
+          severity: critical
+          slo: booking-latency
+          team: booking
+        annotations:
+          summary: "Booking create latency above target"
+          description: "Appointment creation p95 exceeded 1.2s for more than 5 minutes."
+          runbook: https://onecare/runbooks/oncall#booking-latency
+      - alert: BookingLatencySlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(booking_http_duration_ms_bucket{route=~"/booking/(search|appointments)"}[30m])) by (le)
+          ) > 1200
+        for: 30m
+        labels:
+          severity: warning
+          slo: booking-latency
+          team: booking
+        annotations:
+          summary: "Booking latency trending high"
+          description: "Booking p95 latency stayed above target for 30m."
+          runbook: https://onecare/runbooks/oncall#booking-latency
+  - name: booking-errors
+    rules:
+      - alert: BookingErrorRateFast
+        expr: |
+          (
+            sum(rate(booking_http_requests_total{status=~"5.."}[5m])) /
+            clamp_min(sum(rate(booking_http_requests_total[5m])), 1)
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          slo: booking-error
+          team: booking
+        annotations:
+          summary: "Booking error rate above threshold"
+          description: "Booking error rate exceeded 2% (twice the 1% budget) for 10 minutes."
+          runbook: https://onecare/runbooks/oncall#error-budget-response
+      - alert: BookingErrorRateSlow
+        expr: |
+          (
+            sum(rate(booking_http_requests_total{status=~"5.."}[30m])) /
+            clamp_min(sum(rate(booking_http_requests_total[30m])), 1)
+          ) > 0.01
+        for: 1h
+        labels:
+          severity: warning
+          slo: booking-error
+          team: booking
+        annotations:
+          summary: "Booking error rate approaching budget"
+          description: "Booking error rate exceeded 1% over the past hour."
+          runbook: https://onecare/runbooks/oncall#error-budget-response
+  - name: booking-dlq
+    rules:
+      - alert: BookingDlqGrowthFast
+        expr: |
+          max_over_time(broker_dlq_pending{topic=~"booking.*"}[15m]) >= 100
+        for: 15m
+        labels:
+          severity: critical
+          slo: booking-dlq
+          team: booking
+        annotations:
+          summary: "Booking DLQ backlog sustained above 100"
+          description: "Booking DLQ backlog exceeded 100 messages for 15 minutes."
+          runbook: https://onecare/runbooks/oncall#dlq-remediation

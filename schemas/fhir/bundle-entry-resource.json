@@ -7,8 +7,26 @@
     "propertyName": "resourceType"
   },
   "oneOf": [
-    { "$ref": "patient.json" },
-    { "$ref": "communication.json" },
-    { "$ref": "document-reference.json" }
+    {
+      "title": "BundleEntryPatient",
+      "allOf": [
+        { "$ref": "./patient.json" },
+        { "properties": { "resourceType": { "const": "Patient" } } }
+      ]
+    },
+    {
+      "title": "BundleEntryCommunication",
+      "allOf": [
+        { "$ref": "./communication.json" },
+        { "properties": { "resourceType": { "const": "Communication" } } }
+      ]
+    },
+    {
+      "title": "BundleEntryDocumentReference",
+      "allOf": [
+        { "$ref": "./document-reference.json" },
+        { "properties": { "resourceType": { "const": "DocumentReference" } } }
+      ]
+    }
   ]
 }

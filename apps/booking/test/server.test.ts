@@ -5,6 +5,7 @@ import { createBookingServer, type BookingServerOptions, type BookingHttpServer 
 import type { GpConnectClient, AppointmentRef, Slot, AppointmentRequest } from '../src/adapters/gpconnect.client';
 import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
 import { MemoryBus } from '@onecare/bus';
+import { Topics, type BookingAssistedOutcome } from '@onecare/events';
 
 describe('booking HTTP server', () => {
   let server: http.Server;
@@ -66,6 +67,90 @@ describe('booking HTTP server', () => {
     expect(duplicateResponse.status).toBe(409);
     const duplicateBody = await duplicateResponse.json();
     expect(duplicateBody.error.code).toBe('conflict');
+  });
+
+  it('forbids GP Connect booking when feature flag is disabled', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createBookingServer(
+      buildOptions({
+        featureFlags: { gpConnectBooking: false },
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const response = await fetchJson(`${baseUrl}/booking/appointments`, {
+      slot: {
+        id: 'slot-1',
+        start: '2025-10-14T09:15:00Z',
+        end: '2025-10-14T09:30:00Z',
+        organisationId: 'org-1',
+        serviceType: 'GP',
+      },
+      patientId: 'patient-123',
+      narrative: 'routine checkup',
+    });
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error.code).toBe('forbidden');
+  });
+
+  it('records assisted booking outcomes and publishes events', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const bus = new MemoryBus();
+    const events: BookingAssistedOutcome[] = [];
+    await bus.subscribe(Topics.booking.assistedCompleted, async ({ payload }) => {
+      events.push(payload as BookingAssistedOutcome);
+    });
+    const queueDeliveries: Array<{ queue: string; message: unknown }> = [];
+    const queueNotifier: QueueNotifier = {
+      notify: async (queue, message) => {
+        queueDeliveries.push({ queue, message });
+      },
+    };
+    server = createBookingServer(
+      buildOptions({
+        bus,
+        queueNotifier,
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const assistedRequest = {
+      taskId: 'Task/1',
+      patientId: 'Patient/123',
+      outcome: 'booked',
+      slot: {
+        start: '2025-10-14T10:00:00Z',
+        end: '2025-10-14T10:15:00Z',
+        location: 'org-1',
+        serviceType: 'GP',
+      },
+      recordedAt: '2025-10-14T09:45:00Z',
+      recordedBy: 'clinician-1',
+      notes: 'Manual booking confirmed',
+    };
+
+    const response = await fetchJson(`${baseUrl}/booking/assisted`, assistedRequest);
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: 'recorded',
+      outcome: 'booked',
+      taskId: 'Task/1',
+    });
+    expect(body.appointmentId).toBe('appt-unknown');
+
+    expect(queueDeliveries.length).toBe(1);
+    expect(events.length).toBe(1);
+    expect(events[0]).toMatchObject({
+      taskId: 'Task/1',
+      patientId: 'Patient/123',
+      outcome: 'booked',
+    });
   });
 
   it('returns 503 on /readyz when readiness fails', async () => {

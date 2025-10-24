@@ -59,3 +59,24 @@ def test_analyze_invalid_payload_returns_error_envelope():
     assert body["error"]["correlationId"] == correlation_id
     assert body["error"]["message"] == "Invalid request payload"
     assert isinstance(body["error"].get("details", {}).get("errors"), list)
+
+
+def test_analyze_non_english_falls_back_to_rules():
+    client = TestClient(app)
+    response = client.post(
+        "/analyze",
+        headers=safety_headers(),
+        json={
+            "practiceId": "p1",
+            "patient": {"id": "x"},
+            "narrative": "Paciente presenta dolor torácico desde anoche.",
+            "channel": "web",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "SAFE_TO_CONTINUE" or body["outcome"] == "DIVERTED"
+    # When rules fallback triggers without matches we expect fallback:safe
+    if body["outcome"] == "SAFE_TO_CONTINUE":
+        assert body.get("reason") == "fallback:safe"

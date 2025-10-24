@@ -6,7 +6,7 @@ Scope
 
 Contracts & Validation
 - [ ] Schemas up to date (envelopes, ingest, safety, audit, DLQ, config). Codegen run and committed.
-  - Commands: `npm run codegen`, `npm run codegen:check`
+  - Commands: `npm run --workspaces=false codegen`, `npm run codegen:check`
 - [ ] Generated types used at edges; HTTP body validated against `schemas/ingest/portal-submission.json`.
 - [ ] Error taxonomy aligned to `schemas/common/error-envelope.json`; responses validate.
 - [ ] EventEnvelope type usage reconciled (generic vs non-generic) with a consistent approach across apps.

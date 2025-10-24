@@ -21,7 +21,9 @@ const testGateway: QueueGateway = {
   unassign: async () => ({ ...detail, status: 'NEW', assignee: undefined }),
   resolve: async () => ({ ...detail, status: 'DONE', audit: [{ when: new Date().toISOString(), who: 'me', what: 'resolve' }] }),
   scheduleCallback: async () => ({ ...detail, status: 'IN_PROGRESS' }),
-  bookSlot: async () => ({ ...detail, status: 'DONE' })
+  bookSlot: async () => ({ ...detail, status: 'DONE' }),
+  recordCall: async () => ({ ...detail, audit: [...detail.audit, { when: new Date().toISOString(), who: 'me', what: 'call' }] }),
+  escalate: async () => ({ ...detail, status: 'IN_PROGRESS' })
 };
 
 describe('Case actions basic render', () => {

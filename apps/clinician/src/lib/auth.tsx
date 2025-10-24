@@ -47,6 +47,15 @@ export const createDevSession = (): AuthSession => ({
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const isExpired = (session: AuthSession | null | undefined): boolean => {
+  if (!session?.expiresAt) return false;
+  const expires = Number.isFinite(Number(session.expiresAt))
+    ? new Date(Number(session.expiresAt))
+    : new Date(session.expiresAt);
+  if (Number.isNaN(expires.getTime())) return false;
+  return expires.getTime() <= Date.now();
+};
+
 const readStoredSession = (): AuthSession | null => {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
@@ -54,6 +63,10 @@ const readStoredSession = (): AuthSession | null => {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AuthSession;
     if (!parsed || !parsed.userId || !Array.isArray(parsed.clinics)) return null;
+    if (isExpired(parsed)) {
+      window.localStorage.removeItem(STORAGE_SESSION_KEY);
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -111,15 +124,16 @@ export const AuthProvider = ({ children, initialSession }: AuthProviderProps) =>
     initialisedRef.current = true;
 
     if (initialSession !== undefined) {
-      setSession(initialSession);
-      const clinicId = initialSession?.clinics?.[0]?.id ?? null;
-      setActiveClinicId(initialSession ? clinicId : null);
-      setStatus(initialSession ? 'authenticated' : 'unauthenticated');
+      const validSession = initialSession && !isExpired(initialSession) ? initialSession : null;
+      setSession(validSession);
+      const clinicId = validSession?.clinics?.[0]?.id ?? null;
+      setActiveClinicId(validSession ? clinicId : null);
+      setStatus(validSession ? 'authenticated' : 'unauthenticated');
       return;
     }
 
     const storedSession = readStoredSession();
-    if (storedSession) {
+    if (storedSession && !isExpired(storedSession)) {
       setSession(storedSession);
       const storedClinic = readStoredClinic();
       const derivedClinic = storedClinic && storedSession.clinics.some((clinic) => clinic.id === storedClinic)
@@ -173,7 +187,7 @@ export const AuthProvider = ({ children, initialSession }: AuthProviderProps) =>
     (role: Role | Role[]) => {
       if (!session) return false;
       const required = Array.isArray(role) ? role : [role];
-      return required.every((item) => session.roles.includes(item));
+      return required.some((item) => session.roles.includes(item));
     },
     [session]
   );

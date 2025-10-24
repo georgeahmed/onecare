@@ -5,7 +5,7 @@ Purpose
 
 Contracts & Validation
 - Schemas updated with coherent `$id` and `additionalProperties: false`.
-- `npm run codegen:check` clean; generated TS/Py present if schemas changed.
+- `npm run codegen:check` clean; generated TS/Py present if schemas changed (run `npm run --workspaces=false codegen`).
 - All ingress paths validate against compiled JSON Schemas; return structured envelopes on 4xx.
 
 Reliability & Idempotency
@@ -36,4 +36,3 @@ Health, Shutdown, and Runbooks
 How to Use
 - Local gate: `npm run codegen:check && npm run typecheck && npm test`.
 - Manual spot-check: run fault-injection tests, review DLQ flows, verify logs redact sensitive data.
-

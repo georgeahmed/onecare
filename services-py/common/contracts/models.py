@@ -22,10 +22,39 @@ class AuditEvent(BaseModel):
         extra = Extra.forbid
 
     type: str
-    timestamp: datetime
+    ts: datetime
     correlationId: Optional[str] = None
-    actor: Optional[str] = None
+    actorRef: Optional[str] = None
+    subjectRef: Optional[str] = None
+    outcome: Optional[str] = None
+    reasonCode: Optional[str] = None
     details: Optional[dict[str, Any]] = None
+
+# --- billing/claim.json ---
+class BillingClaim(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    claimId: constr(min_length=1)
+    encounterId: constr(min_length=1)
+    amount: confloat(ge=0.0)
+    currency: constr(regex=r'^[A-Z]{3}$')
+    metadata: Optional[dict[str, Any]] = None
+
+# --- billing/response.json ---
+class BillingResponseStatus(Enum):
+    accepted = 'accepted'
+    pending = 'pending'
+    rejected = 'rejected'
+
+class BillingResponse(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    claimId: constr(min_length=1)
+    status: BillingResponseStatus = Field(..., title='BillingResponseStatus')
+    reason: Optional[constr(min_length=1)] = None
+    metadata: Optional[dict[str, Any]] = None
 
 # --- booking/appointment-created.json ---
 class AppointmentCreated(BaseModel):
@@ -37,6 +66,36 @@ class AppointmentCreated(BaseModel):
     start: datetime
     end: datetime
     location: Optional[str] = None
+
+# --- booking/assisted-outcome.json ---
+class BookingAssistedOutcomeType(Enum):
+    booked = 'booked'
+    no_time = 'no_time'
+    pharmacy_referral_sent = 'pharmacy_referral_sent'
+
+class BookingAssistedOutcomeSlot(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    start: datetime
+    end: datetime
+    location: Optional[str] = None
+    serviceType: Optional[str] = None
+
+class BookingAssistedOutcome(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    outcome: BookingAssistedOutcomeType = Field(..., title='BookingAssistedOutcomeType')
+    appointmentId: Optional[constr(min_length=1)] = None
+    slot: Optional[BookingAssistedOutcomeSlot] = Field(
+        None, title='BookingAssistedOutcomeSlot'
+    )
+    notes: Optional[constr(min_length=1)] = None
+    recordedAt: datetime
+    recordedBy: constr(min_length=1)
 
 # --- booking/booking-search-request.json ---
 class BookingSearchRequest(BaseModel):
@@ -81,6 +140,119 @@ class BookingSearchResponse(BaseModel):
         [], description='Slots rejected by the policy along with reason codes.'
     )
 
+# --- clinician/assign.json ---
+class AssignRequest(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    assignee: Optional[constr(min_length=1, max_length=64)] = None
+
+# --- clinician/book-slot.json ---
+class BookSlotRequest(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    slotId: constr(min_length=1, max_length=128)
+    modality: Optional[constr(min_length=1, max_length=64)] = None
+    location: Optional[constr(min_length=1, max_length=128)] = None
+
+# --- clinician/resolve.json ---
+class ResolveRequest(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    outcome: constr(min_length=1, max_length=64)
+    note: Optional[constr(max_length=5000)] = None
+
+# --- clinician/schedule-callback.json ---
+class ScheduleCallbackRequest(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    when: datetime
+    window: Optional[constr(min_length=1, max_length=64)] = None
+    note: Optional[constr(max_length=5000)] = None
+
+# --- clinician/task-detail.json ---
+class ClinicianTaskPriority(Enum):
+    STAT = 'STAT'
+    URGENT = 'URGENT'
+    SOON = 'SOON'
+    ROUTINE = 'ROUTINE'
+
+class ClinicianTaskStatus(Enum):
+    NEW = 'NEW'
+    IN_PROGRESS = 'IN_PROGRESS'
+    DONE = 'DONE'
+
+class ClinicianTaskAttachment(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    contentType: constr(
+        regex=r'^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$',
+        min_length=3,
+        max_length=128,
+    )
+    url: AnyUrl
+
+class ClinicianTaskAuditItem(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    when: datetime
+    who: constr(min_length=1, max_length=64)
+    what: constr(min_length=1, max_length=256)
+
+class ClinicianTaskDetail(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    id: constr(min_length=1, max_length=64)
+    clinicId: constr(min_length=1, max_length=64)
+    priority: ClinicianTaskPriority = Field(..., title='ClinicianTaskPriority')
+    status: ClinicianTaskStatus = Field(..., title='ClinicianTaskStatus')
+    shortReason: constr(min_length=1, max_length=256)
+    patientId: constr(min_length=1, max_length=64)
+    waitMs: conint(ge=0)
+    interpreter: Optional[constr(min_length=1, max_length=32)] = None
+    assignee: Optional[constr(min_length=1, max_length=64)] = None
+    createdAt: datetime
+    narrative: constr(max_length=500000)
+    attachments: Optional[list[ClinicianTaskAttachment]] = None
+    actionsAllowed: list[str] = Field(..., max_items=16)
+    audit: list[ClinicianTaskAuditItem]
+    correlationId: constr(min_length=6, max_length=128)
+
+# --- clinician/task-summary.json ---
+class ClinicianTaskSummaryPriority(Enum):
+    STAT = 'STAT'
+    URGENT = 'URGENT'
+    SOON = 'SOON'
+    ROUTINE = 'ROUTINE'
+
+class ClinicianTaskSummaryStatus(Enum):
+    NEW = 'NEW'
+    IN_PROGRESS = 'IN_PROGRESS'
+    DONE = 'DONE'
+
+class ClinicianTaskSummary(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    id: constr(min_length=1, max_length=64)
+    clinicId: constr(min_length=1, max_length=64)
+    priority: ClinicianTaskSummaryPriority = Field(
+        ..., title='ClinicianTaskSummaryPriority'
+    )
+    status: ClinicianTaskSummaryStatus = Field(..., title='ClinicianTaskSummaryStatus')
+    shortReason: constr(min_length=1, max_length=256)
+    patientId: constr(min_length=1, max_length=64)
+    waitMs: conint(ge=0)
+    interpreter: Optional[constr(min_length=1, max_length=32)] = None
+    assignee: Optional[constr(min_length=1, max_length=64)] = None
+    createdAt: datetime
+
 # --- common/dlq-event.json ---
 class DlqEvent(BaseModel):
     class Config:
@@ -90,13 +262,14 @@ class DlqEvent(BaseModel):
     correlationId: Optional[str] = None
     errorCode: Optional[str] = None
     errorMessage: Optional[str] = None
+    attempts: Optional[conint(ge=1)] = None
     payloadRef: Optional[Union[dict[str, Any], str]] = Field(
         None, description='Opaque reference or small safe context; avoid PHI.'
     )
     ts: datetime
 
 # --- common/error-envelope.json ---
-class Code(Enum):
+class ErrorEnvelopeCode(Enum):
     unauthorized = 'unauthorized'
     forbidden = 'forbidden'
     invalid_input = 'invalid_input'
@@ -113,11 +286,11 @@ class Code(Enum):
     over_capacity = 'over_capacity'
     invalid_fhir = 'invalid_fhir'
 
-class Error(BaseModel):
+class ErrorObject(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    code: Code
+    code: ErrorEnvelopeCode = Field(..., title='ErrorEnvelopeCode')
     message: str
     details: Optional[dict[str, Any]] = None
     correlationId: Optional[str] = None
@@ -126,9 +299,16 @@ class ErrorEnvelope(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    error: Error = Field(..., title='ErrorObject')
+    error: ErrorObject = Field(..., title='ErrorObject')
 
 # --- common/event-envelope.json ---
+class EventEnvelopeMetadata(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    attempt: Optional[conint(ge=1)] = None
+    firstSeenAt: Optional[datetime] = None
+
 class EventEnvelope(BaseModel):
     class Config:
         extra = Extra.forbid
@@ -136,8 +316,11 @@ class EventEnvelope(BaseModel):
     id: str
     topic: str
     timestamp: datetime
-    payload: Optional[Union[dict[str, Any], list[Any], str, float, bool]]
+    payload: Union[dict[str, Any], list[Any], str, float, bool, None]
     correlationId: Optional[str] = None
+    metadata: Optional[EventEnvelopeMetadata] = Field(
+        None, title='EventEnvelopeMetadata'
+    )
 
 # --- config/orchestrator.json ---
 class Fallback(Enum):
@@ -289,10 +472,6 @@ class AcuitySignalFeatures(BaseModel):
         None,
         description='Optional expiry timestamp (UTC) after which the signal must be recomputed.',
     )
-
-# --- features/registry.json ---
-class Model(BaseModel):
-    __root__: Any
 
 # --- features/registry.schema.json ---
 class PiiClassification(Enum):
@@ -473,277 +652,152 @@ class TriageCoreFeatures(BaseModel):
     )
 
 # --- fhir/bundle-entry-resource.json ---
-class Patient(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['Patient'] = Field(..., const=True)
-    id: constr(min_length=1)
-
-class Status(Enum):
-    completed = 'completed'
-    in_progress = 'in-progress'
-    entered_in_error = 'entered-in-error'
-
-class Topic(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class Subject(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    reference: Optional[constr(min_length=1)] = None
-
-class PayloadItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    contentString: Optional[str] = None
-
-class NoteItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class Communication(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['Communication'] = Field(..., const=True)
-    status: Status
-    topic: Optional[Topic] = None
-    subject: Optional[Subject] = None
-    medium: Optional[list[dict[str, Any]]] = None
-    payload: Optional[list[PayloadItem]] = None
-    note: Optional[list[NoteItem]] = None
-
-class Status1(Enum):
-    current = 'current'
-    superseded = 'superseded'
-    entered_in_error = 'entered-in-error'
-
-class Attachment(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    url: AnyUrl
-    contentType: constr(min_length=1)
-
-class ContentItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    attachment: Attachment
-
-class DocumentReference(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['DocumentReference'] = Field(..., const=True)
-    status: Status1
-    subject: Optional[Subject] = None
-    content: list[ContentItem] = Field(..., min_items=1)
-
-class FhirBundleEntryResource(BaseModel):
-    __root__: Union[Patient, Communication, DocumentReference] = Field(
-        ..., discriminator='resourceType', title='FHIR Bundle Entry Resource'
-    )
-
-# --- fhir/bundle-transaction.json ---
-class Method(Enum):
-    POST = 'POST'
-    PUT = 'PUT'
-
-class Request(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    method: Method
-    url: constr(min_length=1)
-
-class Patient(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['Patient'] = Field(..., const=True)
-    id: constr(min_length=1)
-
-class Status(Enum):
-    completed = 'completed'
-    in_progress = 'in-progress'
-    entered_in_error = 'entered-in-error'
-
-class Topic(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class Subject(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    reference: Optional[constr(min_length=1)] = None
-
-class PayloadItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    contentString: Optional[str] = None
-
-class NoteItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class Communication(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['Communication'] = Field(..., const=True)
-    status: Status
-    topic: Optional[Topic] = None
-    subject: Optional[Subject] = None
-    medium: Optional[list[dict[str, Any]]] = None
-    payload: Optional[list[PayloadItem]] = None
-    note: Optional[list[NoteItem]] = None
-
-class Status1(Enum):
-    current = 'current'
-    superseded = 'superseded'
-    entered_in_error = 'entered-in-error'
-
-class Attachment(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    url: AnyUrl
-    contentType: constr(min_length=1)
-
-class ContentItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    attachment: Attachment
-
-class DocumentReference(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: Literal['DocumentReference'] = Field(..., const=True)
-    status: Status1
-    subject: Optional[Subject] = None
-    content: list[ContentItem] = Field(..., min_items=1)
-
-class EntryItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    fullUrl: constr(
-        regex=r'^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-    )
-    request: Request
-    resource: Union[Patient, Communication, DocumentReference] = Field(
-        ..., discriminator='resourceType', title='FHIR Bundle Entry Resource'
-    )
-
-class FhirTransactionBundle(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: str = Field('Bundle', const=True)
-    type: str = Field('transaction', const=True)
-    entry: list[EntryItem] = Field(..., min_items=1)
-
-# --- fhir/communication.json ---
-class Status(Enum):
-    completed = 'completed'
-    in_progress = 'in-progress'
-    entered_in_error = 'entered-in-error'
-
-class Topic(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class Subject(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    reference: Optional[constr(min_length=1)] = None
-
-class PayloadItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    contentString: Optional[str] = None
-
-class NoteItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    text: Optional[str] = None
-
-class FhirCommunicationMinimal(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: str = Field('Communication', const=True)
-    status: Status
-    topic: Optional[Topic] = None
-    subject: Optional[Subject] = None
-    medium: Optional[list[dict[str, Any]]] = None
-    payload: Optional[list[PayloadItem]] = None
-    note: Optional[list[NoteItem]] = None
-
-# --- fhir/document-reference.json ---
-class Status(Enum):
-    current = 'current'
-    superseded = 'superseded'
-    entered_in_error = 'entered-in-error'
-
-class Subject(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    reference: Optional[constr(min_length=1)] = None
-
-class Attachment(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    url: AnyUrl
-    contentType: constr(min_length=1)
-
-class ContentItem(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    attachment: Attachment
-
-class FhirDocumentreferenceMinimal(BaseModel):
-    class Config:
-        extra = Extra.allow
-
-    resourceType: str = Field('DocumentReference', const=True)
-    status: Status
-    subject: Optional[Subject] = None
-    content: list[ContentItem] = Field(..., min_items=1)
-
-# --- fhir/patient.json ---
-class FhirPatientMinimal(BaseModel):
+class FHIRPatientMinimal(BaseModel):
     class Config:
         extra = Extra.allow
 
     resourceType: str = Field('Patient', const=True)
     id: constr(min_length=1)
 
+class FhirCommunicationStatus(Enum):
+    completed = 'completed'
+    in_progress = 'in-progress'
+    entered_in_error = 'entered-in-error'
+
+class FhirCommunicationTopic(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class FhirCommunicationSubject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class FhirCommunicationPayloadItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    contentString: Optional[str] = None
+
+class FhirCommunicationNoteItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    text: Optional[str] = None
+
+class FHIRCommunicationMinimal(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('Communication', const=True)
+    status: FhirCommunicationStatus = Field(..., title='FhirCommunicationStatus')
+    topic: Optional[FhirCommunicationTopic] = Field(
+        None, title='FhirCommunicationTopic'
+    )
+    subject: Optional[FhirCommunicationSubject] = Field(
+        None, title='FhirCommunicationSubject'
+    )
+    medium: Optional[list[dict[str, Any]]] = None
+    payload: Optional[list[FhirCommunicationPayloadItem]] = None
+    note: Optional[list[FhirCommunicationNoteItem]] = None
+
+class FhirDocumentReferenceStatus(Enum):
+    current = 'current'
+    superseded = 'superseded'
+    entered_in_error = 'entered-in-error'
+
+class FhirDocumentReferenceSubject(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    reference: Optional[constr(min_length=1)] = None
+
+class FhirDocumentReferenceAttachment(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    url: AnyUrl
+    contentType: constr(min_length=1)
+
+class FhirDocumentReferenceContentItem(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    attachment: FhirDocumentReferenceAttachment = Field(
+        ..., title='FhirDocumentReferenceAttachment'
+    )
+
+class FHIRDocumentReferenceMinimal(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('DocumentReference', const=True)
+    status: FhirDocumentReferenceStatus = Field(
+        ..., title='FhirDocumentReferenceStatus'
+    )
+    subject: Optional[FhirDocumentReferenceSubject] = Field(
+        None, title='FhirDocumentReferenceSubject'
+    )
+    content: list[FhirDocumentReferenceContentItem] = Field(..., min_items=1)
+
+class BundleEntryPatient(FHIRPatientMinimal):
+    resourceType: Literal['Patient'] = Field(
+        ..., const=True
+    )
+
+class BundleEntryCommunication(FHIRCommunicationMinimal):
+    resourceType: Literal['Communication'] = Field(
+        ..., const=True
+    )
+
+class BundleEntryDocumentReference(FHIRDocumentReferenceMinimal):
+    resourceType: Literal['DocumentReference'] = Field(
+        ..., const=True
+    )
+
+class FHIRBundleEntryResource(BaseModel):
+    __root__: Union[
+        BundleEntryPatient, BundleEntryCommunication, BundleEntryDocumentReference
+    ] = Field(..., discriminator='resourceType', title='FHIR Bundle Entry Resource')
+
+# --- fhir/bundle-transaction.json ---
+class FhirTransactionMethod(Enum):
+    POST = 'POST'
+    PUT = 'PUT'
+
+class FhirTransactionRequest(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    method: FhirTransactionMethod = Field(..., title='FhirTransactionMethod')
+    url: constr(min_length=1)
+
+class FhirTransactionEntry(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    fullUrl: constr(
+        regex=r'^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    )
+    request: FhirTransactionRequest = Field(..., title='FhirTransactionRequest')
+    resource: Union[
+        BundleEntryPatient, BundleEntryCommunication, BundleEntryDocumentReference
+    ] = Field(..., discriminator='resourceType', title='FHIR Bundle Entry Resource')
+
+class FHIRTransactionBundle(BaseModel):
+    class Config:
+        extra = Extra.allow
+
+    resourceType: str = Field('Bundle', const=True)
+    type: str = Field('transaction', const=True)
+    entry: list[FhirTransactionEntry] = Field(..., min_items=1)
+
+# --- fhir/communication.json ---
+# --- fhir/document-reference.json ---
+# --- fhir/patient.json ---
 # --- ics/referral-ack.json ---
 class IcsReferralAck(BaseModel):
     class Config:
@@ -764,7 +818,7 @@ class IcsReferralRequest(BaseModel):
     reason: str
 
 # --- ingest/portal-submission.json ---
-class Patient(BaseModel):
+class PortalSubmissionPatient(BaseModel):
     class Config:
         extra = Extra.forbid
 
@@ -772,7 +826,7 @@ class Patient(BaseModel):
     dob: Optional[date] = None
     locale: Optional[constr(regex=r'^[a-z]{2}(?:-[A-Z]{2})?$')] = None
 
-class Attachment(BaseModel):
+class PortalSubmissionAttachment(BaseModel):
     class Config:
         extra = Extra.forbid
 
@@ -781,9 +835,20 @@ class Attachment(BaseModel):
         min_length=3,
         max_length=128,
     )
-    url: AnyUrl
+    url: constr(regex=r'^https://', min_length=1, max_length=2048)
 
-class Channel(Enum):
+class PortalSubmissionInterpreterPreferences(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    requiresInterpreter: bool
+    preferredLanguages: Optional[list[constr(regex=r'^[a-z]{2}(?:-[A-Z]{2})?$')]] = (
+        Field(None, max_items=3, min_items=1, unique_items=True)
+    )
+    notes: Optional[constr(max_length=300)] = None
+    requiresInterpreterConfirmed: Optional[bool] = None
+
+class PortalSubmissionChannel(Enum):
     web = 'web'
     ivr = 'ivr'
 
@@ -792,18 +857,150 @@ class PortalSubmission(BaseModel):
         extra = Extra.forbid
 
     practiceId: constr(regex=r'^[A-Za-z0-9._:-]+$', min_length=1, max_length=64)
-    patient: Patient
+    patient: PortalSubmissionPatient = Field(..., title='PortalSubmissionPatient')
     narrative: constr(max_length=500000)
-    attachments: Optional[list[Attachment]] = None
-    channel: Channel
+    attachments: Optional[list[PortalSubmissionAttachment]] = None
+    interpreterPreferences: Optional[PortalSubmissionInterpreterPreferences] = Field(
+        None, title='PortalSubmissionInterpreterPreferences'
+    )
+    channel: PortalSubmissionChannel = Field(..., title='PortalSubmissionChannel')
 
-# --- pharmacy/pharmacy-outcome.json ---
-class Status(Enum):
+# Maintain backwards-compatible attribute names without overriding earlier FHIR models
+PortalSubmissionPatientModel = PortalSubmissionPatient
+PortalSubmissionAttachmentModel = PortalSubmissionAttachment
+Channel = PortalSubmissionChannel
+
+# --- messaging/send-document-ack.json ---
+class SendDocumentAckType(Enum):
+    technical = 'technical'
+    business = 'business'
+
+class SendDocumentAckStatus(Enum):
+    received = 'received'
+    accepted = 'accepted'
+
+class SendDocumentAck(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    messageId: constr(min_length=1)
+    mexLocalId: constr(min_length=1)
+    ackType: SendDocumentAckType = Field(..., title='SendDocumentAckType')
+    status: SendDocumentAckStatus = Field(..., title='SendDocumentAckStatus')
+    receivedAt: datetime
+    details: Optional[constr(min_length=1)] = None
+
+# --- messaging/send-document-nack.json ---
+class SendDocumentNack(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    messageId: constr(min_length=1)
+    mexLocalId: constr(min_length=1)
+    reasonCode: constr(min_length=1)
+    reason: Optional[constr(min_length=1)] = None
+    receivedAt: datetime
+    retryable: Optional[bool] = None
+
+# --- messaging/send-document-request.json ---
+class SendDocumentRequest(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    pdfUrl: AnyUrl
+    compositionBundleRef: constr(min_length=1)
+    correlationId: Optional[constr(min_length=1)] = None
+    metadata: Optional[dict[str, str]] = Field(
+        None, title='SendDocumentRequestMetadata'
+    )
+
+# --- messaging/send-document-requested.json ---
+class SendDocumentRequested(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    pdfUrl: AnyUrl
+    compositionBundleRef: constr(min_length=1)
+    requestedAt: datetime
+    correlationId: Optional[constr(min_length=1)] = None
+
+# --- messaging/send-document-retry.json ---
+class SendDocumentRetryScheduled(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    messageId: constr(min_length=1)
+    mexLocalId: constr(min_length=1)
+    attempt: conint(ge=1)
+    scheduledAt: datetime
+    reason: Optional[constr(min_length=1)] = None
+
+# --- messaging/send-document-sent.json ---
+class SendDocumentSent(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    messageId: constr(min_length=1)
+    mexTo: constr(min_length=1)
+    mexWorkflowId: constr(min_length=1)
+    mexLocalId: constr(min_length=1)
+    sentAt: datetime
+    attempt: conint(ge=1)
+    retryAfter: Optional[datetime] = None
+
+# --- pharmacy/pharmacy-notification.json ---
+class PharmacyNotificationStatus(Enum):
     accepted = 'accepted'
     queued = 'queued'
     rejected = 'rejected'
 
-class Slot(BaseModel):
+class PharmacyNotificationChannel(Enum):
+    sms = 'sms'
+    email = 'email'
+    push = 'push'
+    unknown = 'unknown'
+
+class PharmacyNotificationMetadata(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    template: Optional[constr(min_length=1, max_length=64)] = None
+    locale: Optional[constr(min_length=2, max_length=5)] = None
+
+class PharmacyNotification(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    serviceRequestId: constr(min_length=1)
+    organisationId: constr(min_length=1)
+    status: PharmacyNotificationStatus = Field(..., title='PharmacyNotificationStatus')
+    summary: constr(min_length=1, max_length=280)
+    recordedAt: datetime
+    channel: Optional[PharmacyNotificationChannel] = Field(
+        'unknown', title='PharmacyNotificationChannel'
+    )
+    metadata: Optional[PharmacyNotificationMetadata] = Field(
+        None, title='PharmacyNotificationMetadata'
+    )
+
+# --- pharmacy/pharmacy-outcome.json ---
+class PharmacyOutcomeStatus(Enum):
+    accepted = 'accepted'
+    queued = 'queued'
+    rejected = 'rejected'
+
+class PharmacyOutcomeSlot(BaseModel):
     class Config:
         extra = Extra.forbid
 
@@ -816,36 +1013,53 @@ class PharmacyOutcome(BaseModel):
 
     serviceRequestId: constr(min_length=1)
     organisationId: constr(min_length=1)
-    status: Status
+    status: PharmacyOutcomeStatus = Field(..., title='PharmacyOutcomeStatus')
     referralReference: constr(min_length=1)
     code: Optional[constr(min_length=1)] = None
     message: Optional[constr(min_length=1)] = None
     summary: Optional[constr(min_length=1)] = None
     condition: Optional[constr(min_length=1)] = None
     severity: Optional[constr(min_length=1)] = None
-    slot: Optional[Slot] = None
+    slot: Optional[PharmacyOutcomeSlot] = Field(None, title='PharmacyOutcomeSlot')
     recordedAt: datetime
     escalated: Optional[bool] = None
 
 # --- pharmacy/pharmacy-referral.json ---
-class Slot(BaseModel):
+class PharmacyReferralPatientSex(Enum):
+    female = 'female'
+    male = 'male'
+    other = 'other'
+    unknown = 'unknown'
+    NoneType_None = None
+
+class PharmacyReferralSlot(BaseModel):
     class Config:
         extra = Extra.forbid
 
     start: datetime
     end: datetime
+    locationOdsCode: Optional[constr(min_length=1)] = None
+    reference: Optional[constr(min_length=1)] = None
 
 class PharmacyReferral(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    patientId: str
-    condition: str
-    pharmacyOrg: str
-    slot: Optional[Slot] = None
+    patientId: constr(min_length=1)
+    condition: constr(min_length=1)
+    pharmacyOrg: constr(min_length=1)
+    patientAgeYears: Optional[confloat(ge=0.0)] = None
+    patientSex: Optional[PharmacyReferralPatientSex] = Field(
+        None, title='PharmacyReferralPatientSex'
+    )
+    severity: Optional[constr(min_length=1)] = None
+    exclusionFlags: Optional[list[constr(min_length=1)]] = Field(
+        None, unique_items=True
+    )
+    slot: Optional[PharmacyReferralSlot] = Field(None, title='PharmacyReferralSlot')
 
 # --- portal/notify.json ---
-class State(Enum):
+class PortalState(Enum):
     UP = 'UP'
     DOWN = 'DOWN'
     OOH = 'OOH'
@@ -857,7 +1071,9 @@ class PortalNotify(BaseModel):
     practiceId: constr(regex=r'^[a-zA-Z0-9._:-]+$', min_length=1, max_length=64) = (
         Field(..., description='Stable practice identifier (no PHI).')
     )
-    state: State = Field(..., description='Resulting portal availability state.')
+    state: PortalState = Field(
+        ..., description='Resulting portal availability state.', title='PortalState'
+    )
     reasonCode: Optional[constr(regex=r'^[A-Z0-9_]{1,64}$')] = Field(
         None,
         description='Machine-readable reason (e.g., CORE_HOURS, MAINTENANCE, CONFIG_INVALID).',
@@ -867,7 +1083,7 @@ class PortalNotify(BaseModel):
     )
 
 # --- safety/safety-decision.json ---
-class Outcome(Enum):
+class SafetyDecisionOutcome(Enum):
     DIVERTED = 'DIVERTED'
     SAFE_TO_CONTINUE = 'SAFE_TO_CONTINUE'
 
@@ -875,7 +1091,7 @@ class SafetyDecision(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    outcome: Outcome
+    outcome: SafetyDecisionOutcome = Field(..., title='SafetyDecisionOutcome')
     reason: Optional[str] = None
 
 # --- scribe/scribe-audio.json ---
@@ -891,7 +1107,7 @@ class ScribeAudio(BaseModel):
     diarization: Optional[bool] = None
 
 # --- tasks/task-created.json ---
-class Priority(Enum):
+class TaskCreatedPriority(Enum):
     STAT = 'STAT'
     URGENT = 'URGENT'
     SOON = 'SOON'
@@ -903,36 +1119,63 @@ class TaskCreated(BaseModel):
 
     taskId: str
     patientId: str
-    priority: Priority
+    priority: TaskCreatedPriority = Field(..., title='TaskCreatedPriority')
     owner: Optional[str] = None
+
+# --- tasks/task-updated.json ---
+class TaskUpdatedPriority(Enum):
+    STAT = 'STAT'
+    URGENT = 'URGENT'
+    SOON = 'SOON'
+    ROUTINE = 'ROUTINE'
+
+class TaskUpdatedPreviousPriority(Enum):
+    STAT = 'STAT'
+    URGENT = 'URGENT'
+    SOON = 'SOON'
+    ROUTINE = 'ROUTINE'
+
+class TaskUpdated(BaseModel):
+    class Config:
+        extra = Extra.forbid
+
+    taskId: constr(min_length=1)
+    patientId: constr(min_length=1)
+    priority: TaskUpdatedPriority = Field(..., title='TaskUpdatedPriority')
+    previousPriority: Optional[TaskUpdatedPreviousPriority] = Field(
+        None, title='TaskUpdatedPreviousPriority'
+    )
+    reason: constr(min_length=1)
+    updatedAt: Optional[datetime] = None
+    breached: Optional[bool] = None
 
 # --- telephony/call-transcribed.json ---
 class CallTranscribed(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    callId: str
-    patientId: Optional[str] = None
-    transcript: str
-    lang: Optional[str] = None
+    callId: constr(min_length=1)
+    patientId: Optional[constr(min_length=1)] = None
+    transcript: constr(min_length=1)
+    lang: Optional[constr(min_length=2)] = None
 
 # --- telephony/intent-classified.json ---
 class IntentClassified(BaseModel):
     class Config:
         extra = Extra.forbid
 
-    callId: str
-    intent: str
-    confidence: Optional[float] = None
+    callId: constr(min_length=1)
+    intent: constr(min_length=1)
+    confidence: Optional[confloat(ge=0.0, le=1.0)] = None
 
 # --- triage/triage-decision.json ---
-class Priority(Enum):
+class TriageDecisionPriority(Enum):
     STAT = 'STAT'
     URGENT = 'URGENT'
     SOON = 'SOON'
     ROUTINE = 'ROUTINE'
 
-class Assignment(BaseModel):
+class TriageDecisionAssignment(BaseModel):
     class Config:
         extra = Extra.forbid
 
@@ -945,12 +1188,14 @@ class TriageDecision(BaseModel):
 
     patientId: constr(min_length=1)
     score: confloat(ge=0.0, le=1.0)
-    priority: Priority
+    priority: TriageDecisionPriority = Field(..., title='TriageDecisionPriority')
     reasons: Optional[list[constr(regex=r'^[a-z0-9_.-]{1,64}$')]] = Field(
         None, max_items=10
     )
     duplicateOf: Optional[constr(min_length=1)] = None
-    assignment: Optional[Assignment] = None
+    assignment: Optional[TriageDecisionAssignment] = Field(
+        None, title='TriageDecisionAssignment'
+    )
     features: Optional[dict[str, Optional[Union[float, str, bool]]]] = None
     generatedAt: Optional[datetime] = None
 

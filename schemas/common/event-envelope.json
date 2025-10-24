@@ -11,6 +11,7 @@
     "correlationId": { "type": "string" },
     "metadata": {
       "type": "object",
+      "title": "EventEnvelopeMetadata",
       "properties": {
         "attempt": { "type": "integer", "minimum": 1 },
         "firstSeenAt": { "type": "string", "format": "date-time" }

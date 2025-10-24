@@ -1,9 +1,11 @@
 // AUTO-GENERATED from schemas. DO NOT EDIT.
 
+export type TriageDecisionPriority = "STAT" | "URGENT" | "SOON" | "ROUTINE";
+
 export interface TriageDecision {
   patientId: string;
   score: number;
-  priority: "STAT" | "URGENT" | "SOON" | "ROUTINE";
+  priority: TriageDecisionPriority;
   /**
    * @maxItems 10
    */
@@ -20,12 +22,13 @@ export interface TriageDecision {
     | [string, string, string, string, string, string, string, string, string]
     | [string, string, string, string, string, string, string, string, string, string];
   duplicateOf?: string;
-  assignment?: {
-    owner?: string;
-    team?: string;
-  };
+  assignment?: TriageDecisionAssignment;
   features?: {
     [k: string]: number | string | boolean | null;
   };
   generatedAt?: string;
+}
+export interface TriageDecisionAssignment {
+  owner?: string;
+  team?: string;
 }

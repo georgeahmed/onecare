@@ -99,7 +99,7 @@ describe('telephony ingress server', () => {
     const metricsResponse = await fetch(`http://127.0.0.1:${port}/metrics`);
     expect(metricsResponse.status).toBe(200);
     const metricsText = await metricsResponse.text();
-    expect(metricsText).toMatch(/telephony_http_duration_ms_count \d+/);
+    expect(metricsText).toMatch(/telephony_http_duration_ms_count\{method="POST",path="\/calls"\} \d+/);
     expect(metricsText).toContain('telephony_http_requests_total{method="POST",path="/calls",status="202",outcome="accepted"} 1');
   });
 

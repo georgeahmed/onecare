@@ -75,7 +75,7 @@ export class AuditSpool {
         maxSize: this.maxSize,
         eventType: event.type,
       });
-      return;
+      throw new Error('audit_spool_overflow');
     }
     const item: AuditQueueItem = {
       event,

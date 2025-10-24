@@ -19,6 +19,21 @@ if (typeof window !== 'undefined') {
   startPerformanceMonitoring();
 }
 
+const resolveBasename = () => {
+  const env =
+    typeof import.meta !== 'undefined'
+      ? (import.meta as { env?: { BASE_URL?: string } }).env
+      : undefined;
+  const candidate = typeof env?.BASE_URL === 'string' ? env.BASE_URL : undefined;
+  const raw = candidate && candidate.length > 0 ? candidate : '/';
+  if (raw === '/') {
+    return '/';
+  }
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+};
+
+const routerBasename = resolveBasename();
+
 const registerPortalServiceWorker = () => {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
     return;
@@ -50,7 +65,7 @@ if (typeof window !== 'undefined') {
 
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename}>
       <I18nProvider>
         <ThemeProvider>
           <AppErrorBoundary>

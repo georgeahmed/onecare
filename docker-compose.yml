@@ -13,15 +13,7 @@ services:
         "-user",
         "onecare",
         "-pass",
-        "onecare-secret",
-        "--tls",
-        "--tlscert",
-        "/etc/nats/certs/nats.crt",
-        "--tlskey",
-        "/etc/nats/certs/nats.key",
-        "--tlscacert",
-        "/etc/nats/certs/ca.crt",
-        "--tlsverify"
+        "onecare-secret"
       ]
     environment:
       - NATS_USER=onecare
@@ -31,7 +23,6 @@ services:
       - "8222:8222"
     volumes:
       - nats-data:/data/jetstream
-      - ./infra/tls/dev:/etc/nats/certs:ro
     deploy:
       resources:
         limits:
@@ -49,8 +40,24 @@ services:
       interval: 5s
       timeout: 2s
       retries: 10
+
+  nats-bootstrap:
+    image: node:20-alpine
+    restart: "no"
+    depends_on:
+      nats:
+        condition: service_healthy
+    working_dir: /app
+    command: ["node", "scripts/nats/bootstrap.js"]
+    environment:
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
+      - NATS_USER=onecare
+      - NATS_PASS=onecare-secret
+    volumes:
+      - ./:/app:ro
+
   otel-collector:
-    image: otel/opentelemetry-collector:0.97.0
+    image: otel/opentelemetry-collector-contrib:0.97.0
     restart: unless-stopped
     command: ["--config", "/etc/otel-collector.yaml"]
     volumes:
@@ -86,20 +93,18 @@ services:
       - PY_SAFETY_GATE_HOST_ALLOWLIST=safety-gate
       - PY_SCRIBE_URL=http://scribe:8082
       - BUS_IMPL=nats
-      - NATS_URL=tls://onecare:onecare-secret@nats:4222
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
-      - NATS_TLS_ENABLED=1
-      - NATS_TLS_REQUIRED=1
-      - NATS_TLS_CA_PATH=/etc/onecare/tls/ca.crt
-      - NATS_TLS_CERT_PATH=/etc/onecare/tls/client.crt
-      - NATS_TLS_KEY_PATH=/etc/onecare/tls/client.key
+      - NATS_TLS_ENABLED=0
+      - NATS_TLS_REQUIRED=0
+      - CONFIG_ROOT=/app/config
+      - FHIR_BASE_URL=${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4}
+      - SECURITY_SHARED_SECRET=${SECURITY_SHARED_SECRET:-dev-shared-secret}
     ports:
       - "3001:3001"
-    volumes:
-      - ./infra/tls/dev:/etc/onecare/tls:ro
     deploy:
       resources:
         limits:
@@ -115,6 +120,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
 
   safety-gate:
     build:
@@ -157,20 +164,16 @@ services:
     restart: unless-stopped
     environment:
       - BUS_IMPL=nats
-      - NATS_URL=tls://onecare:onecare-secret@nats:4222
+      - NATS_URL=nats://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
       - NATS_CONNECT_TIMEOUT_MS=2000
       - NATS_MAX_RECONNECT_ATTEMPTS=10
       - ANALYTICS_SINK_PATH=/var/analytics/metrics.jsonl
-      - NATS_TLS_ENABLED=1
-      - NATS_TLS_REQUIRED=1
-      - NATS_TLS_CA_PATH=/etc/onecare/tls/ca.crt
-      - NATS_TLS_CERT_PATH=/etc/onecare/tls/client.crt
-      - NATS_TLS_KEY_PATH=/etc/onecare/tls/client.key
+      - NATS_TLS_ENABLED=0
+      - NATS_TLS_REQUIRED=0
     volumes:
       - analytics-metrics:/var/analytics
-      - ./infra/tls/dev:/etc/onecare/tls:ro
     deploy:
       resources:
         limits:
@@ -182,6 +185,8 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
 
   loki:
     image: grafana/loki:2.9.6

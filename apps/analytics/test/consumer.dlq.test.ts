@@ -44,10 +44,16 @@ describe('AnalyticsConsumer DLQ integration', () => {
         ? (envelopePayload.payload as Record<string, unknown>)
         : {};
     expect(dlqPayload).toMatchObject({
-      cause: 'analytics.metric.persistence_failed',
       originalTopic: Topics.analytics.metric,
       correlationId: envelope.correlationId,
+      errorCode: 'sink_error',
+      attempts: 2,
+    });
+    const payloadRef = dlqPayload.payloadRef as Record<string, unknown>;
+    expect(payloadRef).toMatchObject({
+      cause: 'analytics.metric.persistence_failed',
       metricName: metric.name,
+      details: { attempt: 2 },
     });
     await consumer.stop();
   });

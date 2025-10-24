@@ -78,3 +78,30 @@ def test_draft_endpoint_returns_service_unavailable_when_llm_misconfigured(monke
         assert response.json() == {
             "detail": {"status": "llm_unavailable", "reason": "missing_or_invalid_configuration"}
         }
+        assert response.headers.get("x-correlation-id")
+        assert response.headers.get("x-consent-reference")
+
+
+def test_draft_endpoint_uses_ambient_config_defaults(monkeypatch):
+    monkeypatch.delenv("SUMMARY_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("SCRIBE_SUMMARY_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("REQUIRE_CLINICIAN_APPROVAL", raising=False)
+    monkeypatch.delenv("SCRIBE_REQUIRE_CLINICIAN_APPROVAL", raising=False)
+    monkeypatch.setattr(
+        "scribe_service.main._ambient_scribe_config",
+        lambda: {"max_summary_tokens": 16, "require_clinician_approval": False},
+    )
+
+    payload = {"text": "word " * 100}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/draft",
+            headers=scribe_headers("scribe:draft"),
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["approved"] is True
+    assert rough_token_count(body["summary"]) <= 16

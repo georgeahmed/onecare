@@ -72,6 +72,13 @@ export function validatePharmacyReferralIngress(raw: unknown): ReferralIngressVa
 export function buildReferralRequest(envelope: TypedEnvelope<PharmacyReferral>): PharmacyReferralRequest {
   const payload = envelope.payload;
   const documentExclusions = normaliseFlagArray(payload.exclusionFlags);
+  const slotPayload = payload.slot;
+  const hasSlotWindow =
+    slotPayload &&
+    typeof slotPayload.start === 'string' &&
+    slotPayload.start.trim().length > 0 &&
+    typeof slotPayload.end === 'string' &&
+    slotPayload.end.trim().length > 0;
 
   const request: PharmacyReferralRequest = {
     patientId: payload.patientId,
@@ -87,15 +94,18 @@ export function buildReferralRequest(envelope: TypedEnvelope<PharmacyReferral>):
       exclusionFlags: documentExclusions ? [...documentExclusions] : undefined,
     },
     organisationId: payload.pharmacyOrg,
-    slot:
-      payload.slot && payload.slot.locationOdsCode
-        ? {
-            start: payload.slot.start,
-            end: payload.slot.end,
-            locationOdsCode: payload.slot.locationOdsCode,
-            reference: payload.slot.reference,
-          }
-        : undefined,
+    slot: hasSlotWindow
+      ? {
+          start: slotPayload!.start,
+          end: slotPayload!.end,
+          ...(typeof slotPayload!.locationOdsCode === 'string' && slotPayload!.locationOdsCode.trim().length > 0
+            ? { locationOdsCode: slotPayload!.locationOdsCode }
+            : {}),
+          ...(typeof slotPayload!.reference === 'string' && slotPayload!.reference.trim().length > 0
+            ? { reference: slotPayload!.reference }
+            : {}),
+        }
+      : undefined,
     correlationId: envelope.correlationId,
     contextId: envelope.id,
   };

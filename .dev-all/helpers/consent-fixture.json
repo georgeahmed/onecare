@@ -1,0 +1,11 @@
+{
+  "patient-123": [
+    {
+      "purpose": "care",
+      "resources": ["QuestionnaireResponse", "Communication", "Slot"],
+      "reference": "Consent/patient-123-care",
+      "grantedAt": "2024-01-01T00:00:00Z",
+      "expiresAt": "2030-01-01T00:00:00Z"
+    }
+  ]
+}

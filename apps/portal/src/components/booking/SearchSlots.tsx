@@ -15,6 +15,7 @@ import {
 } from '../../lib/format';
 import { useLocale } from '../../i18n';
 import { applyFromFilter, applyToFilter, filterSlots } from '../../lib/bookingFilters';
+import { formatSlotModalityLabel } from '../../lib/bookingLabels';
 
 export interface SearchSlotsProps {
   slots: BookingSlot[];
@@ -33,12 +34,13 @@ const buildDateTimeLabel = (intl: ReturnType<typeof useIntl>, slot: BookingSlot,
   const startLabel = formatAccessibleDateTime(slot.start, { locale, timeZone });
   const endLabel = formatTime(slot.end, { locale, timeZone, timeStyle: 'short' });
   const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
+  const modalityLabel = formatSlotModalityLabel(intl, slot);
   return intl.formatMessage(
     { id: 'booking.slot.ariaLabel' },
     {
       start: startLabel,
       end: endLabel,
-      modality: intl.formatMessage({ id: `booking.modality.${slot.modality}` }),
+      modality: modalityLabel,
       location: locationLabel,
     },
   );
@@ -318,7 +320,7 @@ const SearchSlots = ({
         ) : null}
         {slotsToRender.map((slot, renderIndex) => {
           const index = renderIndex + visibleStart;
-          const modalityLabel = intl.formatMessage({ id: `booking.modality.${slot.modality}` });
+          const modalityLabel = formatSlotModalityLabel(intl, slot);
           const locationLabel = slot.location ?? intl.formatMessage({ id: 'booking.location.unassigned' });
           const dateLabel = formatDate(slot.start, {
             locale,

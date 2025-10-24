@@ -13,9 +13,10 @@ def test_validate_narrative_happy_path():
     [
         (None, "narrative_missing"),
         ("   ", "narrative_empty"),
-        ("x" * 2100, "narrative_too_long"),
+        ("x" * (500000 + 1), "narrative_too_long"),
         ("!!!!!!!!!", "narrative_low_signal"),
         ("aaaaabbbbbccccccdddddd", "narrative_repeated_chars"),
+        ("\u0007beep", "narrative_invalid_chars"),
     ],
 )
 def test_validate_narrative_rejections(text, code):

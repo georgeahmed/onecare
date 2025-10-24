@@ -227,3 +227,21 @@ observability:
       check_window: P1D
 idempotency:
   ttl_seconds: 600
+messaging:
+  send_document:
+    mesh:
+      workflow_id: "GPCONNECT_SEND_DOCUMENT"
+      ack_workflow_id: "GPCONNECT_SEND_DOCUMENT_ACK"
+      sender_mailbox: "CHANGE_ME"
+      ack_timeout_minutes: 30
+      max_retries: 5
+      backoff_schedule:
+        - "PT1M"
+        - "PT5M"
+        - "PT15M"
+        - "PT1H"
+        - "PT3H"
+    pds_lookup: true
+    pdf_max_mb: 10
+feature_flags:
+  gp_connect_booking: false

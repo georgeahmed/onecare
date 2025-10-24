@@ -25,7 +25,7 @@ const LocaleSwitcher = () => {
           const labelId = metadata.labelId;
           const optionLabel = intl.formatMessage({ id: labelId, defaultMessage: item.toUpperCase() });
           return (
-            <option key={item} value={item} dir={metadata.direction} aria-label={optionLabel}>
+            <option key={item} value={item} dir={metadata.direction} lang={item} aria-label={optionLabel}>
               {optionLabel}
             </option>
           );

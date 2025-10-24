@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/booking/assisted-outcome.json",
+  "title": "BookingAssistedOutcome",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "outcome": {
+      "title": "BookingAssistedOutcomeType",
+      "type": "string",
+      "enum": ["booked", "no_time", "pharmacy_referral_sent"]
+    },
+    "appointmentId": { "type": "string", "minLength": 1 },
+    "slot": {
+      "type": ["object", "null"],
+      "title": "BookingAssistedOutcomeSlot",
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "location": { "type": ["string", "null"] },
+        "serviceType": { "type": ["string", "null"] }
+      },
+      "required": ["start", "end"],
+      "additionalProperties": false
+    },
+    "notes": { "type": "string", "minLength": 1 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "recordedBy": { "type": "string", "minLength": 1 }
+  },
+  "required": ["taskId", "patientId", "outcome", "recordedAt", "recordedBy"],
+  "additionalProperties": false,
+  "if": { "properties": { "outcome": { "const": "booked" } } },
+  "then": {
+    "required": ["appointmentId", "slot"]
+  }
+}

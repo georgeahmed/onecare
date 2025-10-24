@@ -10,10 +10,12 @@
     },
     "status": {
       "type": "string",
+      "title": "FhirCommunicationStatus",
       "enum": ["completed", "in-progress", "entered-in-error"]
     },
     "topic": {
       "type": "object",
+      "title": "FhirCommunicationTopic",
       "properties": {
         "text": { "type": "string" }
       },
@@ -21,6 +23,7 @@
     },
     "subject": {
       "type": "object",
+      "title": "FhirCommunicationSubject",
       "properties": {
         "reference": { "type": "string", "minLength": 1 }
       },
@@ -30,6 +33,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "FhirCommunicationMediumItem",
         "additionalProperties": true
       }
     },
@@ -37,6 +41,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "FhirCommunicationPayloadItem",
         "properties": {
           "contentString": { "type": "string" }
         },
@@ -47,6 +52,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "title": "FhirCommunicationNoteItem",
         "properties": {
           "text": { "type": "string" }
         },

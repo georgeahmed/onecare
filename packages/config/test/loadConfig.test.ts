@@ -100,6 +100,14 @@ access_gate:
       max_entries: 800
 `);
 
+  writeYaml(root, 'practices/pcn-west/practice-02.yaml', `
+__meta:
+  pcn: "west-1"
+  ics: "west.yml"
+core_hours:
+  start: "08:30"
+`);
+
   return root;
 }
 
@@ -374,5 +382,135 @@ describe('loadConfig', () => {
     rules?.conditions?.soreThroat?.sex?.push('unknown');
     expect(config.pharmacy?.eligibility?.defaultRule?.age?.min).toBe(10);
     expect(config.pharmacy?.eligibility?.conditions?.soreThroat?.sex).toEqual(['male', 'female']);
+  });
+
+  it('exposes messaging send document config and feature flags', () => {
+    const cfg = loadConfig('demo-messaging', {
+      overrides: {
+        messaging: {
+          send_document: {
+            mesh: {
+              workflow_id: 'GPCONNECT_SEND_DOCUMENT',
+              sender_mailbox: 'SENDER123',
+            },
+            pdf_max_mb: 8,
+          },
+        },
+        feature_flags: {
+          gp_connect_booking: false,
+        },
+      },
+    });
+
+    expect(cfg.messaging?.send_document?.mesh?.workflow_id).toBe('GPCONNECT_SEND_DOCUMENT');
+    expect(cfg.messaging?.send_document?.mesh?.sender_mailbox).toBe('SENDER123');
+    expect(cfg.messaging?.send_document?.pdf_max_mb).toBe(8);
+    expect(cfg.feature_flags?.gp_connect_booking).toBe(false);
+  });
+
+  it('interprets shadow sample rates provided as whole percentages', () => {
+    const cfg = loadConfig('shadow-percent', {
+      overrides: {
+        safety_gate: {
+          shadow: {
+            enabled: true,
+            sample_rate: 75,
+          },
+        },
+      },
+    });
+
+    expect(cfg.safety_gate?.shadow?.sampleRate).toBeCloseTo(0.75);
+  });
+
+  it('rounds idempotency TTL values to whole seconds', () => {
+    const cfg = loadConfig('ttl-rounding', {
+      overrides: {
+        idempotency: {
+          ttlSeconds: '45.4',
+        },
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.idempotency?.ttlSeconds).toBe(45);
+  });
+
+  it('allows access gate to be disabled explicitly', () => {
+    const cfg = loadConfig('access-gate-off', {
+      overrides: {
+        access_gate: null,
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.access_gate).toBeUndefined();
+  });
+
+  it('replaces arrays when overrides are supplied', () => {
+    const cfg = loadConfig('array-override', {
+      overrides: {
+        enhanced_access_windows: ['override-only'],
+      } as Partial<ResolvedConfig>,
+    });
+
+    expect(cfg.enhanced_access_windows).toEqual(['override-only']);
+  });
+
+  it('resolves layers referenced with .yml suffix', () => {
+    const root = setupLayeredConfigFixture();
+    try {
+      const cfg = loadConfig('pcn-west/practice-02', { configRoot: root });
+      expect(cfg.core_hours?.start).toBe('08:30');
+      const lineage = cfg._lineage as Record<string, unknown> | undefined;
+      expect(lineage?.ics).toBe('west.yml');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps triage fallback references isolated', () => {
+    const cfg = loadConfig('triage-fallback-clone');
+    expect(cfg.triageFallback).not.toBe(cfg.triage?.fallback);
+    cfg.triageFallback!.enabled = false;
+    expect(cfg.triage?.fallback?.enabled).toBe(true);
+  });
+
+  it('rejects pharmacy eligibility with inverted age bounds', () => {
+    expect(() =>
+      loadConfig('pharmacy-invalid', {
+        overrides: {
+          pharmacy: {
+            eligibility: {
+              defaultRule: { age: { min: 40, max: 30 } },
+            },
+          },
+        } as Partial<ResolvedConfig>,
+      }),
+    ).toThrowError(/pharmacy_age_bounds_invalid/);
+  });
+
+  it('applies ICS env overrides when route names include hyphens', () => {
+    const root = setupLayeredConfigFixture();
+    process.env.ICS_NORTH_WEST_HEADER_NAME = 'X-Test';
+    process.env.ICS_NORTH_WEST_HEADER_VALUE = 'enabled';
+    try {
+      writeYaml(root, 'ics/north-west.yaml', `
+routes:
+  default:
+    endpoint: "https://ics.example/default"
+`);
+      writeYaml(root, 'practices/pcn-west/practice-03.yaml', `
+__meta:
+  ics: "north-west"
+core_hours:
+  start: "09:00"
+`);
+      const cfg = loadConfig('pcn-west/practice-03', { configRoot: root });
+      const headers = cfg.ics?.routes?.default?.headers;
+      expect(headers).toMatchObject({ 'X-Test': 'enabled' });
+    } finally {
+      delete process.env.ICS_NORTH_WEST_HEADER_NAME;
+      delete process.env.ICS_NORTH_WEST_HEADER_VALUE;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

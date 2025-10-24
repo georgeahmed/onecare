@@ -336,8 +336,14 @@ function mergeRules(
     merged.exclusions = Array.from(exclusions);
   }
 
-  if (!merged.age && !merged.sex && !merged.severity && !merged.exclusions) {
-    return undefined;
+  const hasAnyConstraint =
+    Boolean(merged.age) ||
+    Boolean(merged.sex && merged.sex.length > 0) ||
+    Boolean(merged.severity && ((merged.severity.allowed && merged.severity.allowed.length > 0) || (merged.severity.blocked && merged.severity.blocked.length > 0))) ||
+    Boolean(merged.exclusions && merged.exclusions.length > 0);
+
+  if (!hasAnyConstraint) {
+    return base || override ? {} : undefined;
   }
 
   return merged;
@@ -371,7 +377,10 @@ function buildServiceRequest(ctx: PharmacyContext): CpcsServiceRequest {
       : typeof ctx.patient?.id === 'string' && ctx.patient.id.trim().length > 0
         ? ctx.patient.id.trim()
         : undefined;
-  const patientReference = rawPatientId ? `Patient/${rawPatientId}` : 'Patient/unknown';
+  if (!rawPatientId) {
+    throw new Error('patient_id_missing');
+  }
+  const patientReference = `Patient/${rawPatientId}`;
   return {
     id: `sr-${ctx.id}`,
     patientReference,
@@ -445,18 +454,39 @@ async function notifyPatient(ctx: PharmacyContext): Promise<void> {
 }
 
 function buildOutcomeBundle(ctx: PharmacyContext): FhirBundle {
+  const serviceRequestId = ctx.serviceRequest?.id ?? `sr-${ctx.id}`;
+  const patientReference =
+    ctx.serviceRequest?.patientReference ??
+    (ctx.patientId && ctx.patientId.trim().length > 0
+      ? `Patient/${ctx.patientId.trim()}`
+      : ctx.patient?.id && ctx.patient.id.trim().length > 0
+        ? `Patient/${ctx.patient.id.trim()}`
+        : undefined);
+  if (!patientReference) {
+    throw new Error('patient_id_missing');
+  }
+  const referralStatus = ctx.referralResult?.status;
+  const serviceRequestStatus =
+    referralStatus === 'accepted'
+      ? 'active'
+      : referralStatus === 'queued'
+        ? 'on-hold'
+        : referralStatus === 'rejected'
+          ? 'revoked'
+          : 'draft';
   return {
     id: `bundle-${ctx.id}`,
     resourceType: 'Bundle',
     type: 'transaction',
     entry: [
       {
-        request: { method: 'POST', url: 'ServiceRequest' },
+        request: { method: 'PUT', url: `ServiceRequest/${serviceRequestId}` },
         resource: {
           resourceType: 'ServiceRequest',
-          id: ctx.serviceRequest?.id ?? `sr-${ctx.id}`,
-          status: ctx.referralResult?.status === 'accepted' ? 'active' : 'revoked',
+          id: serviceRequestId,
+          status: serviceRequestStatus,
           intent: 'order',
+          subject: { reference: patientReference },
           code: {
             coding: [
               {

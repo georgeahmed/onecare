@@ -16,7 +16,7 @@ groups:
         annotations:
           summary: "Booking latency exceeds 1.2s p95"
           description: "Booking HTTP p95 latency exceeded 1.2s for 15 minutes."
-          runbook: https://onecare/runbooks/booking-latency
+          runbook: https://onecare/runbooks/oncall#booking-latency
       - alert: BookingErrorRateSLO
         expr: |
           (
@@ -32,4 +32,4 @@ groups:
         annotations:
           summary: "Booking error rate >2%"
           description: "Booking HTTP error rate exceeded 2% over the last 10 minutes."
-          runbook: https://onecare/runbooks/booking-errors
+          runbook: https://onecare/runbooks/oncall#error-budget-response

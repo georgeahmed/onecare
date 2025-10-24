@@ -100,6 +100,12 @@ const en = {
   'case.action.confirm.book': 'Book this appointment slot?',
   'case.error.missingId': 'Request id missing.',
   'case.error.scheduleMissing': 'Choose a date and time before scheduling.',
+  'case.error.scheduleInvalid': 'Enter a valid date and time before scheduling.',
+  'case.error.assistMissingTime': 'Select a start and end time before completing assisted booking.',
+  'case.error.assistInvalid': 'Ensure the assisted booking end time is after the start time.',
+  'case.assisted.validation': 'Please ensure end time is after start time.',
+  'case.assisted.validation.missing': 'Select a start and end time.',
+  'case.assisted.valid': 'Selection looks good.',
   'case.error.notFound': 'We could not find that request.'
 } as const;
 

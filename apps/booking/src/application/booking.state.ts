@@ -56,6 +56,7 @@ export interface BookingContext extends MachineContext {
   idempotencyStore?: IdempotencyStore;
   idempotencyKey?: string;
   idempotencyTtlSeconds?: number;
+  featureFlags?: BookingFeatureFlags;
 }
 
 ensureTracing('booking');
@@ -635,4 +636,7 @@ async function publishAppointmentDlq(
       reason: dlqError instanceof Error ? dlqError.message : 'unknown_error',
     });
   }
+}
+export interface BookingFeatureFlags {
+  gpConnectBooking?: boolean;
 }

@@ -25,6 +25,10 @@ HTTP Interfaces
   - Produces GP Connect `/Appointment` POST; on success persists Appointment/Task updates (when configured) and publishes booking events.  
   - Supplies `x-idempotency-key` header downstream via bus metadata; duplicates resolve using the injected store.  
   - Returns confirmation payload with sanitized identifiers.
+- `POST /booking/assisted`  
+  - Validates against `schemas/booking/assisted-outcome.json`.  
+  - Records staff-assisted outcomes (booked/no-time/pharmacy-referral), writes the supporting Appointment (local record), updates/notes the originating `Task`, and emits `Topics.booking.assistedCompleted`.  
+  - Available regardless of the GP Connect feature flag; use when staff confirm bookings inside clinical systems.
 - `GET /healthz` and `GET /readyz`  
   - Liveness/readiness checks; readiness caches GP Connect status for `BOOKING_READINESS_CACHE_MS`.
 
@@ -42,6 +46,8 @@ Configuration
 - HTTP Adapter
   - `BOOKING_HTTP_CONCURRENCY` — per-route concurrency guard (defaults in code).
   - `BOOKING_READINESS_CACHE_MS` — readiness memoization window.
+- Feature Flags
+  - `feature_flags.gp_connect_booking` (default `false`) — when disabled, `/booking/appointments` responds `403` and clients should use `/booking/assisted` instead. Enable only after practices have opted into direct GP Connect autobooking.
 - Observability
   - `BOOKING_LOG_LEVEL`, OpenTelemetry environment variables for tracing, and log sinks per deployment standards.
 
@@ -59,6 +65,7 @@ Events & Downstream Effects
 - Queue notifications default to `booking.notifications`; payload includes slot metadata and hashed patient fingerprint for reconciliation.
 - Audit trail writes `booking.appointment.created` records capturing appointment ID, originating task, correlation ID, and patient hash.
 - DLQ emission uses the shared error envelope contract (`schemas/common/dlq-event.json`) with attempts/error codes for replay.
+- Assisted outcomes publish `Topics.booking.assistedCompleted` envelopes (`schemas/booking/assisted-outcome.json`), recording task ID, outcome, optional Appointment reference, and staff metadata.
 
 Metrics & Telemetry
 -------------------
@@ -79,6 +86,7 @@ Operational Guardrails
 - Idempotency keys derive from hashed patient ID + slot ID + origin (`booking:${fingerprint}:${slotId}:${origin}`); stores must offer `reserve` semantics for at-most-once guarantees.
 - Logs, audit, and DLQ artifacts exclude raw PHI; only hashed identifiers and slot references persist.
 - OAuth tokens refresh ~15 % before expiry; mTLS certificates reload on signal/file change without restart.
+- Monitor `forbidden` responses on `/booking/appointments`; sustained volume indicates `feature_flags.gp_connect_booking=false` without assisted fall-back enabled on the client side.
 
 Example Flow
 ------------
@@ -105,6 +113,25 @@ curl -X POST "$BOOKING_URL/booking/appointments" \
         "slotId": "slot-123",
         "patientId": "patient-456",
         "reason": "Follow-up consultation"
+      }'
+
+# Assisted booking when staff confirm inside EMIS/TPP
+curl -X POST "$BOOKING_URL/booking/assisted" \
+  -H 'content-type: application/json' \
+  -H "x-correlation-id: $CORR" \
+  -d '{
+        "taskId": "Task/12345",
+        "patientId": "Patient/456",
+        "outcome": "booked",
+        "slot": {
+          "start": "2025-10-18T09:00:00Z",
+          "end": "2025-10-18T09:15:00Z",
+          "location": "org-123",
+          "serviceType": "GP"
+        },
+        "recordedAt": "2025-10-18T08:45:00Z",
+        "recordedBy": "clinician-12",
+        "notes": "Booked manually at reception"
       }'
 ```
 

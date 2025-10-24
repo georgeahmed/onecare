@@ -15,4 +15,4 @@ groups:
         annotations:
           summary: "DLQ backlog averaging >100 messages"
           description: "Average pending JetStream deliveries exceeded 100 over the last 10 minutes."
-          runbook: https://onecare/runbooks/dlq-backlog
+          runbook: https://onecare/runbooks/oncall#dlq-remediation

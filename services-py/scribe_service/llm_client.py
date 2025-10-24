@@ -77,10 +77,16 @@ class SummaryLLM:
             "transcript": transcript.strip() if transcript else "",
         }
         context["transcript"] = truncate_to_tokens(context["transcript"], max_tokens)
+        system_section = ""
+        if self.system_prompt:
+            system_section = render_template(self.system_prompt, context).strip()
+            if system_section:
+                system_section = truncate_to_tokens(system_section, max_tokens)
         user_prompt = render_template(self.user_prompt, context)
         user_prompt = truncate_to_tokens(user_prompt, max_tokens)
 
-        source = user_prompt.strip()
+        sections = [section for section in (system_section, user_prompt.strip()) if section]
+        source = "\n\n".join(sections).strip()
         if not source:
             return f"[summary:{self.model_name}] (empty transcript)"
 

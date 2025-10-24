@@ -24,16 +24,16 @@ scrape_configs:
 
   - job_name: services
     honor_timestamps: true
+    metrics_path: /metrics
     static_configs:
       - targets:
-          - orchestrator:9464
-          - analytics:9464
-          - booking:9464
+          - orchestrator:3001
+          - safety-gate:8081
     metric_relabel_configs:
       - action: labeldrop
         regex: '(?i)(user|email|token|password|secret|authorization|session)'
       - action: labeldrop
         regex: '(?i)(trace.*|span.*|request.*|correlation.*)'
       - source_labels: [__name__]
-        regex: '(http_server_duration_(bucket|sum|count)|booking_http_.+|gp_connect_.+|booking_event_.+)'
+        regex: '(http_server_duration_(bucket|sum|count)|http_server_requests_total|http_server_errors_total|booking_http_.+|gp_connect_.+|booking_event_.+|safety_gate_request_latency_seconds_(bucket|sum|count)|safety_gate_requests_total|safety_gate_queue_depth|telephony_http_.+|telephony_reject_total|telephony_queue)'
         action: keep

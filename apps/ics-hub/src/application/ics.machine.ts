@@ -67,4 +67,7 @@ export async function runIcsMachine(
     }
     await machine.dispatch(event);
   }
+
+  // Execute the terminal state's handler once to flush side effects (ack publication, etc.).
+  await machine.dispatch(event);
 }

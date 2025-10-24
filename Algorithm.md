@@ -9,7 +9,7 @@
 - 1) System Orchestrator
 - 2) Access Front Door (Portal, Safety Gate, Telephony Parity)
 - 3) AI Triage, SLA Aging, De‑dup
-- 4) Booking (Local, PCN EA, GP Connect)
+- 4) Booking (Search, Assisted, GP Connect)
 - 5) Pharmacy First Router
 - 6) Capacity Shaper & Access Co‑Pilot
 - 7) Ambient Scribe & Summarisation
@@ -22,6 +22,7 @@
 - 14) Failure Modes & Fallbacks
 - Appendices (A–G)
 - Glossary
+- Implementation Notes — Send Document Rollout
 - Developer Notes
 
 ## 0) Scope, Principles & Architecture
@@ -91,6 +92,21 @@ SCRIBE = {                           # ambient scribe controls
   TERMINOLOGY: { condition: "SNOMED-CT", medication: "dm+d" },
   TIMEOUT_MS: 30000,
   FALLBACK_MODE: "transcript"        # transcript | template | none
+}
+MESSAGING_SEND_DOCUMENT = {          # GP Connect Messaging (Send Document v2.0)
+  MESH: {
+    WORKFLOW_ID: "GPCONNECT_SEND_DOCUMENT",
+    ACK_WORKFLOW_ID: "GPCONNECT_SEND_DOCUMENT_ACK",
+    SENDER_MAILBOX: "<MESH ID>",     # site-specific MESH mailbox
+    ACK_TIMEOUT_MINUTES: 30,
+    MAX_RETRIES: 5,
+    BACKOFF_SCHEDULE_MINUTES: [1, 5, 15, 60, 180]
+  },
+  PDS_LOOKUP: true,
+  PDF_MAX_MB: 10
+}
+FEATURE_FLAGS = {
+  GP_CONNECT_BOOKING: false          # lock autobooking behind a feature flag
 }
 ```
 
@@ -187,6 +203,19 @@ ambient_scribe:
     medication: "dm+d"                  # UK meds coding
   timeout_ms: 30000
   fallback_mode: "transcript"
+messaging:
+  send_document:
+    mesh:
+      workflow_id: "GPCONNECT_SEND_DOCUMENT"
+      ack_workflow_id: "GPCONNECT_SEND_DOCUMENT_ACK"
+      sender_mailbox: "MESH1234"        # site-specific MESH mailbox ID
+      ack_timeout_minutes: 30
+      max_retries: 5
+      backoff_schedule: ["PT1M", "PT5M", "PT15M", "PT1H", "PT3H"]
+    pds_lookup: true
+    pdf_max_mb: 10
+feature_flags:
+  gp_connect_booking: false             # enable when national booking API ready
 security:
   audit_all_events: true
   worm_audit_store: true
@@ -253,9 +282,10 @@ graph TD
 
   EB[(Event Bus)]
   OBS[Observability/SIEM]
-  GP[GP Connect]
+  GP[GP Connect Messaging (Send Document)]
   CPCS[CPCS/Pharmacy]
   OOH[Out-of-Hours Provider]
+  STAFF[Staff action in GP system (assisted)]
 
   P -->|portal.submission| O
   T -->|telephony.call.transcribed| O
@@ -265,6 +295,7 @@ graph TD
   TR -->|tasks.created| FHIR
   TR --> BK
   BK -->|search/book| GP
+  BK --> STAFF
   PH --> CPCS
   SC --> EB
   ICS --> GP
@@ -317,6 +348,26 @@ sequenceDiagram
   Tri-->>IVR: Priority (tentative)
   IVR-->>Caller: Offer CALLBACK_WINDOWS_BY_PRIORITY
 ```
+---
+
+Send Document Delivery (GP Connect Messaging)
+```mermaid
+sequenceDiagram
+  participant Q as Clinician Queue
+  participant SD as Send-Document Service
+  participant M as MESH
+  participant GP as Registered GP System
+  Q->>SD: task.ready (triage summary)
+  SD->>SD: Build PDF + FHIR Composition (DocumentReference)
+  SD->>SD: PDS lookup -> registered practice ODS
+  SD->>M: Send ITK3/FHIR payload
+  M-->>GP: Route using mex-to (GPPROVIDER_NHS/DOB/Surname)
+  GP-->>M: ACK (GPCONNECT_SEND_DOCUMENT_ACK)
+  M-->>SD: ACK/NACK
+  SD->>Q: mark delivered / retry / escalate
+```
+*(Why: Send Document uses MESH + ITK3; it’s a FHIR message to the registered practice.)* (NHS England Digital)
+
 ---
 
 ## 1) System Orchestrator (Event‑Driven Core)
@@ -643,7 +694,7 @@ Deduplicate(doc, window=Config.triage.dedup_window, tau=Config.triage.sim_thresh
 
 ---
 
-## 4) Booking — Local, PCN Enhanced Access & GP Connect Broker
+## 4) Booking — Search & Assisted (MVP) + GP Connect
 
 ### 4.1 Search & Rank
 <details>
@@ -671,12 +722,38 @@ SearchAndRankAppointments(request):
 </details>
 **Outputs:** Ranked options (typically top 3–5) for patient/clinician choice.
 
-### 4.2 Federated Book via GP Connect
+### 4.2 Assisted booking (MVP)
+- **Console experience:** Surface the ranked recommendations (top 3–5 windows) with context, travel fit, and fairness indicators. Provide a **“Book in clinical system”** call-to-action when the care team confirms a slot in EMIS/TPP/SystemOne.  
+- **State updates:** On confirmation, persist a local `Appointment` (status=`booked`) linked to the originating `Task`, capture the booked window, and record whether the patient accepted/declined.  
+- **Task lifecycle:** Close the task with outcome metadata (`booked`, `no suitable time`, `pharmacy referral sent`) and emit the relevant audit + event (`booking.assisted.completed`).  
+- **Retry/updates:** Allow the task to remain open with a note if staff cannot secure a slot, keeping it on the waitlist view for follow-up.
+
+```pseudocode
+AssistedBook(task, recommendation, staffOutcome):
+  options := SearchAndRankAppointments(task.request)
+  ShowTopK(options, k=5)
+  if staffOutcome == "booked":
+     appt := RecordLocalAppointment(task.patient, recommendation.slot, status="booked")
+     CloseTask(task, outcome="booked", appointment=appt)
+  elif staffOutcome == "no_time":
+     LogAttempt(task, note="No suitable time in clinical system")
+     ReturnToQueue(task)
+  elif staffOutcome == "pharmacy_referral_sent":
+     UpdateTask(task, status="completed", outcome="pharmacy_referral")
+  EmitAudit("booking.assisted", {task, staffOutcome})
+  PublishEvent("booking.assisted.completed", {task.id, staffOutcome})
+```
+
+### 4.3 GP Connect autobooking (future)
+> Guarded by `FEATURE_GP_CONNECT_BOOKING=false` until national booking APIs mature and practices opt in.
+
 <details>
 <summary>View Federated Booking</summary>
 
 ```pseudocode
 FederatedBook(slot, patient, reason):
+  if !FeatureFlags.gp_connect_booking:
+     return FEATURE_DISABLED
   if !EligibilityCheck(slot.org, patient): return INELIGIBLE
   appt := BuildFHIRAppointment(slot, patient, reason)         # status=booked, participants
   if !GPConnectCreate(slot.org, appt): return CONFLICT_OR_FAIL
@@ -687,7 +764,7 @@ FederatedBook(slot, patient, reason):
 
 </details>
 
-Sequence (Booking via GP Connect)
+Sequence (Booking via GP Connect — feature-flagged)
 ```mermaid
 sequenceDiagram
   participant UI as "Portal/Clinician UI"
@@ -707,6 +784,7 @@ sequenceDiagram
 ---
 
 ## 5) Pharmacy First Router (minor ailments deflection)
+*Pharmacy → GP writeback occurs natively inside GP systems; OneCare listens for the outcome and closes the originating Task. No onboarding for Update Record is required.*
 
 ### 5.1 Condition Classification & Eligibility
 <details>
@@ -1040,8 +1118,9 @@ Notes: Example defaults from the report include URGENT contact within 2 hours an
 ---
 
 ## 11) Identity, Authorization, Consent & Safety Gates
+*Patient-facing modules never call GP Connect directly. All GP Connect interactions stay staff-side and, for Send Document, are application-restricted via MESH with local RBAC enforcing access.* (NHS England Digital)
 
-### 11.1 Authorization = RBAC + Relationship + ABAC + Purpose‑of‑Use
+### 11.1 Authorization = RBAC + Relationship + ABAC + Purpose-of-Use
 <details>
 <summary>View Authorization</summary>
 
@@ -1137,17 +1216,20 @@ ModelLifecycle(model):
 
 ---
 
-## 14) Failure Modes & Fallbacks (fail‑safe)
+## 14) Failure Modes & Fallbacks (fail-safe)
 
+- **Send Document ACK delay:** If no ACK within `ack_timeout_minutes`, retry with exponential backoff up to `max_retries`; after that, raise a worklist alert and permit NHSmail fallback per site policy.
+- **Duplicate message protection:** Enforce idempotency via `DocumentReference.identifier` and unique `mex-localid` values when sending to MESH.
+- **Routing failures:** Re-check NHS number/DOB/surname formatting, refresh the registered practice via PDS lookup, and rebuild the MESH headers before retrying.
 - **ASR down:** route to receptionist/voicemail; store audio; later transcription; manual notes UI.  
-- **LLM unavailable:** show raw transcript; template summaries; rule‑based triage.  
+- **LLM unavailable:** show raw transcript; template summaries; rule-based triage.  
 - **ML triage scoring unavailable:** fall back to config-driven rules (`triage.fallback`). Reuse `triage.score_weights` + `priority_thresholds`, scan narrative for `config.red_flag_set` to force `STAT/URGENT`, emit reason codes (`rule:red_flag:*`, `rule:fallback:*`), and return a decision within `time_budget_ms`.  
 - **Connector outage (e.g., GP Connect):** cache reads, queue writes, inform users; retry on recovery.  
 - **High-risk with no capacity:** auto-escalate to on-call/PCN/OoH; advise patient to 111/A&E; management alert.  
 - **Portal down in hours:** auto-restart, incident alert, contingency message; recorded in uptime KPI.  
 - **Infra/data incidents:** backups, failover; emergency mode for demand surges.
 - **Mass demand surge (e.g., winter pressures/pandemic):** broadcast delay messaging, expand callback windows per `CALLBACK_WINDOWS_BY_PRIORITY`, adjust templates while preserving urgent floors; notify PCN/ICS for mutual aid.
- - **OOH handover:** when outside core hours and high‑risk cases occur, perform warm handover to local out‑of‑hours provider (with consent or emergency basis) and inform patient with instructions (111/AE as appropriate).
+- **OOH handover:** when outside core hours and high-risk cases occur, perform warm handover to local out-of-hours provider (with consent or emergency basis) and inform patient with instructions (111/AE as appropriate).
 
 ---
 
@@ -1202,6 +1284,7 @@ POST /portal/submissions            -> creates FHIR QuestionnaireResponse/Commun
 GET  /clinician/tasks               -> query FHIR Task for team/owner/status
 POST /booking/search                -> federated search (Slot search)
 POST /booking/federated             -> GP Connect book Appointment
+POST /messaging/send-document       -> packages ITK3 payload, sets MESH headers, sends PDF + bundle, returns messageId
 POST /pharmacy/route                -> Pharmacy First evaluation + referral
 POST /copilot/proposal/apply        -> manager approval to apply action
 GET  /compliance/kpis               -> KPI dashboard feed
@@ -1226,9 +1309,10 @@ All endpoints enforce authZ + consent; outputs filtered by policy.
 
 ## Appendix E — Event Topics (examples)
 - `portal.submission.created`, `telephony.call.transcribed`, `triage.input`, `tasks.created`  
-- `booking.search.requested`, `booking.appointment.booked`, `pharmacy.referral.sent`  
+- `booking.search.requested`, `booking.assisted.completed`, `booking.appointment.booked`, `pharmacy.referral.sent`  
+- `messaging.senddoc.requested`, `messaging.senddoc.sent`, `messaging.senddoc.ack`, `messaging.senddoc.nack`, `messaging.senddoc.retry`  
 - `copilot.proposal.created`, `copilot.proposal.approved`, `analytics.kpi.updated`, `audit.*`  
-- `ooh.handover.sent`, `ooh.handover.ack` (out‑of‑hours warm handover lifecycle)
+- `ooh.handover.sent`, `ooh.handover.ack` (out-of-hours warm handover lifecycle)
 - `safeguard.diverted`, `safeguard.safe` (outcomes of SafeguardGate)
 - `scribe.draft.created`, `scribe.finalized`, `scribe.fallback.used` (ambient scribe lifecycle)
 
@@ -1285,16 +1369,35 @@ NHS Enhanced Access DES; Pharmacy First service; GP Connect Appointment Manageme
 
 ## Glossary
 - FHIR: HL7 Fast Healthcare Interoperability Resources standard
-- GP Connect: NHS interface for cross‑org appointment booking and data access
+- GP Connect: NHS interface for cross-org appointment booking and data access
 - CPCS: Community Pharmacist Consultation Service (Pharmacy First referrals)
 - PCN: Primary Care Network
-- OOH: Out‑of‑hours provider/service
+- OOH: Out-of-hours provider/service
 - SIEM: Security Information and Event Management system
 - WORM: Write Once Read Many (immutable storage)
 
+## Implementation Notes — Send Document Rollout
+- **A) Build “Send Document v2.0” service**
+  - Compose payload with the existing PDF triage summary + FHIR `Composition`/`DocumentReference` bundle wrapped in ITK3 v2.0 headers.
+  - Set MESH headers (`mex-to`, `mex-workflowid`, `mex-subject`, `mex-localid`) using NHS number, DOB (YYYYMMDD), and surname per guidance.
+  - Always route to the registered practice after a PDS lookup; treat business + technical ACKs and update the originating `Task`.
+  - On NACK, surface the reason, retry per config, and escalate if exhausted.
+- **B) Config (new keys)**
+  - Populate `messaging.send_document.mesh.*` values, `ack_timeout_minutes`, `max_retries`, and `backoff_schedule`.
+  - Enable `messaging.send_document.pds_lookup` and enforce `pdf_max_mb` limits aligned with receiver constraints.
+  - Keep `feature_flags.gp_connect_booking = false` until practices approve autobooking.
+- **C) Assisted booking UI**
+  - Show the ranked Top 3–5 windows with contextual cues.
+  - Provide quick actions: “Booked in EMIS/TPP”, “No suitable time”, “Pharmacy referral sent”.
+  - When marked “Booked”, create/update the local FHIR `Appointment` and close the task with audit + notifications.
+- **D) Onboarding steps (parallel work)**
+  - Submit the NHS use case form and request Path to Live access for Send Document.
+  - Secure the MESH mailbox, complete ITK3 conformance, and prepare DCB0129/0160 safety case evidence.
+  - Schedule sender testing with NHS England Digital before go-live.
+
 ## Developer Notes
-- Pseudocode convention: TitleCase functions with explicit inputs/outputs; side‑effects publish to `Event Bus` and persist to `FHIR` atomically where relevant.
-- All patient data is FHIR‑first; binaries are stored via `Binary`/`DocumentReference` with hash and mediaType.
+- Pseudocode convention: TitleCase functions with explicit inputs/outputs; side-effects publish to `Event Bus` and persist to `FHIR` atomically where relevant.
+- All patient data is FHIR-first; binaries are stored via `Binary`/`DocumentReference` with hash and mediaType.
 - Every externally visible change emits an event and an immutable audit record with correlation/causation IDs.
 - Safety gates precede AI decisions; any AI suggestion with clinical impact requires human confirmation.
 - Config is environment/tenant scoped; defaults shown in the YAML example should be overridden per practice/PCN.

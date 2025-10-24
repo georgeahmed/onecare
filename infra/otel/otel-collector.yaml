@@ -19,7 +19,8 @@ processors:
     policies:
       - name: errors
         type: status_code
-        status_code: ERROR
+        status_code:
+          status_codes: [ERROR]
       - name: slow-traces
         type: latency
         latency:

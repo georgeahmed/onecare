@@ -3,7 +3,7 @@
 Changes to JSON Schemas or generated models must not silently diverge from tests. The following guardrails catch drift early.
 
 ## Automated Checks
-1. **Code generation parity** — `npm run codegen:check` runs in CI before tests. Regenerate artifacts with `npm run codegen` if schemas change, then commit the updated TypeScript/Python models.
+1. **Code generation parity** — `npm run codegen:check` runs in CI before tests. Regenerate artifacts with `npm run --workspaces=false codegen` if schemas change, then commit the updated TypeScript/Python models.
 2. **Snapshot validation** — `qa/contracts/snapshots/*.json` capture representative payloads for critical contracts. `qa/contracts/snapshots.spec.ts` validates each snapshot against the schema and the envelope helper. Schema changes that alter shape will fail this suite until the snapshots are deliberately refreshed.
 3. **Property tests** — `qa/contracts/property.spec.ts` exercises generators and near-misses to ensure allowed ranges stay stable.
 
@@ -11,7 +11,7 @@ Changes to JSON Schemas or generated models must not silently diverge from tests
 1. Modify the JSON Schema under `schemas/` and bump the `$id` if the change is breaking.
 2. Run:
    ```bash
-   npm run codegen
+  npm run --workspaces=false codegen
    npm run typecheck
    npm run test -- --run qa/contracts
    ```

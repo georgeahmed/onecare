@@ -55,7 +55,9 @@ export interface FetchBookingSlotsOptions {
   correlationId?: string;
 }
 
-const normalizeBookingModality = (value: unknown): BookingModality | null => {
+const normalizeBookingModality = (
+  value: unknown
+): { canonical: BookingModality; raw: string } | null => {
   if (typeof value !== 'string') {
     return null;
   }
@@ -65,12 +67,12 @@ const normalizeBookingModality = (value: unknown): BookingModality | null => {
   }
   const canonical = normalized.replace(/[\s-]+/g, '_');
   if (canonical === 'phone' || canonical === 'telephone') {
-    return 'phone';
+    return { canonical: 'phone', raw: value.trim() };
   }
   if (canonical === 'in_person' || canonical === 'inperson' || canonical === 'in_person_visit') {
-    return 'in_person';
+    return { canonical: 'in_person', raw: value.trim() };
   }
-  return null;
+  return { canonical: 'unknown', raw: value.trim() };
 };
 
 const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
@@ -96,7 +98,8 @@ const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
     id,
     start,
     end,
-    modality,
+    modality: modality.canonical,
+    originalModality: modality.canonical === 'unknown' ? modality.raw : undefined,
     serviceType: serviceType && serviceType.length > 0 ? serviceType : undefined,
     location
   };
@@ -177,6 +180,36 @@ export const fetchBookingSlots = async (
   }
 };
 
+const mapStatusToErrorCode = (status: number): ErrorObject['code'] | null => {
+  switch (status) {
+    case 400:
+    case 422:
+      return 'invalid_input';
+    case 401:
+      return 'unauthorized';
+    case 403:
+      return 'forbidden';
+    case 404:
+      return 'not_found';
+    case 405:
+      return 'unsupported_media_type';
+    case 408:
+      return 'upstream_timeout';
+    case 409:
+      return 'conflict';
+    case 413:
+      return 'payload_too_large';
+    case 415:
+      return 'unsupported_media_type';
+    case 429:
+      return 'too_many_requests';
+    case 503:
+      return 'upstream_unavailable';
+    default:
+      return null;
+  }
+};
+
 const normalizeErrorEnvelopeFromHttpError = (error: HttpError): ErrorEnvelope => {
   const fallback = {
     error: {
@@ -232,6 +265,17 @@ const normalizeErrorEnvelopeFromHttpError = (error: HttpError): ErrorEnvelope =>
         correlationId: error.correlationId ?? getSessionCorrelationId()
       }
     } satisfies ErrorEnvelope;
+  }
+
+  const mappedCode = mapStatusToErrorCode(error.status);
+  if (mappedCode) {
+    return {
+      error: {
+        code: mappedCode,
+        message: fallback.error.message,
+        correlationId: fallback.error.correlationId
+      }
+    };
   }
 
   return fallback;

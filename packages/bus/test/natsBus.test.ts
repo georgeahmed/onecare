@@ -47,6 +47,9 @@ const SECURITY_ENV_KEYS = [
   'NATS_CREDS_PATH',
   'BUS_READY_PENDING_LAG',
   'BUS_IMPL',
+  'NATS_USER',
+  'NATS_PASS',
+  'NATS_TOKEN',
 ];
 
 function resetSecurityEnv(): void {
@@ -153,6 +156,35 @@ describe('getBus', () => {
     const { connection } = createConnectionStub();
     const bus = getBus({ connection: connection as any });
     expect(bus).toBeInstanceOf(NatsBus);
+  });
+});
+
+describe('NatsBus configuration', () => {
+  afterEach(() => {
+    resetSecurityEnv();
+  });
+
+  it('normalizes server entries without a scheme to use the nats scheme', () => {
+    const bus = new NatsBus({ url: 'localhost:4222, nats://demo-broker:4223 ' });
+    const options = (bus as any).buildConnectionOptions();
+    expect(options.servers).toEqual(['nats://localhost:4222', 'nats://demo-broker:4223']);
+  });
+
+  it('strips credentials from server entries and applies them as auth hints', () => {
+    delete process.env.NATS_USER;
+    delete process.env.NATS_PASS;
+    const bus = new NatsBus({ url: 'nats://demo-user:demo-pass@broker.internal:4222' });
+    const options = (bus as any).buildConnectionOptions();
+    expect(options.servers).toEqual(['nats://broker.internal:4222']);
+    expect(options.user).toBe('demo-user');
+    expect(options.pass).toBe('demo-pass');
+  });
+
+  it('throws a descriptive error when server entries are invalid', () => {
+    const bus = new NatsBus({ url: '://broken-url' });
+    expect(() => (bus as any).buildConnectionOptions()).toThrow(
+      '[NatsBus] Invalid NATS server URL: ://broken-url',
+    );
   });
 });
 

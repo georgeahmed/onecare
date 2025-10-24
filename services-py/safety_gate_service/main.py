@@ -53,7 +53,7 @@ from .predict import (
 from .shadow_eval import ShadowEvaluator
 from .preprocess import NarrativeValidationError, validate_narrative
 from .language import normalize_narrative
-from .determinism import set_seed
+from .determinism import seed_was_randomized, set_seed
 
 
 LOGGER = logging.getLogger("safety_gate_service.main")
@@ -288,16 +288,34 @@ class BatchProcessor:
         self.last_batch_size = len(batch)
         record_batch_metrics(len(batch))
         try:
+            pending: list[tuple[asyncio.Future[Any], Awaitable[Any]]] = []
+            immediate_errors: list[tuple[asyncio.Future[Any], Exception]] = []
             for factory, future in batch:
                 if future.cancelled():
                     continue
                 try:
-                    result = await factory()
+                    coroutine = factory()
                 except Exception as exc:  # pragma: no cover - propagated to caller
                     if not future.cancelled():
-                        future.set_exception(exc)
-                else:
-                    if not future.cancelled():
+                        immediate_errors.append((future, exc))
+                    continue
+                pending.append((future, coroutine))
+
+            for future, exc in immediate_errors:
+                if not future.cancelled():
+                    future.set_exception(exc)
+
+            if pending:
+                results = await asyncio.gather(
+                    *(coro for _, coro in pending),
+                    return_exceptions=True,
+                )
+                for (future, _), result in zip(pending, results):
+                    if future.cancelled():
+                        continue
+                    if isinstance(result, Exception):
+                        future.set_exception(result)
+                    else:
                         future.set_result(result)
         finally:
             self._processing = False
@@ -352,11 +370,17 @@ class ConcurrencyLimiter:
                 update_queue_depth(self._waiting)
                 queued = True
         try:
-            await asyncio.wait_for(
-                self._semaphore.acquire(),
-                timeout=self._wait_timeout if self._wait_timeout > 0 else None,
-            )
-            acquired = True
+            if self._wait_timeout == 0:
+                if self._semaphore.locked():
+                    raise asyncio.TimeoutError()
+                await self._semaphore.acquire()
+                acquired = True
+            else:
+                await asyncio.wait_for(
+                    self._semaphore.acquire(),
+                    timeout=self._wait_timeout,
+                )
+                acquired = True
         except asyncio.TimeoutError:
             if queued:
                 async with self._lock:
@@ -411,7 +435,7 @@ def _feature_logging_enabled() -> bool:
 
 
 def _feature_log_endpoint() -> Optional[str]:
-    candidate = os.getenv(_FEATURE_LOG_ENDPOINT_ENV, "http://orchestrator:3001/feature-log")
+    candidate = os.getenv(_FEATURE_LOG_ENDPOINT_ENV, "https://orchestrator:3001/feature-log")
     trimmed = candidate.strip()
     if not trimmed:
         return None
@@ -627,6 +651,9 @@ async def _log_safety_features(
     lexical_hits: list[str],
     consent_reference: Optional[str],
 ) -> None:
+    if _current_environment() in _PROD_ENV_VALUES:
+        LOGGER.debug("Feature logging suppressed in production environment")
+        return
     feature_packet: dict[str, Any] = {
         "classifier": {
             "probEmergency": classification.get("prob_emergency"),
@@ -932,7 +959,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.model_metadata = {}
     app.state.performance = _load_performance_settings()
     seed_value = set_seed(os.getenv("SAFETY_GATE_SEED"))
-    LOGGER.info("safety_gate.seed configured seed=%s", seed_value)
+    if seed_was_randomized():
+        LOGGER.info("safety_gate.seed configured mode=randomized")
+    else:
+        LOGGER.info("safety_gate.seed configured seed=%s", seed_value)
     load_start = time.perf_counter()
     try:
         classifier = get_classifier()
@@ -1187,6 +1217,8 @@ async def analyze(
                 acuity_model=acuity_model,
                 config=decision_config,
                 correlation_id=correlation_id,
+                language=language_info,
+                translated=translated,
             )
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
@@ -1240,7 +1272,12 @@ async def analyze(
                     translated=getattr(request.state, "language_translated", False),
                 )
 
-            if _feature_logging_enabled() and sample_rate > 0:
+            allow_feature_logging = (
+                _feature_logging_enabled()
+                and sample_rate > 0
+                and _current_environment() not in _PROD_ENV_VALUES
+            )
+            if allow_feature_logging:
                 feature_draw = sample_draw if sample_draw is not None else random.random()
                 if feature_draw <= sample_rate:
                     await _log_safety_features(

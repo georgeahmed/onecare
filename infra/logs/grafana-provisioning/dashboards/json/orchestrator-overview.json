@@ -36,7 +36,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{route=\"/safety-check\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{service=\"orchestrator\",route=\"/safety-check\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95 latency",
           "refId": "A"
         }
@@ -61,7 +61,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (sum(rate(http_server_requests_total{route=\"/safety-check\",status=~\"5..\"}[$__rate_interval])) / max(sum(rate(http_server_requests_total{route=\"/safety-check\"}[$__rate_interval])), 1))",
+          "expr": "100 * (sum(rate(http_server_requests_total{service=\"orchestrator\",route=\"/safety-check\",status=~\"5..\"}[$__rate_interval])) / max(sum(rate(http_server_requests_total{service=\"orchestrator\",route=\"/safety-check\"}[$__rate_interval])), 1))",
           "legendFormat": "error rate",
           "refId": "A"
         }

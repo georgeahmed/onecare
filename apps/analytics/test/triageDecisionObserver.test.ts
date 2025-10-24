@@ -45,6 +45,27 @@ describe('TriageDecisionObserver', () => {
 
     expect(getCounterRecords('analytics.triage_decision.observed_total')).toHaveLength(0);
     expect(getCounterRecords('analytics.triage_decision.duplicate_total')).toHaveLength(0);
+    expect(getCounterRecords('analytics.triage_decision.invalid_total')).toHaveLength(1);
+
+    await observer.stop();
+  });
+
+  it('suppresses replayed envelopes via idempotency guard', async () => {
+    const observer = new TriageDecisionObserver({ bus });
+    await observer.start();
+
+    const decision: TriageDecision = {
+      patientId: 'patient-999',
+      score: 0.42,
+      priority: 'ROUTINE',
+    };
+
+    const envelope = createEnvelope(Topics.triage.decision ?? 'triage.decision', decision, 'corr-replay');
+    await bus.publish(Topics.triage.decision ?? 'triage.decision', envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+    await bus.publish(Topics.triage.decision ?? 'triage.decision', envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
+
+    expect(getCounterRecords('analytics.triage_decision.observed_total')).toHaveLength(1);
+    expect(getCounterRecords('analytics.triage_decision.replay_suppressed_total')).toHaveLength(1);
 
     await observer.stop();
   });

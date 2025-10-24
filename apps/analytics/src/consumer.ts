@@ -1,10 +1,11 @@
-import type { MessageBus, Subscription } from '@onecare/bus';
-import { getBus, withMessageGuards } from '@onecare/bus';
+import type { Message, MessageBus, Subscription } from '@onecare/bus';
+import { getBus, withMessageGuards, isGuardedBus } from '@onecare/bus';
 import { Topics, type TypedEnvelope, createEnvelope } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
 import type { Metric } from '@onecare/events';
 import { validate, type ValidationError } from '@onecare/domain';
+import { createInMemoryIdempotencyStore } from './idempotencyStore';
 import {
   logger,
   setCorrelationId,
@@ -20,18 +21,22 @@ ensureTracing('analytics-consumer');
 
 const METRIC_SCHEMA_ID = 'https://onecare/schemas/analytics/metric.json';
 const ANALYTICS_ALLOWED_TOPICS = new Set<string>([Topics.analytics.metric, Topics.broker.deadLetter]);
-const LABEL_ALLOWLIST = new Set<string>(['service', 'topic', 'status', 'outcomeCode', 'result', 'source']);
+const DEFAULT_LABEL_KEYS = ['service', 'topic', 'status', 'outcomeCode', 'result', 'source'];
+const { allowAllLabels: ALLOW_ALL_LABELS, keys: LABEL_ALLOWLIST } = buildLabelPolicy(
+  process.env.ANALYTICS_LABEL_ALLOWLIST ?? ''
+);
 const MAX_LABEL_VALUE_LENGTH = 120;
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const PHONE_PATTERN = /\b(?:\+?\d[\d\s-]){7,}\d\b/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
 
-const ingestOkCounter = createCounter('analytics.ingest.ok');
-const ingestErrorCounter = createCounter('analytics.ingest.error');
-const ingestRetryCounter = createCounter('analytics.ingest.retry');
-const ingestDlqCounter = createCounter('analytics.ingest.dlq');
-const ingestLagHistogram = createHistogram('analytics.ingest.lag_ms');
-const sinkLatencyHistogram = createHistogram('analytics.sink.latency_ms');
+const ingestOkCounter = createCounter('analytics_ingest_ok_total');
+const ingestErrorCounter = createCounter('analytics_ingest_error_total');
+const ingestRetryCounter = createCounter('analytics_ingest_retry_total');
+const ingestDuplicateCounter = createCounter('analytics_ingest_duplicate_total');
+const ingestDlqCounter = createCounter('analytics_ingest_dlq_total');
+const ingestLagHistogram = createHistogram('analytics_ingest_lag_ms');
+const sinkLatencyHistogram = createHistogram('analytics_sink_latency_ms');
 
 interface RetryPolicyOptions {
   maxAttempts?: number;
@@ -54,6 +59,8 @@ const DEFAULT_RETRY_POLICY: NormalizedRetryPolicy = {
   jitterRatio: 0.2,
 };
 
+const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+
 export class AnalyticsMetricValidationError extends Error {
   constructor(
     public readonly correlationId: string | undefined,
@@ -74,6 +81,16 @@ export class AnalyticsMetricSinkError extends Error {
   }
 }
 
+export class AnalyticsMetricDlqPublishError extends Error {
+  constructor(
+    public readonly correlationId: string | undefined,
+    public readonly cause: unknown
+  ) {
+    super('failed to publish analytics.metric payload to DLQ');
+    this.name = 'AnalyticsMetricDlqPublishError';
+  }
+}
+
 interface AnalyticsConsumerOptions {
   bus?: MessageBus;
   sink?: AnalyticsSink;
@@ -88,21 +105,37 @@ export class AnalyticsConsumer {
   private readonly sink: AnalyticsSink;
   private readonly schemaId: string;
   private subscription: Subscription | null = null;
-  private readonly idempotencyStore?: IdempotencyStore;
+  private readonly idempotencyStore: IdempotencyStore;
   private readonly idempotencyTtlSeconds: number;
   private readonly retryPolicy: NormalizedRetryPolicy;
 
   constructor(options: AnalyticsConsumerOptions = {}) {
-    const baseBus = options.bus ?? getBus();
-    this.bus = withMessageGuards(baseBus, {
-      allowedTopics: ANALYTICS_ALLOWED_TOPICS,
-    });
+    this.idempotencyStore = options.idempotencyStore ?? createInMemoryIdempotencyStore();
+    const ttl = options.idempotencyTtlSeconds;
+    this.idempotencyTtlSeconds =
+      typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
     this.sink = options.sink ?? createFileSink();
     this.schemaId = options.schemaId ?? METRIC_SCHEMA_ID;
-    this.idempotencyStore = options.idempotencyStore;
-    const ttl = options.idempotencyTtlSeconds;
-    this.idempotencyTtlSeconds = typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? ttl : 5 * 60;
     this.retryPolicy = normalizeRetryPolicy(options.retryPolicy);
+
+    const baseBus = options.bus ?? getBus();
+    const guardOptions = {
+      allowedTopics: ANALYTICS_ALLOWED_TOPICS,
+      idempotencyStore: this.idempotencyStore,
+      idempotencyTtlSeconds: this.idempotencyTtlSeconds,
+      onDuplicate: (message: Message<TypedEnvelope<Metric>>) => {
+        const envelope = message.payload;
+        const duplicateMetricName = envelope?.payload?.name ?? 'unknown';
+        ingestOkCounter.add(1, { metricName: duplicateMetricName, duplicate: true });
+        logger.warn('analytics.metric.duplicate_suppressed', {
+          correlationId: envelope?.correlationId,
+          metricName: duplicateMetricName,
+          envelopeId: envelope?.id,
+        });
+      },
+    };
+
+    this.bus = isGuardedBus(baseBus) ? withMessageGuards(baseBus, guardOptions) : withMessageGuards(baseBus, guardOptions);
   }
 
   async start(): Promise<void> {
@@ -132,11 +165,22 @@ export class AnalyticsConsumer {
       if (!validation.ok) {
         logger.warn('analytics.metric payload failed validation', {
           correlationId,
-          errors: validation.errors,
+          errorCount: validation.errors.length,
+          errors: sanitizeValidationErrors(validation.errors),
         });
         ingestErrorCounter.add(1, { metricName: metric?.name ?? 'unknown', reason: 'validation_failed' });
-        await this.publishToDlq('validation_failed', envelope, {
-          errors: validation.errors.slice(0, 5),
+        await this.publishToDlq({
+          cause: 'validation_failed',
+          sourceEnvelope: envelope,
+          attempts: 1,
+          metricName: metric?.name ?? 'unknown',
+          payloadDetails: {
+            errors: sanitizeValidationErrors(validation.errors),
+          },
+          attributes: {
+            metricName: metric?.name ?? 'unknown',
+            reason: 'validation_failed',
+          },
         });
         return;
       }
@@ -159,19 +203,17 @@ export class AnalyticsConsumer {
     });
   }
 
-  private deriveIdempotencyKey(envelope: TypedEnvelope<Metric>): string {
-    if (envelope.id) {
-      return `analytics:${envelope.id}`;
+  private deriveIdempotencyKey(envelope: TypedEnvelope<Metric>): string | undefined {
+    if (envelope.id && envelope.id.trim().length > 0) {
+      return `analytics:${envelope.id.trim()}`;
     }
-    const metric = envelope.payload;
-    const timestamp = metric.timestamp ?? 'unknown-ts';
-    return `analytics:${metric.name}:${timestamp}`;
+    return undefined;
   }
 
   private async persistWithRetry(input: {
     envelope: TypedEnvelope<Metric>;
     metric: Metric;
-    idempotencyKey: string;
+    idempotencyKey?: string;
     correlationId?: string;
   }): Promise<void> {
     const { envelope, metric, idempotencyKey, correlationId } = input;
@@ -182,42 +224,18 @@ export class AnalyticsConsumer {
     for (let attempt = 1; attempt <= this.retryPolicy.maxAttempts; attempt += 1) {
       const attemptStart = Date.now();
       try {
-        const result = await executeWithIdempotency({
-          store: this.idempotencyStore,
-          key: idempotencyKey,
-          ttlSeconds: this.idempotencyTtlSeconds,
-          execute: async () => {
-            try {
-              await this.sink.write(metric);
-            } catch (err: unknown) {
-              logger.error('analytics metric persistence failed', {
-                correlationId,
-                metricName: metric.name,
-                error: err instanceof Error ? err.message : err,
-              });
-              throw new AnalyticsMetricSinkError(correlationId, err);
-            }
-            return true;
-          },
-          onDuplicate: () => {
-            logger.warn('analytics.metric.duplicate_suppressed', {
-              correlationId,
-              metricName: metric.name,
-              idempotencyKey,
-            });
-          },
-          onError: (error) => {
-            logger.error('analytics.metric.idempotency_failed', {
-              correlationId,
-              metricName: metric.name,
-              idempotencyKey,
-              reason: error instanceof Error ? error.message : 'unknown_error',
-            });
-          },
+        const result = await this.executePersist(metric, {
+          idempotencyKey,
+          correlationId,
         });
 
         if (result.status === 'skipped') {
-          ingestOkCounter.add(1, { ...attributes, duplicate: true });
+          ingestDuplicateCounter.add(1, { ...attributes });
+          logger.warn('analytics.metric.duplicate_suppressed', {
+            correlationId,
+            metricName: metric.name,
+            idempotencyKey,
+          });
           return;
         }
 
@@ -237,26 +255,81 @@ export class AnalyticsConsumer {
         const finalAttempt = attempt >= this.retryPolicy.maxAttempts || !retryable;
         if (!finalAttempt) {
           ingestRetryCounter.add(1, { ...attributes, attempt });
-          const delay = calculateDelay(this.retryPolicy, attempt);
-          logger.warn('analytics.metric.retry_scheduled', {
+          logger.warn('analytics.metric.retry_deferred', {
             correlationId,
             metricName: metric.name,
             attempt,
-            delayMs: delay,
           });
-          await sleep(delay);
           continue;
         }
 
-        ingestErrorCounter.add(1, { ...attributes, attempt, reason: classifyError(error) });
-        ingestDlqCounter.add(1, { ...attributes, attempt, reason: classifyError(error) });
-        await this.publishToDlq('persistence_failed', envelope, {
-          attempt,
-          error: error instanceof Error ? error.message : 'unknown_error',
+        const reason = classifyError(error);
+        ingestErrorCounter.add(1, { ...attributes, attempt, reason });
+        await this.publishToDlq({
+          cause: 'persistence_failed',
+          sourceEnvelope: envelope,
+          attempts: attempt,
+          metricName: metric.name,
+          errorMessage: error instanceof Error ? error.message : 'unknown_error',
+          errorCode: reason,
+          payloadDetails: {
+            attempt,
+          },
+          attributes: {
+            ...attributes,
+            attempt,
+            reason,
+          },
         });
         return;
       }
     }
+  }
+
+  private async executePersist(
+    metric: Metric,
+    context: { idempotencyKey?: string; correlationId?: string }
+  ): Promise<{ status: 'executed' | 'skipped' }> {
+    if (!context.idempotencyKey) {
+      try {
+        await this.sink.write(metric);
+        return { status: 'executed' };
+      } catch (err: unknown) {
+        logger.error('analytics metric persistence failed', {
+          correlationId: context.correlationId,
+          metricName: metric.name,
+          error: err instanceof Error ? err.message : err,
+        });
+        throw new AnalyticsMetricSinkError(context.correlationId, err);
+      }
+    }
+
+    return executeWithIdempotency({
+      store: this.idempotencyStore,
+      key: context.idempotencyKey,
+      ttlSeconds: this.idempotencyTtlSeconds,
+      execute: async () => {
+        try {
+          await this.sink.write(metric);
+        } catch (err: unknown) {
+          logger.error('analytics metric persistence failed', {
+            correlationId: context.correlationId,
+            metricName: metric.name,
+            error: err instanceof Error ? err.message : err,
+          });
+          throw new AnalyticsMetricSinkError(context.correlationId, err);
+        }
+        return true;
+      },
+      onError: (error) => {
+        logger.error('analytics.metric.idempotency_failed', {
+          correlationId: context.correlationId,
+          metricName: metric.name,
+          idempotencyKey: context.idempotencyKey,
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        });
+      },
+    });
   }
 
   private isRetryableError(error: unknown): boolean {
@@ -266,20 +339,49 @@ export class AnalyticsConsumer {
     return true;
   }
 
-  private async publishToDlq(
-    cause: 'validation_failed' | 'persistence_failed',
-    sourceEnvelope: TypedEnvelope<Metric>,
-    details: Record<string, unknown>
-  ): Promise<void> {
+  private async publishToDlq(input: {
+    cause: 'validation_failed' | 'persistence_failed';
+    sourceEnvelope: TypedEnvelope<Metric>;
+    attempts: number;
+    metricName: string;
+    errorCode?: string;
+    errorMessage?: string;
+    payloadDetails?: Record<string, unknown>;
+    attributes?: Record<string, string | number | boolean>;
+  }): Promise<void> {
+    const { cause, sourceEnvelope, attempts, metricName, errorCode, errorMessage, payloadDetails, attributes } = input;
     const correlationId = sourceEnvelope.correlationId;
-    const dlqPayload = {
+    const payloadRef: Record<string, unknown> = {
       cause: `analytics.metric.${cause}`,
-      originalTopic: sourceEnvelope.topic,
-      envelopeId: sourceEnvelope.id,
-      correlationId,
-      metricName: sourceEnvelope.payload.name,
-      details,
+      metricName,
     };
+    if (sourceEnvelope.id) {
+      payloadRef.envelopeId = sourceEnvelope.id;
+    }
+    if (payloadDetails && Object.keys(payloadDetails).length > 0) {
+      payloadRef.details = payloadDetails;
+    }
+    const dlqPayload: Record<string, unknown> = {
+      originalTopic: sourceEnvelope.topic,
+      ts: new Date().toISOString(),
+      attempts,
+      payloadRef,
+    };
+    if (correlationId) {
+      dlqPayload.correlationId = correlationId;
+    }
+    if (errorCode) {
+      dlqPayload.errorCode = errorCode;
+    } else {
+      dlqPayload.errorCode = `analytics.metric.${cause}`;
+    }
+    if (errorMessage) {
+      dlqPayload.errorMessage = errorMessage;
+    } else {
+      dlqPayload.errorMessage =
+        cause === 'validation_failed' ? 'analytics.metric payload failed validation' : 'analytics.metric persistence failed';
+    }
+
     const dlqEnvelope = createEnvelope(Topics.broker.deadLetter, dlqPayload, correlationId);
     try {
       await this.bus.publish(
@@ -287,18 +389,20 @@ export class AnalyticsConsumer {
         dlqEnvelope,
         correlationId ? { 'x-correlation-id': correlationId } : undefined
       );
+      ingestDlqCounter.add(1, { metricName, cause, ...(attributes ?? {}) });
       logger.warn('analytics.metric.dlq_published', {
         correlationId,
-        metricName: sourceEnvelope.payload.name,
+        metricName,
         cause,
       });
     } catch (err) {
       logger.error('analytics.metric.dlq_publish_failed', {
         correlationId,
-        metricName: sourceEnvelope.payload.name,
+        metricName,
         cause,
         error: err instanceof Error ? err.message : err,
       });
+      throw new AnalyticsMetricDlqPublishError(correlationId, err);
     }
   }
 }
@@ -353,27 +457,6 @@ function normalizeRetryPolicy(policy?: RetryPolicyOptions): NormalizedRetryPolic
   };
 }
 
-function calculateDelay(policy: NormalizedRetryPolicy, attempt: number): number {
-  const exponential = policy.baseDelayMs * 2 ** (attempt - 1);
-  const capped = Math.min(exponential, policy.maxDelayMs);
-  if (policy.jitterRatio <= 0) {
-    return capped;
-  }
-  const jitterWindow = capped * policy.jitterRatio;
-  const min = Math.max(0, capped - jitterWindow);
-  const max = capped + jitterWindow;
-  return Math.round(min + Math.random() * (max - min));
-}
-
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function computeLagMs(timestamp?: string): number | null {
   if (!timestamp) return null;
   const parsed = Date.parse(timestamp);
@@ -400,7 +483,7 @@ function sanitizeLabels(labels?: Record<string, string>): Record<string, string>
   if (!labels) return undefined;
   const sanitized: Record<string, string> = {};
   for (const [key, originalValue] of Object.entries(labels)) {
-    if (!LABEL_ALLOWLIST.has(key)) continue;
+    if (!ALLOW_ALL_LABELS && !LABEL_ALLOWLIST.has(key)) continue;
     if (typeof originalValue !== 'string') continue;
     let value = originalValue.trim();
     if (!value) continue;
@@ -434,8 +517,38 @@ function classifyError(error: unknown): string {
   if (error instanceof AnalyticsMetricSinkError) {
     return 'sink_error';
   }
+  if (error instanceof AnalyticsMetricDlqPublishError) {
+    return 'dlq_publish_failed';
+  }
   if (error instanceof Error) {
     return error.name ?? 'error';
   }
   return 'unknown';
+}
+
+function sanitizeValidationErrors(errors: ValidationError[]): Array<{ path: string; keyword: string }> {
+  return errors.slice(0, 5).map((err) => ({
+    path: err.path,
+    keyword: err.keyword,
+  }));
+}
+
+function buildLabelPolicy(config: string): { allowAllLabels: boolean; keys: Set<string> } {
+  const base = new Set<string>(DEFAULT_LABEL_KEYS);
+  const raw = config
+    .split(',')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  let allowAll = false;
+  for (const token of raw) {
+    if (token === '*') {
+      allowAll = true;
+      continue;
+    }
+    base.add(token);
+  }
+  return {
+    allowAllLabels: allowAll,
+    keys: base,
+  };
 }

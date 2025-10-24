@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/messaging/send-document-retry.json",
+  "title": "SendDocumentRetryScheduled",
+  "type": "object",
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "patientId": { "type": "string", "minLength": 1 },
+    "messageId": { "type": "string", "minLength": 1 },
+    "mexLocalId": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "scheduledAt": { "type": "string", "format": "date-time" },
+    "reason": { "type": "string", "minLength": 1 }
+  },
+  "required": ["taskId", "patientId", "messageId", "mexLocalId", "attempt", "scheduledAt"],
+  "additionalProperties": false
+}

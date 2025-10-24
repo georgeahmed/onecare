@@ -4,10 +4,9 @@ import re
 from typing import Optional
 
 
-_MAX_CHARS = 2000
+_MAX_CHARS = 500000
 _MIN_ALPHA_RATIO = 0.2
 _MAX_REPEAT_BLOCK = 6
-_ALLOWED_CHAR_CLASSES = re.compile(r"[\w\s,'’.-]+", re.UNICODE)
 
 
 class NarrativeValidationError(ValueError):
@@ -31,5 +30,14 @@ def validate_narrative(text: Optional[str]) -> str:
     repeats = re.compile(r"(.)\1{%d,}" % (_MAX_REPEAT_BLOCK - 1))
     if repeats.search(candidate):
         raise NarrativeValidationError("narrative_repeated_chars")
+
+    if any(
+        ord(ch) < 32 and ch not in {"\n", "\r", "\t"}
+        for ch in candidate
+    ):
+        raise NarrativeValidationError("narrative_invalid_chars")
+
+    if any(not ch.isprintable() and ch not in {"\n", "\r", "\t"} for ch in candidate):
+        raise NarrativeValidationError("narrative_invalid_chars")
 
     return candidate

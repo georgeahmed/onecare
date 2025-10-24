@@ -92,4 +92,27 @@ describe('hashIdentifier', () => {
 
     expect(() => hashIdentifier('patient-000')).toThrow(/IDENTIFIER_HASH_SECRET/);
   });
+
+  it('treats NODE_ENV case-insensitively when enforcing production secrets', () => {
+    delete process.env.IDENTIFIER_HASH_SECRET;
+    delete process.env.ONECARE_HASH_SECRET;
+    process.env.NODE_ENV = 'Production';
+    setHashIdentifierSecretForTest(null);
+
+    expect(() => hashIdentifier('patient-111')).toThrow(/IDENTIFIER_HASH_SECRET/);
+  });
+
+  it('rejects malformed base64 secrets', () => {
+    process.env.IDENTIFIER_HASH_SECRET = 'base64:not-base64';
+    setHashIdentifierSecretForTest(null);
+
+    expect(() => hashIdentifier('patient-222')).toThrow(/base64 encoding invalid/);
+  });
+
+  it('rejects malformed hex secrets', () => {
+    process.env.IDENTIFIER_HASH_SECRET = 'hex:ABC';
+    setHashIdentifierSecretForTest(null);
+
+    expect(() => hashIdentifier('patient-333')).toThrow(/hex encoding invalid/);
+  });
 });

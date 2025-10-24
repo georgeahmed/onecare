@@ -126,6 +126,7 @@ export class GpConnectHttpClient {
     const method = init.method ?? 'GET';
     const normalizedPath = this.normalizePath(path);
     let requestUrl: URL;
+    let logPath = '';
     try {
       requestUrl = new URL(normalizedPath, this.baseUrl);
     } catch {
@@ -151,10 +152,12 @@ export class GpConnectHttpClient {
       headers = this.composeHeaders(init.headers, init.body, bodyBuffer);
       correlationId = correlationId ?? headers['x-correlation-id'];
 
+      logPath = sanitizeLogPath(requestUrl);
+
       this.log({
         event: 'request',
         method,
-        path: requestUrl.pathname + requestUrl.search,
+        path: logPath,
         correlationId,
         headers: redactHeaders(headers),
       });
@@ -171,7 +174,7 @@ export class GpConnectHttpClient {
       this.log({
         event: 'response',
         method,
-        path: requestUrl.pathname + requestUrl.search,
+        path: logPath,
         statusCode: response.statusCode,
         correlationId,
         headers: sanitizedResponseHeaders,
@@ -185,7 +188,7 @@ export class GpConnectHttpClient {
       this.log({
         event: 'error',
         method,
-        path: requestUrl.pathname + requestUrl.search,
+        path: logPath || sanitizeLogPath(requestUrl),
         correlationId,
         reason: error instanceof Error ? error.message : String(error),
       });
@@ -278,8 +281,9 @@ function buildAllowedHostSet(baseUrl: URL, allowedHosts?: string[]): Set<string>
     hostSet.add(normalized);
   }
 
-  // Ensure the base host (without port) is also recognised.
-  hostSet.add(normalizedBaseHost);
+  if (!baseUrl.port && !hostSet.has(normalizedBaseHost)) {
+    hostSet.add(normalizedBaseHost);
+  }
   return hostSet;
 }
 
@@ -448,6 +452,10 @@ function createClientError(code: string, message: string): Error & { code: strin
 }
 
 export { normalizeFingerprint }; // exported for unit tests
+
+function sanitizeLogPath(url: URL): string {
+  return url.pathname || '/';
+}
 
 const DEFAULT_HEALTH_PATH = '/metadata';
 const DEFAULT_HEALTH_METHOD: HttpMethod = 'GET';

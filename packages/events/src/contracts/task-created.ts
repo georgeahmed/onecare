@@ -1,8 +1,10 @@
 // AUTO-GENERATED from schemas. DO NOT EDIT.
 
+export type TaskCreatedPriority = "STAT" | "URGENT" | "SOON" | "ROUTINE";
+
 export interface TaskCreated {
   taskId: string;
   patientId: string;
-  priority: "STAT" | "URGENT" | "SOON" | "ROUTINE";
+  priority: TaskCreatedPriority;
   owner?: string;
 }

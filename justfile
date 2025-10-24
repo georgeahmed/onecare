@@ -20,7 +20,7 @@ test:
     npm run test
 
 codegen:
-    npm run codegen
+    npm run --workspaces=false codegen
 
 codegen-check:
     npm run codegen:check
@@ -29,10 +29,10 @@ py-test:
     python -m venv .venv && . .venv/bin/activate && pip install -U pip && pip install fastapi uvicorn pydantic pytest httpx && pytest -q services-py/tests
 
 py-safety:
-    uvicorn services-py/safety_gate_service/main:app --reload --port 8081
+    PYTHONPATH=services-py services-py/.venv/bin/uvicorn safety_gate_service.main:app --reload --port 8081
 
 py-scribe:
-    uvicorn services-py/scribe_service/main:app --reload --port 8082
+    PYTHONPATH=services-py services-py/.venv/bin/uvicorn scribe_service.main:app --reload --port 8082
 
 docker-up:
     docker-compose up --build
@@ -55,7 +55,7 @@ demo-docker:
 
 demo-local:
     npm -w @onecare/app-orchestrator run build --silent
-    bash -c 'uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
+    bash -c 'PYTHONPATH=services-py services-py/.venv/bin/uvicorn safety_gate_service.main:app --port 8081 --log-level warning & echo $$! > .pid_safety'
     bash -c 'until curl -sf http://localhost:8081/docs >/dev/null; do sleep 0.5; done'
     bash -c 'PORT=3001 PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 node apps/orchestrator/dist/index.js & echo $$! > .pid_orch'
     bash -c 'until curl -sf http://localhost:3001/health >/dev/null; do sleep 0.5; done'

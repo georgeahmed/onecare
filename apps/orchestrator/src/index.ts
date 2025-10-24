@@ -1,3 +1,4 @@
+/// <reference path="./types/schemas.d.ts" />
 import * as http from 'http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID, createHash } from 'node:crypto';
@@ -6,7 +7,7 @@ import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
 import { validatePortalSubmission } from './application/validator';
-import { getBus, getNatsBusHealth, markNatsBusConnected, withMessageGuards } from '@onecare/bus';
+import { getBus, getNatsBusHealth, markNatsBusConnected, parseNatsServerConfig, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import {
   createEnvelope,
@@ -27,6 +28,8 @@ import {
   withCorrelationContext,
   createCounter,
   createHistogram,
+  getCounterRecords,
+  getHistogramRecords,
 } from '@onecare/observability';
 import { deriveIdempotencyKey, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
 import { ErrorCode } from './application/error';
@@ -39,7 +42,8 @@ import { createAuditEvent, getAuditLedger } from './adapters/audit';
 import { InMemoryFeatureStore } from '@onecare/feature-store-memory';
 import Ajv2020 from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import orchestratorSchema from '../../../schemas/config/orchestrator.json';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const orchestratorSchema = require('../../../schemas/config/orchestrator.json');
 import type { OrchestratorConfig } from '@onecare/config/src/contracts/orchestrator';
 import {
   withFhirValidation,
@@ -77,6 +81,13 @@ const reconnectDelayHistogram = createHistogram('bus.reconnect.delay');
 const busHealthMaxAgeMs = parsePositiveInt(process.env.BUS_HEALTH_CACHE_MS, 2_000, 60_000);
 const busReadyLagThreshold = parsePositiveInt(process.env.BUS_READY_PENDING_LAG, 200, 100_000);
 const HEADER_TOKEN_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const MAX_ALLOWED_BODY_BYTES = 1_048_576; // 1 MiB ceiling for ingress payloads
+const HTTP_LATENCY_BUCKETS_MS = [50, 100, 200, 400, 800, 1_500, 3_000, 5_000, 10_000];
+const httpServerDuration = createHistogram('http_server_duration_ms');
+const httpServerRequests = createCounter('http_server_requests_total');
+const httpServerErrors = createCounter('http_server_errors_total');
+const ORCHESTRATOR_SERVICE_LABEL = 'orchestrator';
 
 function containsHeaderControlChars(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
@@ -173,6 +184,14 @@ function resolveFhirAuthToken(): string | undefined {
   const raw = process.env.FHIR_TOKEN ?? process.env.FHIR_AUTH_TOKEN;
   const trimmed = raw?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveFhirHealthPath(): string {
+  const raw = process.env.FHIR_HEALTH_PATH;
+  if (raw === undefined || raw === null) return 'metadata';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/^\//, '');
 }
 
 function resolveObjectStoreBaseUrl(): string | null {
@@ -485,7 +504,7 @@ function getBookingAvailabilityTimeoutMs(): number {
   return runtime.bookingAvailabilityTimeoutMs;
 }
 
-const bookingAvailabilityBase = (() => {
+function resolveBookingAvailabilityBase(): URL | null {
   const raw = process.env.BOOKING_AVAILABILITY_URL?.trim();
   if (!raw) return null;
   try {
@@ -502,7 +521,7 @@ const bookingAvailabilityBase = (() => {
     });
     return null;
   }
-})();
+}
 
 function resolveBookingServiceBase(): URL | null {
   const raw = process.env.BOOKING_SERVICE_URL?.trim();
@@ -662,32 +681,39 @@ function parseDurationMs(raw: string | undefined, fallback: number, min: number,
   return milliseconds;
 }
 
-const globalConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL', 64, 20_000);
-const defaultRouteConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_DEFAULT', 32, 10_000);
-const concurrencyLimiter = new ConcurrencyLimiter({
-  globalLimit: globalConcurrencyLimit,
-  defaultRouteLimit: defaultRouteConcurrencyLimit,
-  perRoute: {
-    'POST /safety-check': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_SAFETY', 24, 5_000),
-    'GET /booking/slots': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_BOOKING', 16, 5_000),
-    'POST /feature-log': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG', 12, 5_000),
-  },
-});
+function createConcurrencyLimiter(): ConcurrencyLimiter {
+  const globalConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL', 64, 20_000);
+  const defaultRouteConcurrencyLimit = parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_DEFAULT', 32, 10_000);
+  return new ConcurrencyLimiter({
+    globalLimit: globalConcurrencyLimit,
+    defaultRouteLimit: defaultRouteConcurrencyLimit,
+    perRoute: {
+      'POST /safety-check': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_SAFETY', 24, 5_000),
+      'GET /booking/slots': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_BOOKING', 16, 5_000),
+      'POST /feature-log': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG', 12, 5_000),
+    },
+  });
+}
 
-const defaultRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE', 120, 100_000);
-const safetyRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE', 40, 10_000);
-const defaultRateLimiterConfig = {
-  maxRequests: defaultRateLimitPerMinute,
-  windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
-  blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_BLOCK_MS, 10_000, 0, 15 * 60_000),
-};
-const rateLimiter = new RateLimiter(defaultRateLimiterConfig, {
-  'POST /safety-check': {
-    maxRequests: safetyRateLimitPerMinute,
-    windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
-    blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS, 20_000, 0, 15 * 60_000),
-  },
-});
+function createRateLimiter(): RateLimiter {
+  const defaultRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE', 120, 100_000);
+  const safetyRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE', 40, 10_000);
+  const defaultRateLimiterConfig = {
+    maxRequests: defaultRateLimitPerMinute,
+    windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
+    blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_BLOCK_MS, 10_000, 0, 15 * 60_000),
+  };
+  return new RateLimiter(defaultRateLimiterConfig, {
+    'POST /safety-check': {
+      maxRequests: safetyRateLimitPerMinute,
+      windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
+      blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS, 20_000, 0, 15 * 60_000),
+    },
+  });
+}
+
+let concurrencyLimiter = createConcurrencyLimiter();
+let rateLimiter = createRateLimiter();
 
 const busPublishTimeoutMs = parseDurationMs(
   process.env.ORCHESTRATOR_BUS_PUBLISH_TIMEOUT_MS,
@@ -841,39 +867,67 @@ export function resetShutdownStateForTest(): void {
   rateLimiter.reset();
 }
 
-const featureLoggingOn = parseBooleanFlag(process.env.FEATURE_LOGGING);
-const featureLoggingTtlSeconds = Math.max(
-  getDefaultTtlSeconds('triage-core') ?? 0,
-  getDefaultTtlSeconds('acuity-signal') ?? 0
-);
-const featureStoreOptions =
-  featureLoggingTtlSeconds > 0 ? { ttlMs: featureLoggingTtlSeconds * 1000 } : undefined;
-let featureStore: FeatureStore | null = featureLoggingOn ? new InMemoryFeatureStore(featureStoreOptions) : null;
-const fhirBaseUrl = resolveFhirBaseUrl();
-const fhirTimeoutMs = resolveFhirTimeoutMs();
-const fhirMaxRetries = resolveFhirMaxRetries();
-const fhirAuthToken = resolveFhirAuthToken();
-const objectStoreBaseUrl = resolveObjectStoreBaseUrl();
-const objectStoreTimeoutMs = resolveObjectStoreTimeoutMs();
-const objectStoreMaxRetries = resolveObjectStoreMaxRetries();
-const objectStoreHealthPath = resolveObjectStoreHealthPath();
-const objectStoreAuthToken = resolveObjectStoreAuthToken();
-const oidcIssuer = resolveOidcIssuer();
-const oidcAudience = resolveOidcAudience();
-const oidcJwksUri = resolveOidcJwksUri();
-const oidcTimeoutMs = resolveOidcTimeoutMs();
-const oidcClockSkewSeconds = resolveOidcClockSkewSeconds();
+function isFeatureLoggingEnabled(): boolean {
+  return parseBooleanFlag(process.env.FEATURE_LOGGING);
+}
+
+function computeFeatureLoggingTtlMs(): number | undefined {
+  const ttlSeconds = Math.max(
+    getDefaultTtlSeconds('triage-core') ?? 0,
+    getDefaultTtlSeconds('acuity-signal') ?? 0,
+  );
+  return ttlSeconds > 0 ? ttlSeconds * 1000 : undefined;
+}
+
+let featureStore: FeatureStore | null = null;
+
+function refreshFeatureLoggingStore(): void {
+  if (!isFeatureLoggingEnabled()) {
+    featureStore = null;
+    return;
+  }
+  const ttlMs = computeFeatureLoggingTtlMs();
+  featureStore = new InMemoryFeatureStore(ttlMs ? { ttlMs } : undefined);
+}
+
+interface FhirEnvConfig {
+  baseUrl: string;
+  timeoutMs: number;
+  maxRetries: number;
+  authToken?: string;
+  healthPath: string;
+}
+
+function loadFhirEnvConfig(): FhirEnvConfig {
+  return {
+    baseUrl: resolveFhirBaseUrl(),
+    timeoutMs: resolveFhirTimeoutMs(),
+    maxRetries: resolveFhirMaxRetries(),
+    authToken: resolveFhirAuthToken(),
+    healthPath: resolveFhirHealthPath(),
+  };
+}
+
+function tryLoadFhirEnvConfig(): FhirEnvConfig | null {
+  try {
+    return loadFhirEnvConfig();
+  } catch {
+    return null;
+  }
+}
+
 function constructFhirRepository(): FhirRepository {
+  const env = loadFhirEnvConfig();
   const maybeFetch = (globalThis as { fetch?: typeof fetch }).fetch;
   const testFetch =
     process.env.NODE_ENV === 'test' && typeof maybeFetch === 'function'
       ? maybeFetch.bind(globalThis)
       : undefined;
   const repository = createHttpFhirRepository({
-    baseUrl: fhirBaseUrl,
-    authToken: fhirAuthToken,
-    timeoutMs: fhirTimeoutMs,
-    maxRetries: fhirMaxRetries,
+    baseUrl: env.baseUrl,
+    authToken: env.authToken,
+    timeoutMs: env.timeoutMs,
+    maxRetries: env.maxRetries,
     practiceId,
     fetchImpl: testFetch,
     circuitBreakerThreshold: parsePositiveInt(process.env.FHIR_CIRCUIT_FAILURE_THRESHOLD, 3, 20),
@@ -885,35 +939,77 @@ function constructFhirRepository(): FhirRepository {
 
 let fhirRepository: FhirRepository = constructFhirRepository();
 
-function constructObjectStore(): ObjectStore | null {
-  if (!objectStoreBaseUrl) return null;
+interface ObjectStoreEnvConfig {
+  baseUrl: string;
+  timeoutMs: number;
+  maxRetries: number;
+  healthPath: string;
+  authToken?: string;
+}
+
+function loadObjectStoreEnvConfig(): ObjectStoreEnvConfig | null {
+  const baseUrl = resolveObjectStoreBaseUrl();
+  if (!baseUrl) return null;
+  return {
+    baseUrl,
+    timeoutMs: resolveObjectStoreTimeoutMs(),
+    maxRetries: resolveObjectStoreMaxRetries(),
+    healthPath: resolveObjectStoreHealthPath(),
+    authToken: resolveObjectStoreAuthToken(),
+  };
+}
+
+function buildObjectStoreFromEnv(env: ObjectStoreEnvConfig | null): ObjectStore | null {
+  if (!env) return null;
   return new HttpObjectStore({
-    baseUrl: objectStoreBaseUrl,
-    timeoutMs: objectStoreTimeoutMs,
-    maxRetries: objectStoreMaxRetries,
-    authToken: objectStoreAuthToken,
+    baseUrl: env.baseUrl,
+    timeoutMs: env.timeoutMs,
+    maxRetries: env.maxRetries,
+    authToken: env.authToken,
   });
 }
 
-let objectStore: ObjectStore | null = constructObjectStore();
-if (objectStoreBaseUrl && !objectStore) {
+const initialObjectStoreEnv = loadObjectStoreEnvConfig();
+let objectStore: ObjectStore | null = buildObjectStoreFromEnv(initialObjectStoreEnv);
+if (initialObjectStoreEnv && !objectStore) {
   logger.warn('object store disabled - configuration incomplete');
 }
 
+interface OidcEnvConfig {
+  issuer: string | null;
+  audience: string[];
+  jwksUri: string | null;
+  timeoutMs: number;
+  clockSkewSeconds: number;
+}
+
+function loadOidcEnvConfig(): OidcEnvConfig {
+  return {
+    issuer: resolveOidcIssuer(),
+    audience: resolveOidcAudience(),
+    jwksUri: resolveOidcJwksUri(),
+    timeoutMs: resolveOidcTimeoutMs(),
+    clockSkewSeconds: resolveOidcClockSkewSeconds(),
+  };
+}
+
 function constructOidcClient(): OidcClient | null {
-  if (!oidcIssuer || !oidcJwksUri || oidcAudience.length === 0) {
+  const env = loadOidcEnvConfig();
+  if (!env.issuer || !env.jwksUri || env.audience.length === 0) {
     return null;
   }
   return new OidcClient({
-    issuer: oidcIssuer,
-    audience: oidcAudience,
-    jwksUri: oidcJwksUri,
-    httpTimeoutMs: oidcTimeoutMs,
-    clockSkewSeconds: oidcClockSkewSeconds,
+    issuer: env.issuer,
+    audience: env.audience,
+    jwksUri: env.jwksUri,
+    httpTimeoutMs: env.timeoutMs,
+    clockSkewSeconds: env.clockSkewSeconds,
   });
 }
 
 let oidcClient: OidcClient | null = constructOidcClient();
+
+refreshFeatureLoggingStore();
 
 process.on('SIGHUP', () => {
   logger.info('orchestrator.config.reload_requested');
@@ -921,11 +1017,15 @@ process.on('SIGHUP', () => {
     runtime = buildRuntimeState(practiceId);
     fhirProfiles = resolveFhirProfiles(runtime.practiceConfig);
     fhirRepository = constructFhirRepository();
-    objectStore = constructObjectStore();
-    if (objectStoreBaseUrl && !objectStore) {
+    const reloadedObjectStoreEnv = loadObjectStoreEnvConfig();
+    objectStore = buildObjectStoreFromEnv(reloadedObjectStoreEnv);
+    if (reloadedObjectStoreEnv && !objectStore) {
       logger.warn('object store disabled after reload - configuration incomplete');
     }
     oidcClient = constructOidcClient();
+    refreshFeatureLoggingStore();
+    concurrencyLimiter = createConcurrencyLimiter();
+    rateLimiter = createRateLimiter();
     logRuntimeConfig(runtime, 'orchestrator.config.reloaded');
   } catch (error) {
     const details =
@@ -940,9 +1040,15 @@ process.on('SIGHUP', () => {
 });
 
 const dependencyCache: Record<DependencyName, DependencyState> = {
-  fhir: { status: fhirBaseUrl ? 'error' : 'skipped', checkedAt: 0 },
-  objectStore: { status: objectStoreBaseUrl ? 'error' : 'skipped', checkedAt: 0 },
-  oidc: { status: oidcIssuer && oidcAudience.length > 0 && oidcJwksUri ? 'error' : 'skipped', checkedAt: 0 },
+  fhir: { status: tryLoadFhirEnvConfig() ? 'error' : 'skipped', checkedAt: 0 },
+  objectStore: { status: loadObjectStoreEnvConfig() ? 'error' : 'skipped', checkedAt: 0 },
+  oidc: {
+    status: (() => {
+      const env = loadOidcEnvConfig();
+      return env.issuer && env.jwksUri && env.audience.length > 0 ? 'error' : 'skipped';
+    })(),
+    checkedAt: 0,
+  },
 };
 
 async function evaluateDependency(name: DependencyName, fn: () => Promise<DependencyState>): Promise<DependencyState> {
@@ -967,17 +1073,22 @@ async function evaluateDependency(name: DependencyName, fn: () => Promise<Depend
 }
 
 async function probeFhir(): Promise<DependencyState> {
-  if (!fhirBaseUrl) {
+  const env = tryLoadFhirEnvConfig();
+  if (!env) {
     return { status: 'skipped', checkedAt: Date.now() };
   }
-  const metadataUrl = new URL('metadata', fhirBaseUrl).toString();
+  const healthUrl = new URL(env.healthPath || '.', env.baseUrl).toString();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.min(fhirTimeoutMs, 1_000));
+  // Allow up to 2s for the FHIR probe (bounded by FHIR_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), Math.min(env.timeoutMs, 2_000));
   try {
     const headers: Record<string, string> = { accept: 'application/fhir+json' };
-    const authHeader = buildBearerHeader(fhirAuthToken);
+    const authHeader = buildBearerHeader(env.authToken);
     if (authHeader) headers.authorization = authHeader;
-    const response = await fetch(metadataUrl, {
+    const apiKey = (process.env.FHIR_API_KEY || process.env.NHS_API_KEY || '').trim();
+    const apiKeyHeader = (process.env.FHIR_API_KEY_HEADER || 'apikey').trim();
+    if (apiKey) headers[apiKeyHeader] = apiKey;
+    const response = await fetch(healthUrl, {
       method: 'GET',
       headers,
       signal: controller.signal,
@@ -1003,16 +1114,17 @@ async function probeFhir(): Promise<DependencyState> {
 }
 
 async function probeObjectStore(): Promise<DependencyState> {
-  if (!objectStoreBaseUrl) {
+  const env = loadObjectStoreEnvConfig();
+  if (!env) {
     return { status: 'skipped', checkedAt: Date.now() };
   }
-  const healthPath = objectStoreHealthPath;
-  const healthUrl = new URL(healthPath || '.', objectStoreBaseUrl).toString();
+  const healthPath = env.healthPath;
+  const healthUrl = new URL(healthPath || '.', env.baseUrl).toString();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.min(objectStoreTimeoutMs, 1_000));
+  const timeout = setTimeout(() => controller.abort(), Math.min(env.timeoutMs, 1_000));
   try {
     const headers: Record<string, string> = { accept: 'application/json' };
-    const authHeader = buildBearerHeader(objectStoreAuthToken);
+    const authHeader = buildBearerHeader(env.authToken);
     if (authHeader) headers.authorization = authHeader;
     const response = await fetch(healthUrl, {
       method: 'GET',
@@ -1126,7 +1238,7 @@ let busReadyOverride: boolean | null = null;
 let _natsConn: NatsConnection | null = null;
 let reconnectTimer: NodeJS.Timeout | undefined;
 let reconnectAttempts = 0;
-const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication'] as const;
+const CONSENT_RESOURCES = ['QuestionnaireResponse', 'Communication', 'DocumentReference'] as const;
 const BOOKING_RESOURCES = ['Slot'] as const;
 const FEATURE_LOG_RESOURCES = ['FeatureLog'] as const;
 const BOOKING_SCOPE = 'booking:read';
@@ -1260,6 +1372,12 @@ function sanitizeBookingQuery(searchParams: URLSearchParams | null): URLSearchPa
     });
   }
 
+  const startDate = new Date(candidate.windowStart!);
+  const endDate = new Date(candidate.windowEnd!);
+  if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime()) || startDate >= endDate) {
+    throw new HttpError('invalid_input', 'windowStart must be before windowEnd');
+  }
+
   const sanitized = new URLSearchParams();
   sanitized.set('serviceType', candidate.serviceType!);
   sanitized.set('windowStart', candidate.windowStart!);
@@ -1270,23 +1388,26 @@ function sanitizeBookingQuery(searchParams: URLSearchParams | null): URLSearchPa
   return sanitized;
 }
 
-function parseServers(raw: string | undefined): string[] {
-  if (!raw) return ['nats://localhost:4222'];
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+function normalizeOptionalEnv(value: string | undefined): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function buildConnectionOptions(): ConnectionOptions {
-  const servers = parseServers(process.env.NATS_URL);
+  const { servers, auth } = parseNatsServerConfig(process.env.NATS_URL);
   const options: ConnectionOptions = { servers };
-  const user = process.env.NATS_USER;
-  const pass = process.env.NATS_PASS;
-  const token = process.env.NATS_TOKEN;
-  if (user) options.user = user;
-  if (pass) options.pass = pass;
-  if (token) options.token = token;
+  const token = normalizeOptionalEnv(process.env.NATS_TOKEN) ?? auth.token;
+  const user = normalizeOptionalEnv(process.env.NATS_USER) ?? auth.user;
+  const pass = normalizeOptionalEnv(process.env.NATS_PASS) ?? auth.pass;
+  if (token) {
+    options.token = token;
+  } else {
+    if (user) options.user = user;
+    if (pass) options.pass = pass;
+  }
   const timeoutMs = Number(process.env.NATS_CONNECT_TIMEOUT_MS ?? '');
   if (!Number.isNaN(timeoutMs) && timeoutMs > 0) options.timeout = timeoutMs;
   const maxReconnect = Number(process.env.NATS_MAX_RECONNECT_ATTEMPTS ?? '');
@@ -1408,7 +1529,14 @@ function resolveMaxBodyBytes(): number {
   if (!parsed) {
     return 256 * 1024;
   }
-  return parsed;
+  const capped = Math.min(parsed, MAX_ALLOWED_BODY_BYTES);
+  if (capped < parsed) {
+    logger.warn('max_body_bytes.capped', {
+      configured: parsed,
+      applied: capped,
+    });
+  }
+  return capped;
 }
 
 function parseByteSize(raw: string | undefined): number | undefined {
@@ -1425,6 +1553,16 @@ function parseByteSize(raw: string | undefined): number | undefined {
   const bytes = value * multiplier;
   if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
   return Math.floor(bytes);
+}
+
+function normalizeExplicitIdempotencyKey(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (!IDEMPOTENCY_KEY_PATTERN.test(trimmed)) {
+    throw new HttpError('invalid_input', 'Invalid idempotency key');
+  }
+  return trimmed;
 }
 
 type RequestOutcome = ErrorCode | 'ok';
@@ -1469,13 +1607,68 @@ function ensureReadResource(
   return null;
 }
 
-function recordHttpMetrics(route: string, outcome: RequestOutcome, durationMs: number, correlationId: string | undefined): void {
+function recordHttpMetrics(
+  routeLabel: string,
+  method: string,
+  path: string,
+  status: number,
+  outcome: RequestOutcome,
+  durationMs: number,
+  correlationId: string | undefined,
+): void {
+  const statusCode = Number.isFinite(status) && status > 0 ? Math.trunc(status) : 0;
+  httpServerDuration.record(durationMs, {
+    service: ORCHESTRATOR_SERVICE_LABEL,
+    route: path,
+    method,
+  });
+  httpServerRequests.add(1, {
+    service: ORCHESTRATOR_SERVICE_LABEL,
+    route: path,
+    method,
+    status: statusCode,
+    outcome,
+  });
+  if (statusCode >= 500 && statusCode < 600) {
+    httpServerErrors.add(1, {
+      service: ORCHESTRATOR_SERVICE_LABEL,
+      route: path,
+      method,
+      status: statusCode,
+      outcome,
+    });
+  }
   logger.info('metric.http.request', {
-    route,
+    route: routeLabel,
+    method,
+    path,
+    status: statusCode,
     outcome,
     durationMs: Number(durationMs.toFixed(2)),
     correlationId,
   });
+}
+
+function deriveMethodAndPath(routeLabel: string, req: http.IncomingMessage): { method: string; path: string } {
+  const parts = routeLabel.split(' ');
+  let method = req.method?.toUpperCase() ?? 'UNKNOWN';
+  let path = '';
+  if (parts.length > 1 && /^[A-Z]+$/.test(parts[0])) {
+    method = parts[0];
+    path = parts.slice(1).join(' ').trim();
+  } else if (parts.length === 1 && /^[A-Z]+$/.test(parts[0])) {
+    method = parts[0];
+  } else if (parts.length > 0 && !path) {
+    path = routeLabel.trim();
+  }
+  if (!path) {
+    const rawUrl = req.url ?? '/';
+    path = rawUrl.split('?')[0] || '/';
+  }
+  if (!path.startsWith('/')) {
+    path = `/${path.replace(/^\/?/, '')}`;
+  }
+  return { method, path };
 }
 
 function classifyError(err: unknown): { code: ErrorCode; message: string; details?: Record<string, unknown> } {
@@ -1559,10 +1752,12 @@ function handleHttp(
   const setOutcome = (value: RequestOutcome) => {
     outcome = value;
   };
+  const { method: metricsMethod, path: metricsPath } = deriveMethodAndPath(route, req);
 
   const recordMetrics = () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-    recordHttpMetrics(route, outcome, durationMs, correlationId);
+    const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 0;
+    recordHttpMetrics(route, metricsMethod, metricsPath, statusCode, outcome, durationMs, correlationId);
   };
 
   const headerValidation = validateIncomingHeaders(req.headers);
@@ -1933,7 +2128,7 @@ function buildFeatureLogKey(entry: FeatureLogEntry): string {
 }
 
 async function logFeatureRecord(entry: FeatureLogEntry): Promise<void> {
-  if (!featureLoggingOn || !featureStore) {
+  if (!isFeatureLoggingEnabled() || !featureStore) {
     return;
   }
 
@@ -2083,6 +2278,13 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
     return;
   }
 
+  if (req.method === 'GET' && parsedUrl.pathname === '/metrics') {
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/plain; version=0.0.4');
+    res.end(renderPrometheusMetrics());
+    return;
+  }
+
   if (req.method === 'GET' && parsedUrl.pathname === '/booking/slots') {
     const routeLabel = 'GET /booking/slots';
     handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
@@ -2166,6 +2368,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
         consentReference = consentEvidence.reference;
       }
 
+      const bookingAvailabilityBase = resolveBookingAvailabilityBase();
       if (!bookingAvailabilityBase) {
         respondError(res, 'upstream_unavailable', 'Booking availability service not configured', corr, setOutcome);
         return;
@@ -2182,9 +2385,9 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       if (authHeader) {
         headers.authorization = authHeader;
       }
-      const practiceHeader = getHeader(req.headers, 'x-practice-id');
-      if (practiceHeader) {
-        headers['x-practice-id'] = practiceHeader;
+      headers['x-practice-id'] = practiceId;
+      if (patientId) {
+        headers['x-patient-id'] = patientId;
       }
 
       const controller = new AbortController();
@@ -2227,13 +2430,17 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       if (upstreamCorrelation) {
         res.setHeader('x-upstream-correlation-id', upstreamCorrelation);
       }
+      if (corr) {
+        res.setHeader('x-correlation-id', corr);
+      }
       res.end(bodyText);
 
       if (!upstream.ok) {
         setOutcome(upstream.status >= 500 ? 'upstream_unavailable' : 'invalid_input');
       } else {
+        const patientRefDetail = patientRef;
         const successAuditDetails = {
-          patientId: patientId ?? null,
+          patientRef: patientRefDetail,
           actorType: actor.type,
           scope,
           consentReference,
@@ -3417,8 +3624,11 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
   if (req.method === 'POST' && parsedUrl.pathname === '/feature-log') {
     const routeLabel = 'POST /feature-log';
     handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
-      if (!featureLoggingOn || !featureStore) {
+      if (!isFeatureLoggingEnabled() || !featureStore) {
         res.statusCode = 202;
+        if (corr) {
+          res.setHeader('x-correlation-id', corr);
+        }
         res.end('feature logging disabled');
         return;
       }
@@ -3558,7 +3768,7 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
 
       const successAuditDetails = {
         source,
-        patientId,
+        patientRef,
         consentReference: consentEvidence.reference,
         scope: scopes,
       } satisfies Record<string, unknown>;
@@ -3572,6 +3782,9 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       await emitAuditEvent(auditEvent);
 
       res.statusCode = 202;
+      if (corr) {
+        res.setHeader('x-correlation-id', corr);
+      }
       res.end('accepted');
       setOutcome('ok');
     });
@@ -3625,7 +3838,8 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const authHeader = getHeader(req.headers, 'authorization');
       const authContext = buildAuthContext(req.headers);
       const explicitKeyHeader = req.headers['x-idempotency-key'];
-      const explicitKey = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
+      const explicitKeyRaw = Array.isArray(explicitKeyHeader) ? explicitKeyHeader[0] : explicitKeyHeader;
+      const explicitKey = normalizeExplicitIdempotencyKey(explicitKeyRaw);
       const idemKey = deriveIdempotencyKey(submission, authContext?.actor?.id, explicitKey);
       const replayFingerprint = `${requestId}:${idemKey}`;
 
@@ -3637,6 +3851,16 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       const safetyGateFallbackMode = getSafetyGateFallbackMode();
       const shadowSafetyGate = getShadowSafetyGate();
       const idempotencyTtlSeconds = getIdempotencyTtlSeconds();
+
+      if (submission.practiceId !== practiceConfigSnapshot.practiceId) {
+        logger.warn('submission.practice_mismatch', {
+          expectedPractice: practiceConfigSnapshot.practiceId,
+          receivedPractice: submission.practiceId,
+          correlationId: corr,
+        });
+        respondError(res, 'forbidden', 'Practice mismatch', corr, setOutcome);
+        return;
+      }
 
       const orchestratorContext: OrchestratorContext = {
         id: requestId,
@@ -3758,6 +3982,9 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
     return;
   }
   res.statusCode = 200;
+  if (corr) {
+    res.setHeader('x-correlation-id', corr);
+  }
   res.end('orchestrator skeleton');
 }));
 
@@ -5060,6 +5287,145 @@ function extractNextCursor(bundle: FhirBundle): string | undefined {
     return undefined;
   }
   return encodeCursor(relative);
+}
+
+function renderPrometheusMetrics(): string {
+  const lines: string[] = [];
+
+  lines.push('# HELP http_server_duration_ms HTTP server request duration in milliseconds');
+  lines.push('# TYPE http_server_duration_ms histogram');
+  const histogramLines = renderHistogramMetric('http_server_duration_ms', HTTP_LATENCY_BUCKETS_MS, [
+    'service',
+    'route',
+    'method',
+  ]);
+  if (histogramLines.length === 0) {
+    lines.push('http_server_duration_ms_bucket{le="+Inf"} 0');
+    lines.push('http_server_duration_ms_count 0');
+    lines.push('http_server_duration_ms_sum 0');
+  } else {
+    lines.push(...histogramLines);
+  }
+
+  lines.push('# HELP http_server_requests_total HTTP server requests');
+  lines.push('# TYPE http_server_requests_total counter');
+  const requestLines = renderCounterMetric('http_server_requests_total', ['service', 'route', 'method', 'status', 'outcome']);
+  if (requestLines.length === 0) {
+    lines.push('http_server_requests_total 0');
+  } else {
+    lines.push(...requestLines);
+  }
+
+  lines.push('# HELP http_server_errors_total HTTP server 5xx responses');
+  lines.push('# TYPE http_server_errors_total counter');
+  const errorLines = renderCounterMetric('http_server_errors_total', ['service', 'route', 'method', 'status', 'outcome']);
+  if (errorLines.length === 0) {
+    lines.push('http_server_errors_total 0');
+  } else {
+    lines.push(...errorLines);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+interface HistogramAggregate {
+  labelPairs: string[];
+  counts: number[];
+  sum: number;
+  count: number;
+}
+
+function renderHistogramMetric(name: string, buckets: number[], labelKeys: string[]): string[] {
+  const records = getHistogramRecords(name);
+  if (records.length === 0) return [];
+
+  const aggregates = new Map<string, HistogramAggregate>();
+
+  for (const record of records) {
+    const value = Number(record.value ?? 0);
+    if (!Number.isFinite(value)) continue;
+
+    const labelPairs = collectLabelPairs(record.attributes ?? {}, labelKeys);
+    const key = labelPairs.join(',');
+    let aggregate = aggregates.get(key);
+    if (!aggregate) {
+      aggregate = {
+        labelPairs,
+        counts: new Array(buckets.length + 1).fill(0),
+        sum: 0,
+        count: 0,
+      };
+      aggregates.set(key, aggregate);
+    }
+
+    let bucketIndex = buckets.findIndex((boundary) => value <= boundary);
+    if (bucketIndex === -1) bucketIndex = buckets.length;
+    aggregate.counts[bucketIndex] += 1;
+    aggregate.sum += value;
+    aggregate.count += 1;
+  }
+
+  const lines: string[] = [];
+  for (const [key, aggregate] of Array.from(aggregates.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    const baseLabels = aggregate.labelPairs;
+    let cumulative = 0;
+    buckets.forEach((boundary, idx) => {
+      cumulative += aggregate.counts[idx];
+      const labels = formatLabelText([...baseLabels, `le="${boundary}"`]);
+      lines.push(`${name}_bucket${labels} ${cumulative}`);
+    });
+    cumulative += aggregate.counts[aggregate.counts.length - 1];
+    const infLabels = formatLabelText([...baseLabels, 'le="+Inf"']);
+    lines.push(`${name}_bucket${infLabels} ${cumulative}`);
+    const countLabels = formatLabelText(baseLabels);
+    lines.push(`${name}_count${countLabels} ${aggregate.count}`);
+    lines.push(`${name}_sum${countLabels} ${aggregate.sum.toFixed(6)}`);
+  }
+
+  return lines;
+}
+
+function renderCounterMetric(name: string, labelKeys: string[]): string[] {
+  const records = getCounterRecords(name);
+  if (records.length === 0) return [];
+
+  const totals = new Map<string, { labelPairs: string[]; value: number }>();
+  for (const record of records) {
+    const value = Number(record.value ?? 0);
+    if (!Number.isFinite(value)) continue;
+    const labelPairs = collectLabelPairs(record.attributes ?? {}, labelKeys);
+    const key = labelPairs.join(',');
+    const existing = totals.get(key);
+    if (existing) {
+      existing.value += value;
+    } else {
+      totals.set(key, { labelPairs, value });
+    }
+  }
+
+  return Array.from(totals.values())
+    .sort((a, b) => a.labelPairs.join(',').localeCompare(b.labelPairs.join(',')))
+    .map((entry) => `${name}${formatLabelText(entry.labelPairs)} ${entry.value}`);
+}
+
+function collectLabelPairs(attributes: Record<string, unknown>, labelKeys: string[]): string[] {
+  const pairs: string[] = [];
+  for (const key of labelKeys) {
+    const raw = attributes[key];
+    if (raw === undefined || raw === null) continue;
+    const value = escapeLabelValue(raw);
+    pairs.push(`${key}="${value}"`);
+  }
+  return pairs;
+}
+
+function escapeLabelValue(value: unknown): string {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function formatLabelText(pairs: string[]): string {
+  if (pairs.length === 0) return '';
+  return `{${pairs.join(',')}}`;
 }
 
 export function setBusReadyForTest(ready: boolean): void {

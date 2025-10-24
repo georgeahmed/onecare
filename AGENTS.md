@@ -133,7 +133,7 @@ Review Checklist (paste into PR)
 - Observability: [ ] Correlation IDs propagated; key spans/logs present
 
 Agent Automation Checklist
-- Edit schemas first; run `npm run codegen` (or `codegen:check`).
+- Edit schemas first; run `npm run --workspaces=false codegen` (or `codegen:check`).
 - Make minimal, typed changes in correct layers (application vs adapters).
 - Run `npm run typecheck && npm run test` locally; keep tests fast/deterministic.
 - Update team status checkboxes, and run `make team-status-write` to sync (command skips gracefully when no `team/` backlog is present).

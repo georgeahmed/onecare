@@ -4,13 +4,17 @@ import addFormats from 'ajv-formats';
 import type { ErrorObject } from 'ajv';
 import type { PortalSubmission } from '@onecare/events';
 import type { FhirBundle, FhirBundleEntry, InvalidFhirError } from '@onecare/ports';
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore - JSON schema import resolved via tsconfig
-import bundleSchema from '../../../../schemas/fhir/bundle-transaction.json';
-import bundleEntrySchema from '../../../../schemas/fhir/bundle-entry-resource.json';
-import communicationSchema from '../../../../schemas/fhir/communication.json';
-import documentReferenceSchema from '../../../../schemas/fhir/document-reference.json';
-import patientSchema from '../../../../schemas/fhir/patient.json';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const bundleSchema = require('../../../../schemas/fhir/bundle-transaction.json');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const bundleEntrySchema = require('../../../../schemas/fhir/bundle-entry-resource.json');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const communicationSchema = require('../../../../schemas/fhir/communication.json');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const documentReferenceSchema = require('../../../../schemas/fhir/document-reference.json');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const patientSchema = require('../../../../schemas/fhir/patient.json');
 
 type BundleEntry = FhirBundleEntry & {
   fullUrl: string;

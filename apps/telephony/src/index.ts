@@ -804,28 +804,65 @@ function renderPrometheusMetrics(): string {
   const lines: string[] = [];
 
   const durationRecords = getHistogramRecords('telephony_http_duration_ms');
-  const durationBuckets = new Array(LATENCY_BUCKETS_MS.length + 1).fill(0);
-  let durationSum = 0;
+  const durationAggregates = new Map<
+    string,
+    { baseLabels: string; counts: number[]; sum: number; count: number }
+  >();
   for (const record of durationRecords) {
     const value = Number(record.value ?? 0);
     if (!Number.isFinite(value)) continue;
-    durationSum += value;
+    const baseLabels = serializeLabels(record.attributes ?? {}, ['method', 'path']) || '';
+    const key = baseLabels || '{}';
+    let aggregate = durationAggregates.get(key);
+    if (!aggregate) {
+      aggregate = {
+        baseLabels,
+        counts: new Array(LATENCY_BUCKETS_MS.length + 1).fill(0),
+        sum: 0,
+        count: 0,
+      };
+      durationAggregates.set(key, aggregate);
+    }
     let bucketIndex = LATENCY_BUCKETS_MS.findIndex((boundary) => value <= boundary);
     if (bucketIndex === -1) bucketIndex = LATENCY_BUCKETS_MS.length;
-    durationBuckets[bucketIndex] += 1;
+    aggregate.counts[bucketIndex] += 1;
+    aggregate.sum += value;
+    aggregate.count += 1;
   }
 
   lines.push('# HELP telephony_http_duration_ms Telephony ingress latency in milliseconds');
   lines.push('# TYPE telephony_http_duration_ms histogram');
-  let cumulative = 0;
-  LATENCY_BUCKETS_MS.forEach((boundary, index) => {
-    cumulative += durationBuckets[index];
-    lines.push(`telephony_http_duration_ms_bucket{le="${boundary}"} ${cumulative}`);
-  });
-  cumulative += durationBuckets[durationBuckets.length - 1];
-  lines.push(`telephony_http_duration_ms_bucket{le="+Inf"} ${cumulative}`);
-  lines.push(`telephony_http_duration_ms_count ${durationRecords.length}`);
-  lines.push(`telephony_http_duration_ms_sum ${durationSum}`);
+  if (durationAggregates.size === 0) {
+    lines.push('telephony_http_duration_ms_bucket{le="+Inf"} 0');
+    lines.push('telephony_http_duration_ms_count 0');
+    lines.push('telephony_http_duration_ms_sum 0');
+  } else {
+    const orderedAggregates = Array.from(durationAggregates.values()).sort((a, b) =>
+      a.baseLabels.localeCompare(b.baseLabels),
+    );
+    for (const aggregate of orderedAggregates) {
+      let cumulative = 0;
+      LATENCY_BUCKETS_MS.forEach((boundary, index) => {
+        cumulative += aggregate.counts[index];
+        const bucketLabels = aggregate.baseLabels
+          ? aggregate.baseLabels.replace(/}$/, `,le="${boundary}"}`)
+          : `{le="${boundary}"}`;
+        lines.push(`telephony_http_duration_ms_bucket${bucketLabels} ${cumulative}`);
+      });
+      cumulative += aggregate.counts[aggregate.counts.length - 1];
+      const infLabels = aggregate.baseLabels
+        ? aggregate.baseLabels.replace(/}$/, ',le="+Inf"}')
+        : '{le="+Inf"}';
+      lines.push(`telephony_http_duration_ms_bucket${infLabels} ${cumulative}`);
+      if (aggregate.baseLabels) {
+        lines.push(`telephony_http_duration_ms_count${aggregate.baseLabels} ${aggregate.count}`);
+        lines.push(`telephony_http_duration_ms_sum${aggregate.baseLabels} ${aggregate.sum}`);
+      } else {
+        lines.push(`telephony_http_duration_ms_count ${aggregate.count}`);
+        lines.push(`telephony_http_duration_ms_sum ${aggregate.sum}`);
+      }
+    }
+  }
 
   const requestBuckets = aggregateCounterByLabels(getCounterRecords('telephony.http.requests'), ['method', 'path', 'status', 'outcome']);
   lines.push('# HELP telephony_http_requests_total Telephony HTTP requests by outcome');

@@ -1,7 +1,9 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -21,19 +23,30 @@ interface BookingFlowContextValue {
 const BookingFlowContext = createContext<BookingFlowContextValue | undefined>(undefined);
 
 export const BookingFlowProvider = ({ children }: { children: ReactNode }) => {
-  const [state, setState] = useState<BookingFlowState>(() => createBookingFlowState());
+  const cacheRef = useRef<BookingCache>();
+  if (!cacheRef.current) {
+    cacheRef.current = createBookingFlowState().cache;
+  }
+
+  const [lastConfirmResult, setLastConfirmResult] = useState<ConfirmBookingResult | null>(null);
+
+  const getCachedSlots = useCallback((filters: BookingFilterState) => cacheRef.current?.get(filters) ?? null, []);
+  const putSlots = useCallback((filters: BookingFilterState, slots: BookingSlot[]) => {
+    cacheRef.current?.put(filters, slots);
+  }, []);
+  const clear = useCallback(() => {
+    cacheRef.current?.clear();
+    setLastConfirmResult(null);
+  }, []);
 
   const value = useMemo<BookingFlowContextValue>(() => ({
-    cache: state.cache,
-    getCachedSlots: (filters) => state.cache.get(filters),
-    putSlots: (filters, slots) => state.cache.put(filters, slots),
-    lastConfirmResult: state.lastConfirmResult ?? null,
-    setLastConfirmResult: (result) => setState((prev) => ({ ...prev, lastConfirmResult: result })),
-    clear: () => {
-      state.cache.clear();
-      setState((prev) => ({ ...prev, lastConfirmResult: null }));
-    },
-  }), [state]);
+    cache: cacheRef.current!,
+    getCachedSlots,
+    putSlots,
+    lastConfirmResult,
+    setLastConfirmResult,
+    clear,
+  }), [getCachedSlots, putSlots, lastConfirmResult, clear]);
 
   return <BookingFlowContext.Provider value={value}>{children}</BookingFlowContext.Provider>;
 };

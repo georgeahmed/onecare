@@ -10,8 +10,12 @@ export interface SubmitButtonProps {
 const SubmitButton = ({ disabled, children }: SubmitButtonProps) => {
   const intl = useIntl();
   return (
-    <Button type="submit" disabled={disabled} aria-live="polite">
-      {disabled ? intl.formatMessage({ id: 'intake.submitting' }) : children ?? intl.formatMessage({ id: 'intake.submit' })}
+    <Button type="submit" disabled={disabled}>
+      <span aria-live="polite" aria-atomic="true">
+        {disabled
+          ? intl.formatMessage({ id: 'intake.submitting' })
+          : children ?? intl.formatMessage({ id: 'intake.submit' })}
+      </span>
     </Button>
   );
 };

@@ -1,10 +1,13 @@
 // AUTO-GENERATED from schemas. DO NOT EDIT.
 
+export type TaskUpdatedPriority = "STAT" | "URGENT" | "SOON" | "ROUTINE";
+export type TaskUpdatedPreviousPriority = "STAT" | "URGENT" | "SOON" | "ROUTINE";
+
 export interface TaskUpdated {
   taskId: string;
   patientId: string;
-  priority: "STAT" | "URGENT" | "SOON" | "ROUTINE";
-  previousPriority?: "STAT" | "URGENT" | "SOON" | "ROUTINE";
+  priority: TaskUpdatedPriority;
+  previousPriority?: TaskUpdatedPreviousPriority;
   reason: string;
   updatedAt?: string;
   breached?: boolean;

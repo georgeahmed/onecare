@@ -39,7 +39,7 @@ Service-level objectives (latency, availability, error rate, DLQ backlog) are do
 ## Local Workflow
 
 1. `bash scripts/ops/generate-dev-certs.sh` (once) and `docker compose up`.
-2. Generate load with `npm run dev:triage:smoke` or `make stack-smoke`.
+2. Generate load with `make stack-smoke` (fires `/safety-check` smoke requests end-to-end).
 3. Inspect Grafana dashboards (`Orchestrator Overview`, `Booking & Safety`, `Analytics Pipeline`) and use Loki searches like `{correlationId="corr-123"}`.
 4. Tail otel-collector logs for sampling decisions: `docker compose logs otel-collector`.
 5. Adjust rules/dashboards → rerun `docker compose restart grafana prometheus`.

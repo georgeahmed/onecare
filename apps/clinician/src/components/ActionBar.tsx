@@ -1,15 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import type { ClinicianTaskDetail } from '@onecare/events';
 
 type ActionKind = 'call' | 'schedule' | 'book' | 'escalate' | 'resolve';
 
+type ActionInvokeResult = void | boolean | { success?: boolean; message?: string };
+
+const ACTION_CAPABILITIES: Record<ActionKind, readonly string[]> = {
+  call: ['CALL'],
+  schedule: ['SCHEDULE'],
+  book: ['BOOK', 'SCHEDULE'],
+  escalate: ['ESCALATE'],
+  resolve: ['RESOLVE'],
+} as const;
+
+const normalizeResult = (result: ActionInvokeResult): { success: boolean; message?: string } => {
+  if (typeof result === 'boolean') {
+    return { success: result };
+  }
+  if (result && typeof result === 'object') {
+    return { success: result.success ?? true, message: result.message };
+  }
+  return { success: true };
+};
+
 export interface ActionBarHandlers {
-  onCall: () => Promise<void> | void;
-  onSchedule: () => Promise<void> | void;
-  onBook: () => Promise<void> | void;
-  onEscalate: () => Promise<void> | void;
-  onResolve: () => Promise<void> | void;
+  onCall: () => Promise<ActionInvokeResult> | ActionInvokeResult;
+  onSchedule: () => Promise<ActionInvokeResult> | ActionInvokeResult;
+  onBook: () => Promise<ActionInvokeResult> | ActionInvokeResult;
+  onEscalate: () => Promise<ActionInvokeResult> | ActionInvokeResult;
+  onResolve: () => Promise<ActionInvokeResult> | ActionInvokeResult;
 }
 
 interface ActionBarProps extends ActionBarHandlers {
@@ -22,6 +42,15 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
   const intl = useIntl();
   const [busyAction, setBusyAction] = useState<ActionKind | null>(null);
   const lastFocusedRef = useRef<HTMLButtonElement | null>(null);
+  const allowedActions = useMemo(() => new Set(detail.actionsAllowed ?? []), [detail.actionsAllowed]);
+
+  const isActionAllowed = useCallback(
+    (action: ActionKind): boolean => {
+      const capabilities = ACTION_CAPABILITIES[action] ?? [];
+      return capabilities.some((capability) => allowedActions.has(capability));
+    },
+    [allowedActions]
+  );
 
   useEffect(() => {
     if (!busyAction && lastFocusedRef.current) {
@@ -31,17 +60,27 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
   }, [busyAction]);
 
   const runAction = useCallback(
-    async (kind: ActionKind, handler: () => Promise<void> | void, requiresConfirm = false) => {
+    async (
+      kind: ActionKind,
+      handler: () => Promise<ActionInvokeResult> | ActionInvokeResult,
+      options?: { confirm?: boolean; announceSuccess?: boolean }
+    ) => {
       if (busyAction) return;
-      if (requiresConfirm && !window.confirm(intl.formatMessage({ id: `case.action.confirm.${kind}` }))) {
+      if (!isActionAllowed(kind)) return;
+      const { confirm = false, announceSuccess = true } = options ?? {};
+      if (confirm && !window.confirm(intl.formatMessage({ id: `case.action.confirm.${kind}` }))) {
         return;
       }
       setBusyAction(kind);
       try {
-        await handler();
-        onSuccess(
-          intl.formatMessage({ id: 'case.action.success' }, { action: intl.formatMessage({ id: `case.action.${kind}` }) })
-        );
+        const result = await handler();
+        const normalized = normalizeResult(result);
+        if (normalized.success && announceSuccess) {
+          onSuccess(
+            normalized.message ??
+              intl.formatMessage({ id: 'case.action.success' }, { action: intl.formatMessage({ id: `case.action.${kind}` }) })
+          );
+        }
       } catch (error) {
         const message =
           error instanceof Error && error.message
@@ -52,10 +91,11 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
         setBusyAction(null);
       }
     },
-    [busyAction, intl, onError, onSuccess]
+    [busyAction, intl, isActionAllowed, onError, onSuccess]
   );
 
-  const disabled = (action: ActionKind) => busyAction !== null && busyAction !== action;
+  const disabled = (action: ActionKind) => busyAction !== null || !isActionAllowed(action);
+  const isBusy = (action: ActionKind) => busyAction === action;
 
   return (
     <section className="case-action-bar" aria-label={intl.formatMessage({ id: 'case.actions.title' })}>
@@ -74,7 +114,7 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
             void runAction('call', onCall);
           }}
         >
-          {busyAction === 'call'
+          {isBusy('call')
             ? intl.formatMessage({ id: 'case.action.calling' })
             : intl.formatMessage({ id: 'case.action.call' })}
         </button>
@@ -87,7 +127,7 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
             void runAction('schedule', onSchedule);
           }}
         >
-          {busyAction === 'schedule'
+          {isBusy('schedule')
             ? intl.formatMessage({ id: 'case.action.scheduling' })
             : intl.formatMessage({ id: 'case.action.schedule' })}
         </button>
@@ -97,10 +137,10 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
           disabled={disabled('book')}
           onClick={(event) => {
             lastFocusedRef.current = event.currentTarget;
-            void runAction('book', onBook);
+            void runAction('book', onBook, { announceSuccess: false });
           }}
         >
-          {busyAction === 'book'
+          {isBusy('book')
             ? intl.formatMessage({ id: 'case.action.booking' })
             : intl.formatMessage({ id: 'case.action.book' })}
         </button>
@@ -110,10 +150,10 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
           disabled={disabled('escalate')}
           onClick={(event) => {
             lastFocusedRef.current = event.currentTarget;
-            void runAction('escalate', onEscalate, true);
+            void runAction('escalate', onEscalate, { confirm: true });
           }}
         >
-          {busyAction === 'escalate'
+          {isBusy('escalate')
             ? intl.formatMessage({ id: 'case.action.escalating' })
             : intl.formatMessage({ id: 'case.action.escalate' })}
         </button>
@@ -123,10 +163,10 @@ const ActionBar = ({ detail, onCall, onSchedule, onBook, onEscalate, onResolve, 
           disabled={disabled('resolve')}
           onClick={(event) => {
             lastFocusedRef.current = event.currentTarget;
-            void runAction('resolve', onResolve, true);
+            void runAction('resolve', onResolve, { confirm: true });
           }}
         >
-          {busyAction === 'resolve'
+          {isBusy('resolve')
             ? intl.formatMessage({ id: 'case.action.resolving' })
             : intl.formatMessage({ id: 'case.action.resolve' })}
         </button>

@@ -54,6 +54,15 @@ def test_audio_store_ignores_blank_references():
     assert store.list_references() == []
 
 
+def test_audio_store_skips_storage_when_retention_zero():
+    store = AudioStore(AudioRetentionConfig(store_audio="binary", retention_days=0))
+
+    record = store.record(encounter_id="enc-zero", audio_url="s3://bucket/audio.wav")
+
+    assert record is None
+    assert store.list_references() == []
+
+
 def test_load_audio_retention_config_prefers_env_over_file(monkeypatch, tmp_path):
     config_file = tmp_path / "audio.yml"
     config_file.write_text(

@@ -11,6 +11,7 @@ import {
   fromIsoDay,
 } from '../../lib/format';
 import { useLocale } from '../../i18n';
+import { formatSlotModalityLabel } from '../../lib/bookingLabels';
 
 export interface BookingCalendarProps {
   slots: BookingSlot[];
@@ -486,19 +487,20 @@ const BookingCalendar = ({
                           },
                         )
                       : undefined;
+                  const primarySlot = cell.primarySlots[0];
                   const slotLabel =
-                    cell.primarySlots.length > 0
+                    cell.primarySlots.length > 0 && primarySlot
                       ? intl.formatMessage(
                           { id: 'booking.calendar.slotTooltip' },
                           {
                             count: cell.primarySlots.length,
                             day: descriptor.longLabel,
-                            time: formatTime(new Date(cell.primarySlots[0].start), {
+                            time: formatTime(new Date(primarySlot.start), {
                               locale: intl.locale,
                               timeZone: timezone,
                               timeStyle: 'short',
                             }),
-                            modality: intl.formatMessage({ id: `booking.modality.${cell.primarySlots[0].modality}` }),
+                            modality: formatSlotModalityLabel(intl, primarySlot),
                           },
                         )
                       : undefined;
@@ -507,13 +509,14 @@ const BookingCalendar = ({
                   if (cell.withinWindow) {
                     ariaLabelParts.push(intl.formatMessage({ id: 'booking.calendar.cellEnhanced' }));
                   }
-                  if (cell.primarySlots.length > 0) {
+                  if (primarySlot) {
                     ariaLabelParts.push(
                       intl.formatMessage(
                         { id: 'booking.calendar.cellSlots' },
                         { count: cell.primarySlots.length },
                       ),
                     );
+                    ariaLabelParts.push(formatSlotModalityLabel(intl, primarySlot));
                   }
                   return (
                     <div

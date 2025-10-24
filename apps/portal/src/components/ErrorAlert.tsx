@@ -101,9 +101,8 @@ const ErrorAlert = ({
 
     const title = intl.formatMessage({ id: mapping.titleId });
     const fallbackDescription = intl.formatMessage({ id: mapping.descriptionId });
-    const description = mapping === ERROR_MESSAGE_IDS.internal_error && envelope.error?.message
-      ? envelope.error.message
-      : fallbackDescription;
+    const serverMessage = typeof envelope.error?.message === 'string' ? envelope.error.message.trim() : '';
+    const description = serverMessage.length > 0 ? serverMessage : fallbackDescription;
 
     return {
       title,

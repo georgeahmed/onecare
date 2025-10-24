@@ -8,18 +8,21 @@
     "serviceRequestId": { "type": "string", "minLength": 1 },
     "organisationId": { "type": "string", "minLength": 1 },
     "status": {
+      "title": "PharmacyNotificationStatus",
       "type": "string",
       "enum": ["accepted", "queued", "rejected"]
     },
     "summary": { "type": "string", "minLength": 1, "maxLength": 280 },
     "recordedAt": { "type": "string", "format": "date-time" },
     "channel": {
+      "title": "PharmacyNotificationChannel",
       "type": "string",
       "enum": ["sms", "email", "push", "unknown"],
       "default": "unknown"
     },
     "metadata": {
       "type": ["object", "null"],
+      "title": "PharmacyNotificationMetadata",
       "additionalProperties": false,
       "properties": {
         "template": { "type": "string", "minLength": 1, "maxLength": 64 },

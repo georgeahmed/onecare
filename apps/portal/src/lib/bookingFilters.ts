@@ -20,6 +20,15 @@ export const applyFromFilter = (
   previous: BookingFilterState,
   rawValue: string | undefined,
 ): BookingFilterState => {
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    if (previous.from === undefined) {
+      return previous;
+    }
+    return {
+      ...previous,
+      from: undefined,
+    };
+  }
   if (!isValidDate(rawValue)) {
     return previous;
   }
@@ -44,6 +53,15 @@ export const applyToFilter = (
   previous: BookingFilterState,
   rawValue: string | undefined,
 ): BookingFilterState => {
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    if (previous.to === undefined) {
+      return previous;
+    }
+    return {
+      ...previous,
+      to: undefined,
+    };
+  }
   if (!isValidDate(rawValue)) {
     return previous;
   }
@@ -69,12 +87,14 @@ export const resolveFilterBounds = (
 ): { from: number | null; to: number | null } => {
   const parseStart = (value: string | undefined): number | null => {
     if (!isValidDate(value)) return null;
-    return Date.parse(`${normalizeDate(value)}T00:00:00.000Z`);
+    const timestamp = Date.parse(`${normalizeDate(value)}T00:00:00.000`);
+    return Number.isNaN(timestamp) ? null : timestamp;
   };
 
   const parseEnd = (value: string | undefined): number | null => {
     if (!isValidDate(value)) return null;
-    return Date.parse(`${normalizeDate(value)}T23:59:59.999Z`);
+    const timestamp = Date.parse(`${normalizeDate(value)}T23:59:59.999`);
+    return Number.isNaN(timestamp) ? null : timestamp;
   };
 
   return {

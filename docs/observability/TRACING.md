@@ -28,4 +28,4 @@ Tweak thresholds via environment variables by mounting a generated config or by 
 
 - **Local dev**: the default thresholds strike a balance between noise and visibility. Reduce `expected_new_traces_per_sec` if you are testing with small traffic.
 - **Staging/Prod**: replace the `logging` exporter with OTLP/Tempo. Add additional policies (e.g., route-specific sampling) as traffic grows.
-- **Verification**: Generate load with `npm run dev:triage:smoke` and inspect Grafana’s Explore view (Tempo) or the collector logs to confirm the sampling decisions match expectations.
+- **Verification**: Generate load with `make stack-smoke` and inspect Grafana’s Explore view (Tempo) or the collector logs to confirm the sampling decisions match expectations.

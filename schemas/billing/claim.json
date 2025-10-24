@@ -1,5 +1,7 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecare/schemas/billing/claim.json",
+  "title": "BillingClaim",
   "type": "object",
   "additionalProperties": false,
   "required": [

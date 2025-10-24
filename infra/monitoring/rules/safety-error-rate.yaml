@@ -16,7 +16,7 @@ groups:
         annotations:
           summary: "Safety-check error rate >0.5% (warning)"
           description: "Safety-check error rate exceeded 0.5% over the last 10 minutes."
-          runbook: https://onecare/runbooks/triage-latency
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency
       - alert: SafetyCheckErrorRateCritical
         expr: |
           (
@@ -32,4 +32,4 @@ groups:
         annotations:
           summary: "Safety-check error rate >1% (critical)"
           description: "Safety-check error rate exceeded 1% over the last 10 minutes."
-          runbook: https://onecare/runbooks/triage-latency
+          runbook: https://onecare/runbooks/oncall#orchestrator-latency

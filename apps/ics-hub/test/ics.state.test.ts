@@ -143,7 +143,7 @@ describe('InboundState', () => {
       type: 'ics.referral.received',
       correlationId: 'corr-allowed',
     });
-    const decisionRecords = getCounterRecords('ics.routing.decisions_total');
+    const decisionRecords = getCounterRecords('ics_routing_decisions_total');
     expect(decisionRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -184,7 +184,7 @@ describe('InboundState', () => {
       correlationId: 'corr-blocked',
       result: 'blocked',
     });
-    const blockedRecords = getCounterRecords('ics.routing.blocked_total');
+    const blockedRecords = getCounterRecords('ics_routing_blocked_total');
     expect(blockedRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -241,7 +241,7 @@ describe('InboundState', () => {
       correlationId: 'corr-second',
       result: 'rate_limited',
     });
-    const rateRecords = getCounterRecords('ics.routing.rate_limited_total');
+    const rateRecords = getCounterRecords('ics_routing_rate_limited_total');
     expect(rateRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -279,7 +279,7 @@ describe('InboundState', () => {
     expect(ctx.auditIntents?.[0]).toMatchObject({
       type: 'ics.referral.validation_failed',
     });
-    const decisionRecords = getCounterRecords('ics.routing.decisions_total');
+    const decisionRecords = getCounterRecords('ics_routing_decisions_total');
     expect(decisionRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -382,7 +382,7 @@ describe('ValidatedState', () => {
     const next = await validated.handle(ctx, baseEvent);
 
     expect(next).toBe('Routed');
-    const records = getHistogramRecords('ics.routing.latency_ms');
+    const records = getHistogramRecords('ics_routing_latency_ms');
     expect(records.length).toBeGreaterThan(0);
   });
 });
@@ -433,7 +433,7 @@ describe('RoutedState', () => {
     expect(ctx.ackLatencyMs).toBeGreaterThanOrEqual(0);
     expect(ackPublish.headers?.['x-correlation-id']).toBe('corr-ack');
     expect(ctx.processingRelease).toBeNull();
-    const ackRecords = getCounterRecords('ics.ack.published_total');
+    const ackRecords = getCounterRecords('ics_ack_published_total');
     expect(ackRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -459,7 +459,7 @@ describe('RoutedState', () => {
     await state.handle(duplicateCtx, baseEvent);
     expect(sendReferral).not.toHaveBeenCalled();
     expect(duplicateBus.publishes).toHaveLength(0);
-    const duplicateRecords = getCounterRecords('ics.ack.duplicate_total');
+    const duplicateRecords = getCounterRecords('ics_ack_duplicate_total');
     expect(duplicateRecords).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

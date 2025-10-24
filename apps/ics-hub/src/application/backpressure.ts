@@ -1,8 +1,8 @@
 import { createCounter, createHistogram, logger } from '@onecare/observability';
 
-const acquireCounter = createCounter('ics.backpressure.acquire_total');
-const queueOverflowCounter = createCounter('ics.backpressure.queue_overflow_total');
-const waitHistogram = createHistogram('ics.backpressure.wait_ms');
+const acquireCounter = createCounter('ics_backpressure_acquire_total');
+const queueOverflowCounter = createCounter('ics_backpressure_queue_overflow_total');
+const waitHistogram = createHistogram('ics_backpressure_wait_ms');
 
 export interface ProcessingLimiterOptions {
   maxConcurrency: number;

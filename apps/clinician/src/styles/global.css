@@ -112,6 +112,23 @@ main { width: min(1000px, 100%); margin: 0 auto; padding: var(--space-lg) var(--
 .case-subtitle { margin-top: -0.5rem; color: var(--color-text-secondary); }
 .case-error { margin-top: var(--space-sm); padding: var(--space-sm); border-radius: var(--radius-md); border: 1px solid var(--color-danger); background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface)); color: var(--color-danger); }
 
+/* Modal primitives */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: var(--color-surface); color: var(--color-text-primary); padding: var(--space-md); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.3)); width: min(95vw, 760px); max-height: 90vh; overflow: auto; }
+.modal__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); margin-bottom: var(--space-sm); }
+.modal__title { margin: 0; font-size: 1.1rem; }
+.modal__footer { display: flex; gap: var(--space-sm); align-items: center; justify-content: flex-end; margin-top: var(--space-sm); }
+.modal__close { background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0.25rem 0.45rem; }
+
+/* Assisted booking recommendation grid */
+.assist-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-sm); }
+.assist-reco-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.5rem; margin-bottom: 0.5rem; }
+.assist-reco { display: block; text-align: left; padding: 0.5rem 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-surface) 90%, var(--color-muted) 10%); }
+.assist-reco:hover, .assist-reco:focus-visible { outline: none; border-color: var(--color-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-info) 30%, transparent); }
+.assist-validation { font-size: 0.9rem; }
+.assist-validation--ok { color: #2e7d32; }
+.assist-validation--error { color: #b00020; }
+
 .login-layout { min-height: calc(100vh - 6rem); display: grid; place-items: center; }
 .login-card { padding: var(--space-xl); border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-surface); max-width: 26rem; text-align: center; display: flex; flex-direction: column; gap: var(--space-md); }
 .login-note { font-size: 0.85rem; color: var(--color-text-secondary); margin: 0; }

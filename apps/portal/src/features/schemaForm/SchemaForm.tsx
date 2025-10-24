@@ -12,17 +12,23 @@ export interface ObjectJsonSchema extends BaseJsonSchema {
   type: 'object';
   properties?: Record<string, JsonSchema>;
   required?: string[];
+  additionalProperties?: boolean | JsonSchema;
 }
 
 export interface ArrayJsonSchema extends BaseJsonSchema {
   type: 'array';
   items?: JsonSchema;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface StringJsonSchema extends BaseJsonSchema {
   type: 'string';
   enum?: string[];
   format?: string;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
 }
 
 export interface NumberJsonSchema extends BaseJsonSchema {
@@ -66,9 +72,14 @@ export type ValidationIssue =
   | { kind: 'format-uri'; path: string }
   | { kind: 'type'; path: string; expected: string }
   | { kind: 'min-items'; path: string }
+  | { kind: 'max-items'; path: string }
   | { kind: 'minimum'; path: string }
   | { kind: 'maximum'; path: string }
-  | { kind: 'multiple-of'; path: string };
+  | { kind: 'multiple-of'; path: string }
+  | { kind: 'min-length'; path: string }
+  | { kind: 'max-length'; path: string }
+  | { kind: 'pattern'; path: string }
+  | { kind: 'additional-property'; path: string };
 
 const toPathKey = (path: PathSegment[]): string => path.map((segment) => segment.toString()).join('.');
 
@@ -222,9 +233,28 @@ const collectIssues = (schema: JsonSchema, value: unknown, path: PathSegment[], 
     }
     const properties = schema.properties ?? {};
     const requiredProps = new Set(schema.required ?? []);
-    return Object.entries(properties).flatMap(([prop, childSchema]) =>
-      collectIssues(childSchema, (value as Record<string, unknown>)[prop], [...path, prop], requiredProps.has(prop))
-    );
+    const issues: ValidationIssue[] = [];
+
+    if (schema.additionalProperties === false) {
+      Object.keys(value as Record<string, unknown>).forEach((prop) => {
+        if (!Object.prototype.hasOwnProperty.call(properties, prop)) {
+          const propPath = key ? `${key}.${prop}` : prop;
+          issues.push({ kind: 'additional-property', path: propPath });
+        }
+      });
+    }
+
+    Object.entries(properties).forEach(([prop, childSchema]) => {
+      issues.push(
+        ...collectIssues(
+          childSchema,
+          (value as Record<string, unknown>)[prop],
+          [...path, prop],
+          requiredProps.has(prop)
+        )
+      );
+    });
+    return issues;
   }
 
   if (isArraySchema(schema)) {
@@ -353,6 +383,8 @@ const buildErrorMap = (
         return [issuePath, formatMessage('schemaForm.error.maxLength')];
       case 'pattern':
         return [issuePath, formatMessage('schemaForm.error.pattern')];
+      case 'additional-property':
+        return [issuePath, formatMessage('schemaForm.error.additionalProperty')];
       default:
         return [issuePath, formatMessage('schemaForm.error.required')];
     }
@@ -720,7 +752,7 @@ const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps<PortalSubmission
             >
               {!required ? (
                 <option value="">
-                  {' '}
+                  {intl.formatMessage({ id: 'schemaForm.select.placeholder' })}
                 </option>
               ) : null}
               {options.map((option) => {

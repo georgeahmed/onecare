@@ -14,7 +14,7 @@ This runbook supports SRE and service teams responding to alerts generated from 
 2. Confirm whether the spike aligns with recent deployments (Git SHA annotation) or dependency latency (e.g., Safety Gate ML service).
 3. Mitigation:
    - Scale orchestrator pods (`kubectl scale deploy orchestrator --replicas=<n>`).
-   - Enable degraded mode by setting `ORCHESTRATOR_DEGRADED_MODE=1` via Helm override.
+   - Temporarily lower concurrency budgets via Helm override (e.g., tune `ORCHESTRATOR_MAX_CONCURRENCY_GLOBAL` or per-route overrides) to shed load while investigating.
    - If Safety Gate is the bottleneck, inform ML team and enable request sampling for triage.
 4. After stabilisation, annotate the incident with root cause and trigger a follow-up ticket if tuning is required.
 
@@ -28,7 +28,7 @@ This runbook supports SRE and service teams responding to alerts generated from 
 ## Booking Latency
 
 1. Inspect `SLO • Booking` dashboard. Determine whether `search` or `create` endpoint drives the breach.
-2. Validate GP Connect availability (`scripts/ops/gpconnect-health.sh` if deployed) and review conflict rate metrics.
+2. Validate GP Connect availability via the booking readiness probe (e.g., `kubectl exec deploy/booking -- curl -sf http://localhost:4002/readyz`) or by curling the configured GP Connect endpoint; review conflict rate metrics.
 3. Mitigation:
    - Temporarily reduce concurrency via `BOOKING_HTTP_CONCURRENCY`.
    - If GP Connect latency is external, alert the provider and enable enhanced backoff in config.

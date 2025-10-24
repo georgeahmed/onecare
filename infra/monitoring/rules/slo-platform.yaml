@@ -11,7 +11,7 @@ groups:
         annotations:
           summary: "Frequent bus reconnects detected"
           description: "Bus reconnect events exceeded 1 per second over 15 minutes."
-          runbook: https://onecare/runbooks/bus-reliability
+          runbook: https://onecare/runbooks/bus-operations
       - alert: PlatformDlqDepth
         expr: |
           (
@@ -26,4 +26,4 @@ groups:
         annotations:
           summary: "DLQ backlog critical"
           description: "Average DLQ backlog exceeded 200 messages for 15 minutes."
-          runbook: https://onecare/runbooks/dlq-backlog
+          runbook: https://onecare/runbooks/oncall#dlq-remediation

@@ -7,9 +7,6 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --pretty"
   },
-  "overrides": {
-    "@onecare/events": "file:packages/events"
-  },
   "dependencies": {
     "ajv": "^8.12.0"
   },

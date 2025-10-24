@@ -2,13 +2,27 @@
 name = "onecare-ml-services"
 version = "0.1.0"
 description = "ONECARE ML-oriented microservices (safety gate, scribe)"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
   "fastapi==0.109.2",
   "uvicorn==0.37.0",
   "pydantic==1.10.24",
   "prometheus-client==0.20.0",
   "langdetect==1.0.9"
+]
+
+[tool.setuptools]
+include-package-data = true
+packages = [
+  "common",
+  "models",
+  "safety_gate_service",
+  "scribe_service",
+  "triage_dataset"
+]
+py-modules = [
+  "security_utils",
+  "train_acuity"
 ]
 
 [tool.uvicorn]

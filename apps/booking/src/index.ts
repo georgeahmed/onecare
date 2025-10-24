@@ -4,21 +4,24 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { logger, setCorrelationId, createHistogram, createCounter } from '@onecare/observability';
+import type { BookingAssistedOutcome } from '@onecare/events';
+import type { MessageBus } from '@onecare/bus';
 import {
   SearchState,
   BookedState,
   deriveBookingIdempotencyKey,
   type BookingContext,
+  type BookingFeatureFlags,
   DEFAULT_IDEMPOTENCY_TTL_SECONDS,
 } from './application/booking.state';
 import type { BookingEvent, BookingAuditPublisher } from './application/booking.state';
 import type { EnhancedAccessPolicy } from './application/enhancedAccess';
 import type { GpConnectClient, SlotView } from './adapters/gpconnect.client';
 import type { FhirRepository, QueueNotifier, IdempotencyStore } from '@onecare/ports';
-import type { MessageBus } from '@onecare/bus';
 import { errorEnvelope, mapErrorToStatus, type ErrorCode } from './application/error';
-import { validateBookingSearchRequest } from './application/contracts';
+import { validateBookingSearchRequest, validateBookingAssistedOutcome } from './application/contracts';
 import { BookingSearchError, BookingAppointmentError } from './application/booking.state';
+import { recordAssistedOutcome, AssistedOutcomeError, type AssistedOutcomeCommand } from './application/assisted';
 
 const JSON_CONTENT_TYPE = 'application/json';
 const DEFAULT_BODY_LIMIT = 128 * 1024;
@@ -43,6 +46,7 @@ export interface BookingServerOptions {
   queueName?: string;
   maxConcurrency?: number;
   readinessCheck?: () => Promise<boolean>;
+  featureFlags?: BookingFeatureFlags;
 }
 
 interface ParsedAppointmentRequest {
@@ -247,6 +251,11 @@ export function createBookingServer(options: BookingServerOptions): BookingHttpS
         }
         return;
       }
+      if (req.method === 'POST' && path === '/booking/assisted') {
+        const status = await handleAssistedOutcome(req, res, correlationId, options);
+        recordOutcome(status < 300 ? 'success' : status >= 500 ? 'server_error' : 'client_error', status);
+        return;
+      }
 
       res.statusCode = 404;
       res.end();
@@ -376,6 +385,12 @@ async function handleBooking(
     parsed.searchParams = validation.value as unknown as Record<string, unknown>;
   }
 
+  if (options.featureFlags?.gpConnectBooking === false) {
+    return sendError(res, 'forbidden', 'GP Connect booking disabled', correlationId, {
+      feature: 'gp_connect_booking',
+    });
+  }
+
   const context = createContext(`booking-${parsed.slot.id}`, options, correlationId);
   context.patientId = parsed.patientId;
   context.narrative = parsed.narrative;
@@ -433,6 +448,69 @@ async function handleBooking(
   return sendJson(res, 201, responseBody);
 }
 
+async function handleAssistedOutcome(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId: string,
+  options: BookingServerOptions,
+): Promise<number> {
+  try {
+    enforceJsonContentType(req);
+  } catch (error) {
+    if (error instanceof RequestError) {
+      return sendError(res, error.code, error.message, correlationId, error.details);
+    }
+    throw error;
+  }
+
+  const rawPayload = await readJson(req);
+  const validation = validateBookingAssistedOutcome(rawPayload);
+  if (!validation.ok) {
+    return sendError(res, 'invalid_input', 'Invalid assisted booking payload', correlationId, {
+      errors: validation.errors,
+    });
+  }
+
+  const command: AssistedOutcomeCommand = {
+    ...(validation.value as BookingAssistedOutcome),
+    correlationId,
+  };
+
+  try {
+    const result = await recordAssistedOutcome(command, {
+      fhirRepository: options.fhirRepository!,
+      bus: options.bus,
+      queueNotifier: options.queueNotifier,
+      auditPublisher: options.auditPublisher,
+      queueName: options.queueName,
+    });
+    return sendJson(res, 202, {
+      status: 'recorded',
+      outcome: command.outcome,
+      appointmentId: result.appointmentId ?? null,
+      taskId: result.taskReference,
+    });
+  } catch (error) {
+    if (error instanceof AssistedOutcomeError) {
+      switch (error.code) {
+        case 'slot_required':
+        case 'slot_required_when_booked':
+          return sendError(res, 'invalid_input', 'slot required when outcome is booked', correlationId);
+        case 'bus_missing':
+        case 'fhir_repository_missing':
+          return sendError(res, 'internal_error', 'Booking service misconfigured', correlationId, { code: error.code });
+        default:
+          break;
+      }
+    }
+    logger.error('booking.assisted.outcome_failed', {
+      correlationId,
+      reason: error instanceof Error ? error.message : 'unknown_error',
+    });
+    return sendError(res, 'internal_error', 'Failed to record assisted booking outcome', correlationId);
+  }
+}
+
 function createContext(id: string, options: BookingServerOptions, correlationId: string): BookingContext {
   return {
     id,
@@ -445,6 +523,7 @@ function createContext(id: string, options: BookingServerOptions, correlationId:
     bus: options.bus,
     idempotencyStore: options.idempotencyStore,
     idempotencyTtlSeconds: options.idempotencyTtlSeconds ?? DEFAULT_IDEMPOTENCY_TTL_SECONDS,
+    featureFlags: options.featureFlags,
   } as BookingContext;
 }
 

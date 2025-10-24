@@ -11,10 +11,76 @@ mkdir -p "$HELPER_DIR" "$PIDS_DIR"
 log() { printf "[dev-all] %s\n" "$*"; }
 die() { printf "[dev-all] ERROR: %s\n" "$*" >&2; exit 1; }
 
+# --- Load .env defaults if present ---
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  log "loading environment defaults from .env"
+  # shellcheck disable=SC1091
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+# --- Determine runtimes and helpers ---
+UVICORN_BIN=""
+if [[ -x "$ROOT_DIR/services-py/.venv/bin/uvicorn" ]]; then
+  UVICORN_BIN="$ROOT_DIR/services-py/.venv/bin/uvicorn"
+elif command -v uvicorn >/dev/null 2>&1; then
+  UVICORN_BIN="$(command -v uvicorn)"
+fi
+
+require_port_free() {
+  local port="$1"
+  local label="$2"
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      die "Port ${port} already in use (${label}). Stop conflicting service or run npm run --workspaces=false dev:all:stop first."
+    fi
+  elif command -v python3 >/dev/null 2>&1; then
+    if python3 - <<PY >/dev/null 2>&1
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.connect(("127.0.0.1", ${port}))
+except OSError:
+    sys.exit(1)
+else:
+    sys.exit(0)
+finally:
+    s.close()
+PY
+    then
+      die "Port ${port} already in use (${label})."
+    fi
+  fi
+}
+
+cleanup_leftovers() {
+  if [[ -d "$PIDS_DIR" ]]; then
+    for pidfile in "$PIDS_DIR"/*.pid; do
+      [[ -e "$pidfile" ]] || continue
+      local pid
+      pid=$(cat "$pidfile" 2>/dev/null || true)
+      if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+        log "stopping leftover process (pid ${pid}) from $(basename "$pidfile")"
+        kill "$pid" 2>/dev/null || true
+        sleep 0.2
+        if kill -0 "$pid" 2>/dev/null; then
+          kill -9 "$pid" 2>/dev/null || true
+        fi
+      fi
+      rm -f "$pidfile"
+    done
+  fi
+}
+
+cleanup_leftovers
+
 # --- Preflight checks ---
 command -v node >/dev/null 2>&1 || die "node is required on PATH"
 command -v npm >/dev/null 2>&1 || die "npm is required on PATH"
-command -v uvicorn >/dev/null 2>&1 || log "uvicorn not found; Python services may not run (try: make py-safety)"
+if [[ -z "$UVICORN_BIN" ]]; then
+  log "uvicorn not found; Python services may not run (try: make py-safety)"
+fi
 
 if [[ -z "${FHIR_BASE_URL:-}" ]]; then
   cat >&2 <<EOF
@@ -22,6 +88,8 @@ if [[ -z "${FHIR_BASE_URL:-}" ]]; then
   Set a reachable FHIR endpoint first, e.g.:
     export FHIR_BASE_URL="https://fhir-dev.example.com"
     export FHIR_TOKEN="<bearer token>"   # or FHIR_AUTH_TOKEN
+    export FHIR_HEALTH_PATH="_ping"      # NHS INT endpoints use _ping instead of /metadata
+    export FHIR_API_KEY="<subscription key>"  # Required for NHS API Platform gateways
 EOF
   exit 1
 fi
@@ -29,6 +97,10 @@ fi
 # Provide defaults for local zero‑trust proxy
 : "${SECURITY_SHARED_SECRET:=dev-shared-secret}"
 : "${PRACTICE_ID:=demo}"
+SAFETY_GATE_PORT=${SAFETY_GATE_PORT:-8081}
+BOOKING_STUB_PORT=${BOOKING_STUB_PORT:-4002}
+ORCHESTRATOR_PORT=${ORCHESTRATOR_PORT:-3001}
+PORTAL_PROXY_PORT=${PORTAL_PROXY_PORT:-4000}
 
 # --- Generate consent fixture if missing ---
 CONSENT_FIXTURE="$HELPER_DIR/consent-fixture.json"
@@ -148,37 +220,42 @@ start_bg() { (
   set -e; "$@" & echo $! >"$PIDS_DIR/$(basename "$1").pid"; ) }
 
 # Safety Gate (Python)
-if command -v uvicorn >/dev/null 2>&1; then
-  log "starting Safety Gate on :8081"
-  start_bg uvicorn services-py/safety_gate_service/main:app --port 8081 --log-level warning
+if [[ -n "$UVICORN_BIN" ]]; then
+  require_port_free "$SAFETY_GATE_PORT" "Safety Gate"
+  log "starting Safety Gate on :${SAFETY_GATE_PORT}"
+  PYTHONPATH=services-py start_bg "$UVICORN_BIN" safety_gate_service.main:app --port "$SAFETY_GATE_PORT" --log-level warning
 else
   log "skipping Safety Gate (uvicorn not found)"
 fi
 
 # Booking stub
-log "starting booking stub on :4002"
-start_bg node "$BOOKING_STUB"
+require_port_free "$BOOKING_STUB_PORT" "booking stub"
+log "starting booking stub on :${BOOKING_STUB_PORT}"
+BOOKING_STUB_PORT="$BOOKING_STUB_PORT" start_bg node "$BOOKING_STUB"
 
 # Orchestrator (Node)
-log "starting Orchestrator on :3001"
+require_port_free "$ORCHESTRATOR_PORT" "orchestrator"
+log "starting Orchestrator on :${ORCHESTRATOR_PORT}"
 (
   cd "$ROOT_DIR"
   CONSENT_CACHE="$(cat "$CONSENT_FIXTURE")" \
-  PORT=3001 PRACTICE_ID="$PRACTICE_ID" \
-  PY_SAFETY_GATE_URL=${PY_SAFETY_GATE_URL:-http://localhost:8081} \
+  PORT="$ORCHESTRATOR_PORT" PRACTICE_ID="$PRACTICE_ID" \
+  PY_SAFETY_GATE_URL=${PY_SAFETY_GATE_URL:-http://localhost:${SAFETY_GATE_PORT}} \
   PY_SAFETY_GATE_HOST_ALLOWLIST=${PY_SAFETY_GATE_HOST_ALLOWLIST:-localhost,127.0.0.1} \
   BUS_IMPL=memory \
   SECURITY_SHARED_SECRET="$SECURITY_SHARED_SECRET" \
-  BOOKING_AVAILABILITY_URL=${BOOKING_AVAILABILITY_URL:-http://localhost:4002/} \
+  BOOKING_AVAILABILITY_URL=${BOOKING_AVAILABILITY_URL:-http://localhost:${BOOKING_STUB_PORT}/} \
   node apps/orchestrator/dist/index.js & echo $! > "$PIDS_DIR/orchestrator.pid"
 )
 
 # Proxy
-log "starting signing proxy on :4000"
-PORTAL_PROXY_TARGET=http://127.0.0.1:3001 \
+require_port_free "$PORTAL_PROXY_PORT" "signing proxy"
+log "starting signing proxy on :${PORTAL_PROXY_PORT}"
+PORTAL_PROXY_TARGET="http://127.0.0.1:${ORCHESTRATOR_PORT}" \
 PORTAL_PROXY_PRACTICE="$PRACTICE_ID" \
 PORTAL_PROXY_PATIENT=${PORTAL_PROXY_PATIENT:-patient-123} \
 SECURITY_SHARED_SECRET="$SECURITY_SHARED_SECRET" \
+PORTAL_PROXY_PORT="$PORTAL_PROXY_PORT" \
 start_bg node "$PROXY"
 
 # Portal (Vite dev)

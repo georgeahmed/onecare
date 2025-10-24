@@ -1,5 +1,7 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://onecare/schemas/billing/response.json",
+  "title": "BillingResponse",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,6 +15,7 @@
     },
     "status": {
       "type": "string",
+      "title": "BillingResponseStatus",
       "enum": [
         "accepted",
         "pending",

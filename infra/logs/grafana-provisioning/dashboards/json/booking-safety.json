@@ -82,7 +82,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_ms_bucket{service=\"safety-gate\",route=\"/analyze\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(safety_gate_request_latency_seconds_bucket{endpoint=\"analyze\"}[$__rate_interval])) by (le))",
           "legendFormat": "safety gate p95",
           "refId": "A"
         }

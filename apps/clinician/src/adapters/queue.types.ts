@@ -36,4 +36,22 @@ export interface QueueGateway {
   resolve(id: string, outcome: string, note?: string): Promise<ClinicianTaskDetail>;
   scheduleCallback(id: string, whenIso: string, note?: string): Promise<ClinicianTaskDetail>;
   bookSlot(id: string, slotId: string): Promise<ClinicianTaskDetail>;
+  assistedOutcome(
+    id: string,
+    outcome: 'booked' | 'no_time' | 'pharmacy_referral_sent',
+    options?: { start?: string; end?: string; location?: string; serviceType?: string; notes?: string; patientId?: string },
+  ): Promise<ClinicianTaskDetail>;
+  recordCall(id: string): Promise<ClinicianTaskDetail>;
+  escalate(id: string): Promise<ClinicianTaskDetail>;
+  recommendWindows(
+    id: string,
+    options?: { windowStart?: string; windowEnd?: string; location?: string; serviceType?: string },
+  ): Promise<RecommendedWindow[]>;
+}
+
+export interface RecommendedWindow {
+  start: string;
+  end: string;
+  location?: string;
+  serviceType?: string;
 }

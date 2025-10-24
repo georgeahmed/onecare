@@ -74,3 +74,44 @@ def test_predict_proba_matches_fixture(case):
         assert probabilities[label] == pytest.approx(value, rel=1e-6, abs=1e-12)
 
     assert sum(probabilities.values()) == pytest.approx(1.0, rel=1e-6, abs=1e-9)
+
+
+def test_load_model_bundle_rejects_mismatched_dimension(monkeypatch):
+    monkeypatch.setattr(
+        "safety_gate_service.predict._load_artifact_payload",
+        lambda *args, **kwargs: ({"prototypes": {2: [0.1, 0.2]}}, {"modelVersion": "bad"}),
+    )
+    load_model_bundle.cache_clear()
+    with pytest.raises(RuntimeError, match="dimension"):
+        load_model_bundle()
+    load_model_bundle.cache_clear()
+
+
+def test_predict_outcome_requires_emergency_prototype(monkeypatch):
+    from safety_gate_service.predict import EMBEDDING_SIZE
+
+    prototype_length = EMBEDDING_SIZE + 4
+    monkeypatch.setattr(
+        "safety_gate_service.predict._load_artifact_payload",
+        lambda *args, **kwargs: (
+            {"prototypes": {0: [0.0] * prototype_length}},
+            {"modelVersion": "missing"},
+        ),
+    )
+    load_model_bundle.cache_clear()
+
+    response = TestClient(app).post(
+        "/predict",
+        headers=safety_headers(scope="safety:predict"),
+        json={
+            "symptomMentions": [{"name": "Chest pain", "confidence": 0.9}],
+            "patient": {"ageYears": 55},
+        },
+    )
+
+    assert response.status_code == 500
+    body = response.json()
+    error = body.get("error") or body.get("detail", {}).get("error")
+    assert error is not None
+    assert error["code"] == "prediction_failed"
+    load_model_bundle.cache_clear()

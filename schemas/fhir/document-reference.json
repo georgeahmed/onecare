@@ -10,10 +10,12 @@
     },
     "status": {
       "type": "string",
+      "title": "FhirDocumentReferenceStatus",
       "enum": ["current", "superseded", "entered-in-error"]
     },
     "subject": {
       "type": "object",
+      "title": "FhirDocumentReferenceSubject",
       "properties": {
         "reference": { "type": "string", "minLength": 1 }
       },
@@ -24,10 +26,12 @@
       "minItems": 1,
       "items": {
         "type": "object",
+        "title": "FhirDocumentReferenceContentItem",
         "required": ["attachment"],
         "properties": {
           "attachment": {
             "type": "object",
+            "title": "FhirDocumentReferenceAttachment",
             "required": ["url", "contentType"],
             "properties": {
               "url": { "type": "string", "format": "uri" },

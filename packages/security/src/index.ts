@@ -196,7 +196,11 @@ export class OidcClient {
     this.issuer = options.issuer.trim();
     this.jwksUri = options.jwksUri.trim();
     this.audience = toAudienceSet(options.audience);
-    this.fetchImpl = options.fetchImpl?.bind(globalThis) ?? globalThis.fetch.bind(globalThis);
+    const rawFetch = options.fetchImpl ?? (typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined);
+    if (!rawFetch) {
+      throw new Error('OidcClient requires a fetch implementation');
+    }
+    this.fetchImpl = rawFetch as typeof fetch;
     this.httpTimeoutMs = Number.isFinite(options.httpTimeoutMs) ? Math.max(200, options.httpTimeoutMs!) : DEFAULT_TIMEOUT_MS;
     this.cacheMaxAgeMs = Number.isFinite(options.cacheMaxAgeMs) ? Math.max(1_000, options.cacheMaxAgeMs!) : DEFAULT_CACHE_MAX_MS;
     const skewSeconds = Number.isFinite(options.clockSkewSeconds)
@@ -370,11 +374,20 @@ function decodeSecretSource(raw: string): Buffer {
   const trimmed = raw.trim();
   if (trimmed.startsWith('base64:')) {
     const decoded = trimmed.slice('base64:'.length);
+    if (!isValidBase64String(decoded)) {
+      throw new Error('IDENTIFIER_HASH_SECRET base64 encoding invalid');
+    }
     return Buffer.from(decoded, 'base64');
   }
   if (trimmed.startsWith('hex:')) {
     const decoded = trimmed.slice('hex:'.length);
+    if (!isValidHexString(decoded)) {
+      throw new Error('IDENTIFIER_HASH_SECRET hex encoding invalid');
+    }
     return Buffer.from(decoded, 'hex');
+  }
+  if (!trimmed) {
+    throw new Error('IDENTIFIER_HASH_SECRET cannot be empty');
   }
   return Buffer.from(trimmed, 'utf8');
 }
@@ -391,7 +404,8 @@ function resolveSecretFromEnv(): { marker: string; value: Buffer } {
     return { marker: raw, value: decodeSecretSource(raw) };
   }
 
-  if (process.env.NODE_ENV === 'production') {
+  const nodeEnv = process.env.NODE_ENV?.trim().toLowerCase();
+  if (nodeEnv === 'production') {
     throw new Error(`${HASH_SECRET_ENV} must be configured in production environments`);
   }
 
@@ -423,4 +437,18 @@ export function setHashIdentifierSecretForTest(secret: string | null): void {
 export function hashIdentifier(value: string): string {
   const secret = resolveHashSecret();
   return createHmac('sha256', secret).update(value).digest('base64url');
+}
+
+function isValidBase64String(value: string): boolean {
+  if (!value) return false;
+  const normalised = value.replace(/\s+/g, '');
+  const remainder = normalised.length % 4;
+  if (remainder === 1) return false;
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(normalised);
+}
+
+function isValidHexString(value: string): boolean {
+  if (!value) return false;
+  if (value.length % 2 !== 0) return false;
+  return /^[0-9a-fA-F]+$/.test(value);
 }

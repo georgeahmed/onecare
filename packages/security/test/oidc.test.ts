@@ -176,4 +176,55 @@ describe('OidcClient', () => {
     await client.verify(token2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('throws when no fetch implementation is available', () => {
+    const originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+    (globalThis as { fetch?: typeof fetch }).fetch = undefined;
+    try {
+      expect(
+        () =>
+          new OidcClient({
+            issuer: 'https://oidc.example',
+            audience: 'client-123',
+            jwksUri: 'https://oidc.example/jwks',
+          }),
+      ).toThrow(/fetch implementation/);
+    } finally {
+      (globalThis as { fetch?: typeof fetch }).fetch = originalFetch;
+    }
+  });
+
+  it('accepts custom fetch implementations when global fetch is absent', async () => {
+    const originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+    (globalThis as { fetch?: typeof fetch }).fetch = undefined;
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const jwk = exportJwk(publicKey, 'kid-1');
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ keys: [jwk] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    try {
+      const client = new OidcClient({
+        issuer: 'https://oidc.example',
+        audience: 'client-123',
+        jwksUri: 'https://oidc.example/jwks',
+        fetchImpl: fetchMock,
+      });
+      const now = Math.floor(Date.now() / 1000);
+      const token = signJwt(privateKey, 'kid-1', {
+        iss: 'https://oidc.example',
+        sub: 'user-123',
+        aud: 'client-123',
+        exp: now + 600,
+        nbf: now - 30,
+        iat: now - 30,
+      });
+
+      await expect(client.verify(token)).resolves.toMatchObject({ subject: 'user-123' });
+    } finally {
+      (globalThis as { fetch?: typeof fetch }).fetch = originalFetch;
+    }
+  });
 });

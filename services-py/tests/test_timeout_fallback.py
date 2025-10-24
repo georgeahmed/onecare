@@ -33,6 +33,7 @@ def test_timeout_triggers_rules_fallback(monkeypatch):
         }
 
     monkeypatch.setattr("safety_gate_service.ner.SafetyNER.analyze", slow_analyze, raising=False)
+    monkeypatch.setattr("safety_gate_service.language.detect", lambda _: "en")
 
     with TestClient(app) as client:
         decision_config = getattr(app.state, "decision_config")

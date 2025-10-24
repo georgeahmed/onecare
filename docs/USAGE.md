@@ -7,7 +7,14 @@ Prerequisites
 - npm: v9+
 - Python: 3.11+ (for ML services)
 - Docker + Docker Compose (for full local stack)
-- Optional: make or just for task shortcuts
+- Optional tooling:
+  - make or just for task shortcuts
+  - pre-commit for Git hook management
+  - k6 for perf smoke tests (`make perf-smoke`)
+  - newman for perf smoke tests (`make perf-smoke`)
+  - nats CLI for DLQ and JetStream ops scripts
+  - syft for SBOM generation (`scripts/sbom-generate.sh`)
+  - datamodel-code-generator for schema -> Pydantic model generation (`RUN_PY=1 npm run --workspaces=false codegen`)
 
 Environment Variables
 - NODE_ENV — environment name (default: development)
@@ -19,8 +26,10 @@ Environment Variables
 - BOOKING_READINESS_CACHE_MS — cache window for booking `/readyz` probes (default 1000 ms, minimum 250 ms). Readiness validates GP Connect reachability/auth and flips to 503 during shutdown.
 - BOOKING_SERVICE_URL — base URL for orchestrator-to-booking interactions (used by clinician book-slot API).
 - PY_SCRIBE_URL — Scribe base URL (default: http://localhost:8082)
+- Messaging Send Document uses practice config keys under `messaging.send_document.*` (see `apps/messaging/README.md`). Set `PRACTICE_ID` and ensure the resolved config defines `mesh.sender_mailbox`, workflow IDs, and PDF limits before booting the service.
 - LOG_LEVEL — logging level (default: info)
 - BUS_IMPL — message bus implementation (`memory` for local dev, `nats` in docker)
+- STARTUP_TIMEOUT_SECONDS — for `make dev-run`, seconds to wait for Safety Gate and Orchestrator readiness before prompting or exiting (default: 30)
 - NATS_URL — NATS connection URL(s) (comma-separated, e.g. nats://onecare:onecare-secret@nats:4222)
 - NATS_USER / NATS_PASS — credentials for protected NATS servers
 - NATS_CONNECT_TIMEOUT_MS — connect timeout (default: 2000ms)
@@ -39,6 +48,13 @@ Environment Variables
 Example: copy .env.example to .env and adjust as needed.
 
 Install & Build
+- End-to-end operator guide: `./scripts/dev-operation.sh`  
+  - Interactive walkthrough covering setup, stack launch, testing, observability, and clean-up.  
+  - Offers to open separate terminals for long-running services and surfaces sample credentials.  
+- Bootstrap all dependencies: `./scripts/setup-requirements.sh`  
+  - Adds npm workspace packages and Python `services-py` extras; reports any manual prerequisites (Docker, Node, Python, etc.).  
+  - Use `./scripts/setup-requirements.sh --dry-run` to preview actions without installing.  
+  - Visual options: `--no-color`, `--no-unicode`, `--no-spinner`, or `--plain` (all off) to adjust terminal output.
 - Install deps: npm ci
 - Build all workspaces: npm run build
 - Typecheck: npm run typecheck
@@ -100,9 +116,9 @@ Runbook
 - For zoom fallbacks verify `<html data-zoom="high">` is applied at ≥200 % and that header/nav stack vertically (see CSS in `apps/portal/src/styles/global.css`).
 
 Codegen (Contracts)
-- TS contracts from JSON Schemas: npm run codegen
+- TS contracts from JSON Schemas: npm run --workspaces=false codegen
 - Dry check (no generation): npm run codegen:check
-- TS + Python generation (requires datamodel-code-generator): RUN_PY=1 npm run codegen
+- TS + Python generation (requires datamodel-code-generator): RUN_PY=1 npm run --workspaces=false codegen
 
 Generators
 - TypeScript: json-schema-to-typescript (json2ts)
@@ -119,6 +135,7 @@ Makefile Shortcuts
 - make py-safety — start Safety Gate locally on 8081
 - make py-scribe — start Scribe locally on 8082
 - make dev-run — start Safety Gate + Orchestrator (keeps running)
+  - Note: if `FHIR_BASE_URL` is not set in your shell, dev-run will default to the public HAPI R4 server at `https://hapi.fhir.org/baseR4` for quick end-to-end testing (no auth required). Set a real NHS sandbox URL and token when ready.
 - make dev-stop — stop Safety Gate + Orchestrator started by dev-run
 - One‑shot full dev stack (Portal + Proxy + Orchestrator + Safety Gate + Booking stub):
   - npm run dev:all — starts everything locally
@@ -126,6 +143,8 @@ Makefile Shortcuts
   - Prereqs: set FHIR_BASE_URL and FHIR_TOKEN (or FHIR_AUTH_TOKEN). Example:
     - export FHIR_BASE_URL="https://fhir-dev.example.com"
     - export FHIR_TOKEN="<bearer token>"
+    - export FHIR_HEALTH_PATH="_ping"  # PDS/NHS INT uses _ping instead of /metadata
+    - export FHIR_API_KEY="<subscription key>"  # required for NHS API Platform gateways
   - Notes:
     - Uses BUS_IMPL=memory (no NATS required)
     - Booking slots served by a local stub on :4002; confirm is proxied stub
@@ -158,13 +177,30 @@ Ensure booking proxy vars are configured before running the portal:
 - export `VITE_BOOKING_API_URL` to the orchestrator origin (default `http://localhost:3001`).
 
 1) Start Safety Gate (Python)
-   - uvicorn services-py/safety_gate_service/main:app --reload --port 8081
+   - PYTHONPATH=services-py uvicorn safety_gate_service.main:app --reload --port 8081
+   - Ensure the virtualenv uses Python 3.10–3.12 (run `python3.11 -m venv services-py/.venv` if needed)
 2) Build Orchestrator (TS)
    - npm -w @onecare/app-orchestrator run build
 3) Start Orchestrator
    - PORT=3001 PRACTICE_ID=demo PY_SAFETY_GATE_URL=http://localhost:8081 PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1 BUS_IMPL=memory node apps/orchestrator/dist/index.js
 4) Optional: quick perf
    - make perf-orchestrator
+
+NHS Sandbox (Option 2) — Setup and Token Fetch
+- Set env in `.env.dev` (kept out of Git):
+  - `FHIR_BASE_URL=https://int.api.service.nhs.uk/<service>/FHIR/R4/` (exact path from NHS portal)
+  - `FHIR_API_KEY_HEADER=Ocp-Apim-Subscription-Key`
+  - `FHIR_API_KEY=<your APIM subscription key>`
+  - `FHIR_CLIENT_ID=<sandbox client id>` and `FHIR_CLIENT_SECRET=<sandbox client secret>`
+  - `OIDC_ISSUER=https://identity.ptl.api.platform.nhs.uk/realms/NHS-Login-mock-int` (or the issuer provided)
+- Fetch a system token (client_credentials) and write it into `.env.dev`:
+  - Option A (write to file): `OIDC_ISSUER=... FHIR_CLIENT_ID=... FHIR_CLIENT_SECRET=... scripts/dev/fetch-nhs-token.sh --write-env`
+  - Option B (print only): `... scripts/dev/fetch-nhs-token.sh --print` then export `FHIR_SYSTEM_TOKEN=...`
+- Verify connectivity to the sandbox before starting services:
+  - `set -a; source .env.dev; set +a`
+  - `scripts/dev/fhir_probe.sh` (expects 200 on CapabilityStatement)
+- Start services:
+  - `make dev-run` (or start both processes manually as documented above)
 
 Health checks
 - Orchestrator: curl http://localhost:3001/health
@@ -338,7 +374,7 @@ Adding a New Service
 
 Changing Contracts
 1) Edit/add schemas under schemas/
-2) Run npm run codegen (or let CI do it on PRs)
+2) Run npm run --workspaces=false codegen (or let CI do it on PRs)
 3) Update service code to use new/updated contracts
 4) Update docs/USAGE.md and service READMEs if inputs/outputs change
 

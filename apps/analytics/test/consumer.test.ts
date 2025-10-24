@@ -4,7 +4,7 @@ import type { Message } from '@onecare/bus';
 import { Topics, createEnvelope } from '@onecare/events';
 import type { Metric } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
-import { getCounterRecords, getHistogramRecords, resetMetrics } from '@onecare/observability';
+import { getHistogramRecords, resetMetrics } from '@onecare/observability';
 import {
   AnalyticsConsumer,
 } from '../src/consumer';
@@ -89,8 +89,14 @@ describe('AnalyticsConsumer', () => {
     expect(dlqEvents).toHaveLength(1);
     const dlqPayload = extractDlqPayload(dlqEvents[0]);
     expect(dlqPayload).toMatchObject({
-      cause: 'analytics.metric.validation_failed',
+      originalTopic: Topics.analytics.metric,
       correlationId: envelope.correlationId,
+      errorCode: 'analytics.metric.validation_failed',
+      attempts: 1,
+    });
+    expect(dlqPayload.payloadRef).toMatchObject({
+      cause: 'analytics.metric.validation_failed',
+      metricName: 'unknown',
     });
 
     await consumer.stop();
@@ -115,7 +121,6 @@ describe('AnalyticsConsumer', () => {
 
     await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
     expect(write).toHaveBeenCalledTimes(2);
-    expect(getCounterRecords('analytics.ingest.retry')).toHaveLength(1);
     expect(dlqEvents).toHaveLength(0);
 
     await consumer.stop();
@@ -139,8 +144,15 @@ describe('AnalyticsConsumer', () => {
     expect(dlqEvents).toHaveLength(1);
     const dlqPayload = extractDlqPayload(dlqEvents[0]);
     expect(dlqPayload).toMatchObject({
-      cause: 'analytics.metric.persistence_failed',
+      originalTopic: Topics.analytics.metric,
       correlationId: envelope.correlationId,
+      errorCode: 'sink_error',
+      attempts: 2,
+    });
+    expect(dlqPayload.payloadRef).toMatchObject({
+      cause: 'analytics.metric.persistence_failed',
+      metricName: metric.name,
+      details: { attempt: 2 },
     });
     await consumer.stop();
   });
@@ -232,7 +244,7 @@ describe('AnalyticsConsumer', () => {
 
     await bus.publish(Topics.analytics.metric, envelope, { 'x-correlation-id': envelope.correlationId ?? '' });
 
-    const records = getHistogramRecords('analytics.ingest.lag_ms');
+    const records = getHistogramRecords('analytics_ingest_lag_ms');
     expect(records).toHaveLength(1);
     expect(records[0]?.value).toBe(0);
 

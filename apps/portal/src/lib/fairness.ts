@@ -12,9 +12,10 @@ function parseFraction(value: string | undefined): number | undefined {
   if (!Number.isFinite(numeric)) return undefined;
   if (numeric > 1) {
     const percentage = numeric / 100;
-    if (percentage > 0 && percentage <= 1) return percentage;
+    if (percentage >= 0 && percentage <= 1) return percentage;
   }
-  if (numeric <= 0) return undefined;
+  if (numeric < 0) return undefined;
+  if (numeric === 0) return 0;
   if (numeric > 1) return undefined;
   return numeric;
 }

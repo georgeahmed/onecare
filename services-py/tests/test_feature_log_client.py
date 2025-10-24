@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 from urllib import error as urllib_error
 
-from common.contracts.models import Channel, Patient as SubmissionPatient, PortalSubmission
+from common.contracts.models import (
+    PortalSubmission,
+    PortalSubmissionChannel as Channel,
+    PortalSubmissionPatient as SubmissionPatient,
+)
 from safety_gate_service import main
 from safety_gate_service.decision import DecisionResult
 

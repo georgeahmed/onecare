@@ -52,13 +52,13 @@
   - `getFeatureSchemaId(featureSet)` – contract lookup
   - `validateFeaturePayload(featureSet, payload)` – AJV backed validation
   - `getEntityDefinition(name)` – join key metadata for ingestion jobs
-- Python models available via `services-py/common/contracts/models.py` after `RUN_PY=1 npm run codegen`
+- Python models available via `services-py/common/contracts/models.py` after `RUN_PY=1 npm run --workspaces=false codegen`
 - Registry changes must bump `version` and update dependent docs/ADR.
 
 ## Workflow
 1. Update or add feature payload schema (`schemas/features/*.json`).
 2. Extend registry entry with ownership, freshness, and materialisation updates.
-3. Run `npm run codegen` to refresh generated contracts.
+3. Run `npm run --workspaces=false codegen` to refresh generated contracts.
 4. Update ingestion/monitoring components that act on the changed feature set.
 5. Review governance implications (`docs/FEATURE_GOVERNANCE.md`) and update monitoring/backfill docs (`docs/FEATURE_BACKFILL.md`, `docs/FEATURE_MONITORING.md`).
 

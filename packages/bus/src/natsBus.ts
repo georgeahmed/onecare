@@ -24,6 +24,14 @@ import {
 import type { Handler, MessageBus, Subscription } from './types';
 import { MemoryBus } from './memoryBus';
 import { unwrapGuardedBus } from './guardedBus';
+import {
+  PARTITION_HEADER,
+  extractCorrelationIdFrom,
+  extractPartitionKey,
+  extractTenantId,
+  findHeaderInsensitive,
+  normalizeIdCandidate,
+} from './messageMetadata';
 const dlqSchemaPath = resolve(__dirname, '../../../schemas/common/dlq-event.json');
 const dlqSchema = JSON.parse(readFileSync(dlqSchemaPath, 'utf8')) as Record<string, unknown>;
 const publishLatencyMetric = createHistogram('bus.nats.publish.latency_ms');
@@ -106,7 +114,6 @@ const DEFAULT_FLOW_CONTROL = parseBoolean(process.env.NATS_FLOW_CONTROL ?? 'true
 const MESSAGE_ID_HEADER = 'x-message-id';
 const IDEMPOTENCY_HEADER = 'x-idempotency-key';
 const NATS_MSG_ID_HEADER = 'nats-msg-id';
-const PARTITION_HEADER = 'x-partition-key';
 const COMPRESSION_FLAG = '__compressed';
 const COMPRESSION_ENCODING = 'gzip+json';
 const DEFAULT_COMPRESSION_THRESHOLD_BYTES = Math.max(
@@ -197,7 +204,7 @@ export class NatsBus implements MessageBus {
   private readonly pendingLagThreshold: number;
   private readonly healthCacheMs: number;
   private readonly flowControlEnabled: boolean;
-  private readonly idleHeartbeatNs: number;
+  private readonly idleHeartbeatMs: number;
   private readonly tenantRateDefault: number;
   private readonly tenantBurstDefault: number;
   private readonly tenantOverrides: Map<string, TenantRateOverrideResolved>;
@@ -277,7 +284,7 @@ export class NatsBus implements MessageBus {
       Number.isFinite(idleHeartbeatCandidate) && idleHeartbeatCandidate > 0
         ? Math.floor(idleHeartbeatCandidate)
         : DEFAULT_IDLE_HEARTBEAT_MS;
-    this.idleHeartbeatNs = Math.max(1, idleHeartbeatMs) * 1_000_000;
+    this.idleHeartbeatMs = Math.max(1, idleHeartbeatMs);
     this.flowControlEnabled =
       typeof opts.flowControlEnabled === 'boolean' ? opts.flowControlEnabled : DEFAULT_FLOW_CONTROL;
     this.lastAckTimestamp = Date.now();
@@ -390,7 +397,6 @@ export class NatsBus implements MessageBus {
       });
       this.recordPartitionUsage(topic, resolution.partition, resolution.partitionKey, tenantId);
     } catch (err) {
-      this.connected = false;
       const duration = performance.now() - started;
       this.lastPublishLatencyMs = duration;
       publishLatencyMetric.record(duration, { topic, result: 'error' });
@@ -408,21 +414,28 @@ export class NatsBus implements MessageBus {
   async subscribe<T>(topic: string, handler: Handler<T>): Promise<Subscription> {
     const js = await this.getJetStream();
     const queue = this.queueGroupFor(topic);
+    const useQueueGroup = typeof queue === 'string' && queue.trim().length > 0;
     const opts = consumerOpts();
     opts.durable(this.durableName(topic));
     opts.manualAck();
     opts.ackExplicit();
-    opts.ackWait(this.ackWaitMs * 1_000_000);
+    opts.ackWait(this.ackWaitMs);
     opts.maxAckPending(this.maxAckPending);
-    opts.queue(queue);
+    if (useQueueGroup) {
+      opts.queue(queue);
+    }
     opts.deliverAll();
     opts.maxDeliver(this.maxDeliveries);
-    if (this.flowControlEnabled) {
+    if (this.flowControlEnabled && !useQueueGroup) {
       opts.flowControl();
     }
-    opts.idleHeartbeat(this.idleHeartbeatNs);
+    if (!useQueueGroup) {
+      opts.idleHeartbeat(this.idleHeartbeatMs);
+    }
 
     const subject = this.subscriptionSubject(topic);
+    const deliverSubject = this.deliverSubject(topic);
+    opts.deliverTo(deliverSubject);
     const subscription = (await js.subscribe(subject, opts)) as JetStreamSubscription;
     this.subscribedCount += 1;
     const consumePromise = this.consume(subscription, handler, topic);
@@ -637,13 +650,18 @@ export class NatsBus implements MessageBus {
   private resolveTenantQuota(tenantId: string | undefined): TenantRateOverrideResolved | null {
     const override = tenantId ? this.tenantOverrides.get(tenantId) : undefined;
     const rate = override?.rate ?? this.tenantRateDefault;
+    if (override && override.rate === 0) {
+      const burst = override.burst ?? 0;
+      return { rate: 0, burst: Math.max(0, burst) };
+    }
     if (!rate || rate <= 0) {
       return null;
     }
     const burst = override?.burst ?? this.tenantBurstDefault;
+    const normalizedBurst = burst > 0 ? burst : Math.max(rate, 1);
     return {
       rate,
-      burst: burst > 0 ? burst : Math.max(rate, 1),
+      burst: normalizedBurst,
     };
   }
 
@@ -832,13 +850,24 @@ export class NatsBus implements MessageBus {
   }
 
   private queueGroupFor(topic: string): string {
-    if (this.queueGroup) return this.queueGroup;
-    return topic.replace(/[^a-zA-Z0-9]/g, '_') || 'onecare';
+    const configured = (this.queueGroup ?? '').trim();
+    if (configured.length > 0) return configured;
+    const sanitized = topic.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 48);
+    const digest = createHash('sha1').update(topic).digest('hex').slice(0, 8);
+    const base = sanitized.length > 0 ? sanitized : 'onecare';
+    return `${base}_${digest}`;
   }
 
   private durableName(topic: string): string {
     const sanitized = topic.replace(/[^a-zA-Z0-9]/g, '_');
-    return `${this.queueGroup}_${sanitized}`.slice(0, 255);
+    const group = this.queueGroupFor(topic);
+    return `${group}_${sanitized}`.slice(0, 255);
+  }
+
+  private deliverSubject(topic: string): string {
+    const durable = this.durableName(topic);
+    const digest = createHash('sha1').update(durable).digest('hex');
+    return `_INBOX.${digest}`;
   }
 
   private async getJetStream(): Promise<JetStreamClient> {
@@ -888,12 +917,9 @@ export class NatsBus implements MessageBus {
   }
 
   private buildConnectionOptions(): ConnectionOptions {
-    const servers = this.url
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const { servers, auth } = parseNatsServerConfig(this.url);
     const options: ConnectionOptions = { servers };
-    this.applyBasicAuth(options);
+    this.applyBasicAuth(options, auth);
     this.applyAdvancedAuth(options);
     this.applyTlsOptions(options, servers);
     const timeoutMs = Number(process.env.NATS_CONNECT_TIMEOUT_MS ?? '');
@@ -911,13 +937,18 @@ export class NatsBus implements MessageBus {
     return options;
   }
 
-  private applyBasicAuth(options: ConnectionOptions): void {
-    const user = process.env.NATS_USER?.trim();
-    const pass = process.env.NATS_PASS?.trim();
-    const token = process.env.NATS_TOKEN?.trim();
+  private applyBasicAuth(options: ConnectionOptions, authHints: ServerAuthHints): void {
+    const token = normalizeOptionalString(process.env.NATS_TOKEN) ?? authHints.token;
+    const user = normalizeOptionalString(process.env.NATS_USER) ?? authHints.user;
+    const pass = normalizeOptionalString(process.env.NATS_PASS) ?? authHints.pass;
+    if (token) {
+      options.token = token;
+      delete (options as { user?: string }).user;
+      delete (options as { pass?: string }).pass;
+      return;
+    }
     if (user) options.user = user;
     if (pass) options.pass = pass;
-    if (token) options.token = token;
   }
 
   private applyAdvancedAuth(options: ConnectionOptions): void {
@@ -1161,6 +1192,8 @@ export class NatsBus implements MessageBus {
       this.dlqPublishFailuresCount += 1;
       dlqErrorMetric.add(1, { topic });
       const delayMs = this.computeRetryDelayMs(this.maxDeliveries);
+      this.retriesScheduledCount += 1;
+      retryScheduledMetric.add(1, { topic, attempt: this.maxDeliveries, delayMs });
       try {
         msg.nak(delayMs);
       } catch (nakErr) {
@@ -1196,7 +1229,7 @@ export class NatsBus implements MessageBus {
     const result: Record<string, string> = {};
     for (const [key, values] of hdrs) {
       if (Array.isArray(values) && values.length > 0) {
-        result[key] = values[0];
+        result[key] = values.length === 1 ? values[0] : values.join(', ');
       }
     }
     return result;
@@ -1209,56 +1242,6 @@ function formatAjvError(err: AjvValidationError): string {
   return `${path}: ${message}`;
 }
 
-function normalizeCorrelationId(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeIdCandidate(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function extractCorrelationIdFrom(
-  payload: unknown,
-  headers: Record<string, string> | undefined,
-): string | undefined {
-  if (payload && typeof payload === 'object') {
-    const candidate = (payload as { correlationId?: unknown }).correlationId;
-    const fromPayload = normalizeCorrelationId(candidate);
-    if (fromPayload) {
-      return fromPayload;
-    }
-  }
-  if (!headers) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === 'x-correlation-id') {
-      const fromHeader = normalizeCorrelationId(value);
-      if (fromHeader) {
-        return fromHeader;
-      }
-    }
-  }
-  return undefined;
-}
-
-function findHeaderInsensitive(
-  headers: Record<string, string>,
-  name: string,
-): { key: string; value: string } | undefined {
-  const target = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === target) {
-      return { key, value };
-    }
-  }
-  return undefined;
-}
-
 type FailureCategory = 'transient' | 'validation' | 'security' | 'fatal';
 
 interface FailureDisposition {
@@ -1268,16 +1251,135 @@ interface FailureDisposition {
   message: string;
 }
 
+interface ParsedServerEntry {
+  server: string;
+  username?: string;
+  password?: string;
+  token?: string;
+}
+
+type ServerAuthHints = {
+  user?: string;
+  pass?: string;
+  token?: string;
+};
+
+export type NatsAuthConfig = ServerAuthHints;
+
+export function parseNatsServerConfig(raw?: string): { servers: string[]; auth: NatsAuthConfig } {
+  const normalized = normalizeOptionalString(raw) ?? 'nats://localhost:4222';
+  return resolveServerEntries(normalized);
+}
+
 function normalizeOptionalString(value: string | undefined): string | undefined {
   if (value === undefined || value === null) return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function resolveServerEntries(raw: string): { servers: string[]; auth: ServerAuthHints } {
+  const entries = raw
+    .split(',')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .map(parseServerEntry);
+  if (entries.length === 0) {
+    throw new Error('[NatsBus] no NATS servers configured');
+  }
+  const auth = mergeServerAuth(entries);
+  return {
+    servers: entries.map((entry) => entry.server),
+    auth,
+  };
+}
+
+function parseServerEntry(raw: string): ParsedServerEntry {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error('[NatsBus] Invalid NATS server URL: empty string');
+  }
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `nats://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`[NatsBus] Invalid NATS server URL: ${trimmed}`);
+  }
+  if ((parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') || parsed.hash) {
+    throw new Error(`[NatsBus] Invalid NATS server URL: ${trimmed}`);
+  }
+
+  const entry: ParsedServerEntry = {
+    server: `${parsed.protocol}//${parsed.host}`,
+  };
+
+  const username = normalizeOptionalString(parsed.username ? safeDecodeURIComponent(parsed.username) : undefined);
+  const password = normalizeOptionalString(parsed.password ? safeDecodeURIComponent(parsed.password) : undefined);
+
+  if (username && !password) {
+    entry.token = username;
+  } else if (username) {
+    entry.username = username;
+  }
+  if (password) {
+    entry.password = password;
+  }
+
+  const tokenFromQuery =
+    normalizeOptionalString(parsed.searchParams.get('token') ?? undefined) ??
+    normalizeOptionalString(parsed.searchParams.get('auth_token') ?? undefined) ??
+    normalizeOptionalString(parsed.searchParams.get('authToken') ?? undefined);
+
+  if (tokenFromQuery) {
+    entry.token = tokenFromQuery;
+  }
+
+  return entry;
+}
+
+function mergeServerAuth(entries: ParsedServerEntry[]): ServerAuthHints {
+  return entries.reduce<ServerAuthHints>((acc, entry) => {
+    if (entry.token) {
+      if (acc.user || acc.pass) {
+        throw new Error('[NatsBus] cannot mix token auth with username/password credentials in NATS_URL');
+      }
+      if (acc.token && acc.token !== entry.token) {
+        throw new Error('[NatsBus] conflicting token credentials across NATS_URL entries');
+      }
+      acc.token = entry.token;
+    } else {
+      if (acc.token) {
+        throw new Error('[NatsBus] cannot mix token auth with username/password credentials in NATS_URL');
+      }
+      if (entry.username) {
+        if (acc.user && acc.user !== entry.username) {
+          throw new Error('[NatsBus] conflicting usernames across NATS_URL entries');
+        }
+        acc.user = entry.username;
+      }
+      if (entry.password) {
+        if (acc.pass && acc.pass !== entry.password) {
+          throw new Error('[NatsBus] conflicting passwords across NATS_URL entries');
+        }
+        acc.pass = entry.password;
+      }
+    }
+    return acc;
+  }, {});
+}
+
 function normalizePathEnv(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) return undefined;
   return resolve(normalized);
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function safeReadFileUtf8(path: string): string {
@@ -1569,6 +1671,9 @@ function parseTenantOverrides(raw: string): Record<string, TenantRateOverride> |
       for (const [tenant, value] of Object.entries(json)) {
         if (!tenant) continue;
         if (typeof value === 'number') {
+          if (!Number.isFinite(value) || value < 0) {
+            continue;
+          }
           result[tenant] = { rate: value };
           continue;
         }
@@ -1578,13 +1683,13 @@ function parseTenantOverrides(raw: string): Record<string, TenantRateOverride> |
             (value as { tokensPerSecond?: unknown }).tokensPerSecond ??
             (value as { tps?: unknown }).tps;
           const rate = Number(rateCandidate);
-          if (!Number.isFinite(rate) || rate <= 0) continue;
+          if (!Number.isFinite(rate) || rate < 0) continue;
           const burstCandidate =
             (value as { burst?: unknown }).burst ?? (value as { capacity?: unknown }).capacity;
           const burst = Number(burstCandidate);
           const override: TenantRateOverride = { rate };
-          if (Number.isFinite(burst) && burst > 0) {
-            override.burst = burst;
+          if (Number.isFinite(burst) && burst >= 0) {
+            override.burst = Math.max(0, burst);
           }
           result[tenant] = override;
         }
@@ -1603,11 +1708,11 @@ function parseTenantOverrides(raw: string): Record<string, TenantRateOverride> |
     if (!tenantPart || !values) continue;
     const [ratePart, burstPart] = values.split(':');
     const rate = Number(ratePart);
-    if (!Number.isFinite(rate) || rate <= 0) continue;
+    if (!Number.isFinite(rate) || rate < 0) continue;
     const override: TenantRateOverride = { rate };
     const burst = Number(burstPart);
-    if (Number.isFinite(burst) && burst > 0) {
-      override.burst = burst;
+    if (Number.isFinite(burst) && burst >= 0) {
+      override.burst = Math.max(0, burst);
     }
     result[tenantPart.trim()] = override;
   }
@@ -1629,10 +1734,10 @@ function normalizeTenantRateLimit(options: TenantRateLimitOptions): TenantRateLi
     for (const [tenant, override] of Object.entries(options.overrides)) {
       if (!tenant) continue;
       const rate = Number(override?.rate);
-      if (!Number.isFinite(rate) || rate <= 0) continue;
+      if (!Number.isFinite(rate) || rate < 0) continue;
       let burst = Number((override?.burst ?? NaN));
-      if (!Number.isFinite(burst) || burst <= 0) {
-        burst = rate;
+      if (!Number.isFinite(burst) || burst < 0) {
+        burst = rate > 0 ? rate : 0;
       }
       overrides.set(tenant, { rate, burst });
     }
@@ -1645,89 +1750,6 @@ function normalizeTenantRateLimit(options: TenantRateLimitOptions): TenantRateLi
     resolver: options.tenantResolver,
     enabled,
   };
-}
-
-function extractTenantId(
-  payload: unknown,
-  headers: Record<string, string> | undefined,
-): string | undefined {
-  if (headers) {
-    const tenantHeader = findHeaderInsensitive(headers, 'x-tenant-id');
-    if (tenantHeader) {
-      const normalized = normalizeIdCandidate(tenantHeader.value);
-      if (normalized) return normalized;
-    }
-    const practiceHeader = findHeaderInsensitive(headers, 'x-practice-id');
-    if (practiceHeader) {
-      const normalized = normalizeIdCandidate(practiceHeader.value);
-      if (normalized) return normalized;
-    }
-  }
-  if (payload && typeof payload === 'object') {
-    const candidate = normalizeIdCandidate((payload as { tenantId?: unknown }).tenantId);
-    if (candidate) return candidate;
-    if ('payload' in payload) {
-      const inner = (payload as { payload?: unknown }).payload;
-      if (inner && typeof inner === 'object') {
-        const preferred = ['tenantId', 'practiceId', 'accountId', 'organisationId'];
-        for (const key of preferred) {
-          const innerCandidate = normalizeIdCandidate((inner as Record<string, unknown>)[key]);
-          if (innerCandidate) return innerCandidate;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-function extractPartitionKey(
-  payload: unknown,
-  headers: Record<string, string> | undefined,
-  topic: string,
-): string | undefined {
-  if (headers) {
-    const explicit = findHeaderInsensitive(headers, PARTITION_HEADER);
-    if (explicit) {
-      const normalized = normalizeIdCandidate(explicit.value);
-      if (normalized) return normalized;
-    }
-    const tenant = findHeaderInsensitive(headers, 'x-tenant-id');
-    if (tenant) {
-      const normalized = normalizeIdCandidate(tenant.value);
-      if (normalized) return normalized;
-    }
-    const practice = findHeaderInsensitive(headers, 'x-practice-id');
-    if (practice) {
-      const normalized = normalizeIdCandidate(practice.value);
-      if (normalized) return normalized;
-    }
-  }
-  if (payload && typeof payload === 'object') {
-    const direct = normalizeIdCandidate((payload as { partitionKey?: unknown }).partitionKey);
-    if (direct) return direct;
-    const envelopeCorrelation = normalizeIdCandidate((payload as { correlationId?: unknown }).correlationId);
-    if (envelopeCorrelation) return envelopeCorrelation;
-    const envelopeId = normalizeIdCandidate((payload as { id?: unknown }).id);
-    if (envelopeId) return envelopeId;
-    if ('payload' in payload) {
-      const inner = (payload as { payload?: unknown }).payload;
-      if (inner && typeof inner === 'object') {
-        const preferredKeys = ['partitionKey', 'tenantId', 'practiceId', 'patientId', 'entityId', 'id', 'key'];
-        for (const key of preferredKeys) {
-          const candidate = normalizeIdCandidate((inner as Record<string, unknown>)[key]);
-          if (candidate) return candidate;
-        }
-      }
-    }
-  }
-  if (headers) {
-    const correlationHeader = findHeaderInsensitive(headers, 'x-correlation-id');
-    if (correlationHeader) {
-      const normalized = normalizeIdCandidate(correlationHeader.value);
-      if (normalized) return normalized;
-    }
-  }
-  return normalizeIdCandidate(topic);
 }
 
 function partitionIndexFor(key: string, partitions: number): number {

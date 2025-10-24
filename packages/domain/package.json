@@ -11,9 +11,6 @@
     "ajv": "^8.12.0",
     "ajv-formats": "^2.1.1"
   },
-  "overrides": {
-    "@onecare/events": "file:packages/events"
-  },
   "devDependencies": {
     "eslint": "^8.57.0",
     "json-schema-to-typescript": "^13.1.2",

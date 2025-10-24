@@ -16,7 +16,7 @@ groups:
         annotations:
           summary: "Telephony transcription p95 >10s"
           description: "Call ingestion latency exceeded 10 seconds (p95) for 15 minutes."
-          runbook: https://onecare/runbooks/telephony
+          runbook: https://onecare/runbooks/oncall#telephony-ingress
 
       - alert: TelephonyErrorRate
         expr: |
@@ -32,7 +32,7 @@ groups:
         annotations:
           summary: "Telephony server error rate >5%"
           description: "Telephony ingress is returning server errors for more than 5% of requests over 10 minutes."
-          runbook: https://onecare/runbooks/telephony
+          runbook: https://onecare/runbooks/oncall#telephony-ingress
 
       - alert: TelephonyRateLimitSpike
         expr: |
@@ -48,4 +48,4 @@ groups:
         annotations:
           summary: "Telephony ingress rejecting >10% of calls"
           description: "Rejections due to over-capacity or rate limiting exceeded 10% of call attempts for 15 minutes."
-          runbook: https://onecare/runbooks/telephony
+          runbook: https://onecare/runbooks/oncall#telephony-ingress

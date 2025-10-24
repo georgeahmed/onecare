@@ -1,4 +1,8 @@
 import { defineConfig, configDefaults } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const configDir = dirname(fileURLToPath(import.meta.url));
 
 const scopeTokens = (process.env.VITEST_SCOPE ?? '')
   .split(',')
@@ -25,6 +29,6 @@ export default defineConfig({
     environment: 'node',
     include: ['**/*.test.ts?(x)', '**/*.spec.ts?(x)'],
     exclude: scopedExclude(),
-    setupFiles: ['./vitest.setup.ts'],
+    setupFiles: [resolve(configDir, 'vitest.setup.ts')],
   }
 });

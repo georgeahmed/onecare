@@ -13,6 +13,7 @@
     },
     "patientSex": {
       "type": ["string", "null"],
+      "title": "PharmacyReferralPatientSex",
       "enum": ["female", "male", "other", "unknown", null]
     },
     "severity": { "type": ["string", "null"], "minLength": 1 },
@@ -23,6 +24,7 @@
     },
     "slot": {
       "type": ["object", "null"],
+      "title": "PharmacyReferralSlot",
       "properties": {
         "start": { "type": "string", "format": "date-time" },
         "end": { "type": "string", "format": "date-time" },

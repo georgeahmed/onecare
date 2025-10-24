@@ -26,6 +26,7 @@ export const Topics = {
     created: 'booking.created',
     appointmentCreated: 'booking.appointment.created',
     appointmentCreatedDlq: 'booking.appointment.created.dlq',
+    assistedCompleted: 'booking.assisted.completed',
   },
   pharmacy: {
     referral: 'pharmacy.referral',
@@ -44,6 +45,13 @@ export const Topics = {
   },
   analytics: {
     metric: 'analytics.metric',
+  },
+  messaging: {
+    sendDocRequested: 'messaging.senddoc.requested',
+    sendDocSent: 'messaging.senddoc.sent',
+    sendDocAck: 'messaging.senddoc.ack',
+    sendDocNack: 'messaging.senddoc.nack',
+    sendDocRetry: 'messaging.senddoc.retry',
   },
   broker: {
     deadLetter: 'broker.dlq',

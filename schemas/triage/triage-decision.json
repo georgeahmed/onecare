@@ -6,7 +6,11 @@
   "properties": {
     "patientId": { "type": "string", "minLength": 1 },
     "score": { "type": "number", "minimum": 0, "maximum": 1 },
-    "priority": { "type": "string", "enum": ["STAT", "URGENT", "SOON", "ROUTINE"] },
+    "priority": {
+      "type": "string",
+      "title": "TriageDecisionPriority",
+      "enum": ["STAT", "URGENT", "SOON", "ROUTINE"]
+    },
     "reasons": {
       "type": "array",
       "items": { "type": "string", "pattern": "^[a-z0-9_.-]{1,64}$" },
@@ -15,6 +19,7 @@
     "duplicateOf": { "type": "string", "minLength": 1 },
     "assignment": {
       "type": "object",
+      "title": "TriageDecisionAssignment",
       "properties": {
         "owner": { "type": "string", "minLength": 1 },
         "team": { "type": "string", "minLength": 1 }

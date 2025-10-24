@@ -12,6 +12,7 @@
       "properties": {
         "code": {
           "type": "string",
+          "title": "ErrorEnvelopeCode",
           "enum": [
             "unauthorized",
             "forbidden",

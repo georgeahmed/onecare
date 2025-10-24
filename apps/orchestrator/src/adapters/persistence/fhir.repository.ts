@@ -117,7 +117,9 @@ function createKeepAliveFetch(baseUrl: string, timeoutMs: number): FetchImpl {
 
       const signal = init.signal;
       const onAbort = () => {
-        request.destroy(new Error('AbortError'));
+        const abortError = new Error('AbortError');
+        abortError.name = 'AbortError';
+        request.destroy(abortError);
       };
       if (signal) {
         if (signal.aborted) {
@@ -470,6 +472,14 @@ export class HttpFhirRepository implements FhirRepository {
         }
         if (this.authHeader) {
           requestHeaders.authorization = this.authHeader;
+        }
+        // NHS API Platform often requires an API key alongside OAuth tokens
+        // Allow configuring header name via FHIR_API_KEY_HEADER (default 'apikey')
+        // and value via FHIR_API_KEY (fallback to NHS_API_KEY)
+        const apiKey = (process.env.FHIR_API_KEY || process.env.NHS_API_KEY || '').trim();
+        const apiKeyHeader = (process.env.FHIR_API_KEY_HEADER || 'apikey').trim();
+        if (apiKey) {
+          requestHeaders[apiKeyHeader] = apiKey;
         }
         if (ifMatch) {
           requestHeaders['if-match'] = ifMatch;

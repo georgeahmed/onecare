@@ -1,6 +1,6 @@
 import { BaseState } from '@onecare/statekit';
 import type { MachineContext, MachineEvent } from '@onecare/statekit';
-import type { IcsClient } from '../adapters/ics.client';
+import { IcsClientError, type IcsClient } from '../adapters/ics.client';
 import type { IcsOrganisationPolicy, ResolvedConfig } from '@onecare/config';
 import { getIcsOrganisationPolicies } from '@onecare/config';
 import { createCounter, createHistogram, logger, startSpan } from '@onecare/observability';
@@ -36,15 +36,15 @@ import { SpanStatusCode } from '@opentelemetry/api';
 import { AuditSpool } from './audit.spool';
 import { ProcessingLimiter } from './backpressure';
 
-const routingDecisionCounter = createCounter('ics.routing.decisions_total');
-const routingBlockedCounter = createCounter('ics.routing.blocked_total');
-const routingRateLimitedCounter = createCounter('ics.routing.rate_limited_total');
-const routingLatencyHistogram = createHistogram('ics.routing.latency_ms');
-const processingOverloadCounter = createCounter('ics.backpressure.overload_total');
-const ackPublishedCounter = createCounter('ics.ack.published_total');
-const ackFailureCounter = createCounter('ics.ack.failed_total');
-const ackDuplicateCounter = createCounter('ics.ack.duplicate_total');
-const ackLatencyHistogram = createHistogram('ics.ack.latency_ms');
+const routingDecisionCounter = createCounter('ics_routing_decisions_total');
+const routingBlockedCounter = createCounter('ics_routing_blocked_total');
+const routingRateLimitedCounter = createCounter('ics_routing_rate_limited_total');
+const routingLatencyHistogram = createHistogram('ics_routing_latency_ms');
+const processingOverloadCounter = createCounter('ics_backpressure_overload_total');
+const ackPublishedCounter = createCounter('ics_ack_published_total');
+const ackFailureCounter = createCounter('ics_ack_failed_total');
+const ackDuplicateCounter = createCounter('ics_ack_duplicate_total');
+const ackLatencyHistogram = createHistogram('ics_ack_latency_ms');
 
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_ICS_IDEMPOTENCY_TTL_SECONDS = 5 * 60;
@@ -122,6 +122,8 @@ export interface IcsContext extends MachineContext {
   client?: IcsClient;
   bus?: MessageBus;
   organisationId?: string;
+  originalOrganisationId?: string;
+  normalisedOrganisationId?: string;
   claim?: unknown;
   correlationId?: string;
   createTaskId?: () => string;
@@ -224,6 +226,7 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
       }
     }
     if (!ctx.client) {
+      releaseProcessing(ctx);
       throw new Error('ics_client_missing');
     }
 
@@ -304,6 +307,8 @@ export class InboundState extends BaseState<IcsContext, IcsEvent> {
 
     const normalisedOrg = normaliseOrgId(requestedOrg);
     ctx.organisationId = normalisedOrg;
+    ctx.normalisedOrganisationId = normalisedOrg;
+    ctx.originalOrganisationId = requestedOrg;
 
     const routeDecision = buildRouteDecision(envelope.payload, this.routingConfig);
     ctx.routeDecision = routeDecision;
@@ -436,12 +441,13 @@ export class ValidatedState extends BaseState<IcsContext, IcsEvent> {
       return 'RateLimited';
     }
     if (!ctx.routePolicy) {
+      releaseProcessing(ctx);
       throw new Error('route_policy_missing');
     }
     if (typeof ctx.receivedAtMs === 'number') {
       const latency = Math.max(0, Date.now() - ctx.receivedAtMs);
       routingLatencyHistogram.record(latency, {
-        organisationId: ctx.organisationId ?? 'unknown',
+        organisationId: ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown',
       });
     }
     return 'Routed';
@@ -455,16 +461,23 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
 
   async handle(ctx: IcsContext, _event: IcsEvent): Promise<string> {
     if (!ctx.client) {
+      releaseProcessing(ctx);
       throw new Error('ics_client_missing');
     }
     if (!ctx.referral) {
+      releaseProcessing(ctx);
       throw new Error('ics_referral_missing');
     }
     if (!ctx.bus) {
+      releaseProcessing(ctx);
       throw new Error('ics_bus_missing');
     }
     try {
-    const destinationOrgId = ctx.routeDecision?.destinationOrgId ?? ctx.organisationId ?? ctx.referral.org;
+    const destinationOrgId =
+      ctx.routeDecision?.destinationOrgId ??
+      ctx.originalOrganisationId ??
+      ctx.organisationId ??
+      ctx.referral.org;
     const correlationId = ctx.correlationId;
     const idempotencyKey = deriveAckIdempotencyKey(ctx, destinationOrgId);
     const ttlSeconds = resolveIcsIdempotencyTtl(ctx);
@@ -522,6 +535,10 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
           return ack;
         } catch (error) {
           ackFailureCounter.add(1, { destinationOrgId });
+          const reason =
+            error instanceof Error ? error.message : 'unknown_error';
+          const retryAfterMs =
+            error instanceof IcsClientError ? error.retryAfterMs : undefined;
           if (error instanceof Error) {
             span.recordException(error);
             span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
@@ -530,6 +547,7 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
               destinationOrgId,
               correlationId,
               reason: error.message,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
             });
           } else {
             span.setStatus({ code: SpanStatusCode.ERROR, message: 'unknown_error' });
@@ -540,6 +558,17 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
               reason: 'unknown_error',
             });
           }
+          pushAudit(
+            ctx,
+            'ics.referral.ack_failed',
+            {
+              referralId: ctx.referral?.referralId,
+              destinationOrgId,
+              reason,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+            },
+            correlationId,
+          );
           throw error;
         } finally {
           span.end();
@@ -547,6 +576,19 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
       },
       onDuplicate: () => {
         ctx.ackPublished = true;
+        if (!ctx.ack) {
+          const accepted =
+            ctx.routingOutcome?.status === 'forbidden'
+              ? false
+              : ctx.routingOutcome?.status === 'rate_limited'
+                ? false
+                : true;
+          ctx.ack = {
+            referralId: ctx.referral?.referralId ?? 'unknown-referral',
+            accepted,
+            note: 'duplicate_ack_suppressed',
+          };
+        }
         ackDuplicateCounter.add(1, { destinationOrgId });
         logger.warn('ics.referral.ack_duplicate', {
           referralId: ctx.referral?.referralId,
@@ -734,7 +776,7 @@ function resolveIcsIdempotencyTtl(ctx: IcsContext): number {
 
 function deriveAutomationPublishKey(ctx: IcsContext): string {
   if (ctx.automationPublishIdempotencyKey) return ctx.automationPublishIdempotencyKey;
-  return `ics:automation:${ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
+  return `ics:automation:${ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown-org'}:${ctx.id}`;
 }
 
 function buildAutomationPublishKey(
@@ -742,7 +784,7 @@ function buildAutomationPublishKey(
   event: AutomationTriggerEvent,
   tasks: AutomationTaskCreation[],
 ): string {
-  const orgSegment = ctx.organisationId ?? 'unknown-org';
+  const orgSegment = ctx.normalisedOrganisationId ?? ctx.organisationId ?? 'unknown-org';
   const sourceTaskId = event.current?.taskId ?? 'unknown-task';
   const ruleSegment = tasks
     .map((task) => `${task.ruleName}:${task.task.patientId}`)

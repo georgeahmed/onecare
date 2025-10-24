@@ -32,7 +32,7 @@ spec:
             description: |-
               The {{SLO_QUANTILE}} quantile of triage latency ({{ROUTE_LABEL}}) rose above {{WARNING_THRESHOLD_MS}} ms
               over {{WARNING_WINDOW}}. Review recent deploys, dependency latency, and queue depth before the SLO burns.
-            runbook: "https://onecare/runbooks/triage-latency"
+            runbook: "https://onecare/runbooks/oncall#orchestrator-latency"
             dashboard: "{{DASHBOARD_URL}}"
             sloTarget: "{{SLO_TARGET_MS}}"
         - alert: TriageLatencySLOCritical
@@ -54,6 +54,6 @@ spec:
             description: |-
               The {{SLO_QUANTILE}} quantile of triage latency has breached {{CRITICAL_THRESHOLD_MS}} ms for {{CRITICAL_WINDOW}}.
               Error budget burn is likely; activate mitigation (e.g., feature freeze, dependency failovers) per runbook.
-            runbook: "https://onecare/runbooks/triage-latency"
+            runbook: "https://onecare/runbooks/oncall#orchestrator-latency"
             dashboard: "{{DASHBOARD_URL}}"
             sloTarget: "{{SLO_TARGET_MS}}"

@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl';
 import type { BookingFilterState, BookingSlot } from '../../lib/booking';
 import type { BookingConfirmationError } from './ConfirmBooking';
 import { formatDate, formatTime, resolveLocalePreferences } from '../../lib/format';
+import { formatFilterModalityLabel } from '../../lib/bookingLabels';
 
 export interface BookingErrorViewProps {
   slot: BookingSlot;
@@ -90,15 +91,11 @@ const BookingErrorView = ({
 
   const filterSummaries = useMemo(() => {
     const items: string[] = [];
-    const modalityLabel =
-      filters.modality === 'all'
-        ? intl.formatMessage({ id: 'booking.filter.modality.all' })
-        : intl.formatMessage({ id: `booking.modality.${filters.modality}` });
     items.push(
       intl.formatMessage(
         { id: 'booking.error.filters.modality' },
         {
-          modality: modalityLabel
+          modality: formatFilterModalityLabel(intl, filters.modality)
         }
       )
     );

@@ -191,10 +191,6 @@ export class PharmacyRouterConsumer {
         return;
       } catch (error) {
         const retryable = isRetryableError(error);
-        this.stats.failed += 1;
-        referralFailureCounter.add(1, {
-          reason: retryable ? 'retryable_error' : 'non_retryable_error',
-        });
         logger.warn('pharmacy.router.processing_failed', {
           attempt: attemptLabel,
           correlationId,
@@ -202,6 +198,8 @@ export class PharmacyRouterConsumer {
           error: serializeError(error),
         });
         if (!retryable) {
+          this.stats.failed += 1;
+          referralFailureCounter.add(1, { reason: 'non_retryable_error' });
           await this.publishDlq(correlationId, 'processing_failed', error instanceof Error ? error.message : 'unknown_error', {
             envelopeId: envelope.id,
             organisationId: request.organisationId,
@@ -210,6 +208,8 @@ export class PharmacyRouterConsumer {
           return;
         }
         if (attempt >= this.retryPolicy.maxAttempts) {
+          this.stats.failed += 1;
+          referralFailureCounter.add(1, { reason: 'retry_exhausted' });
           await this.publishDlq(correlationId, 'processing_exhausted', error instanceof Error ? error.message : 'unknown_error', {
             envelopeId: envelope.id,
             organisationId: request.organisationId,
@@ -234,6 +234,17 @@ export class PharmacyRouterConsumer {
         correlationId,
         organisationId: referralPayload?.pharmacyOrg,
       });
+      this.stats.failed += 1;
+      referralFailureCounter.add(1, { reason: 'outcome_missing' });
+      await this.publishDlq(
+        correlationId,
+        'outcome_missing',
+        'pharmacy outcome payload missing',
+        {
+          organisationId: referralPayload?.pharmacyOrg,
+          state: 'outcome_missing',
+        },
+      );
       return;
     }
     try {

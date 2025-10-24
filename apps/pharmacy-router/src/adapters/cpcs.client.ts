@@ -16,7 +16,7 @@ import { SpanStatusCode } from '@opentelemetry/api';
 export interface CpcsSlot {
   start: string;
   end: string;
-  locationOdsCode: string;
+  locationOdsCode?: string;
   reference?: string;
 }
 
@@ -307,10 +307,18 @@ export class CpcsHttpClient implements CpcsClient {
     }
 
     const correlationId = options?.correlationId;
-    const mode: 'slot' | 'slotless' = slot ? 'slot' : 'slotless';
+    const hasSchedulableSlot =
+      slot?.locationOdsCode && slot.locationOdsCode.trim().length > 0;
+    const mode: 'slot' | 'slotless' = hasSchedulableSlot ? 'slot' : 'slotless';
     const payload: CpcsDispatchPayload = { ...serviceRequest, summary };
 
-    const primary = await this.executeWithGuard(mode, organisationId.trim(), payload, slot, correlationId);
+    const primary = await this.executeWithGuard(
+      mode,
+      organisationId.trim(),
+      payload,
+      hasSchedulableSlot ? slot : undefined,
+      correlationId,
+    );
     if (
       slot &&
       this.slotlessFallbackEnabled &&
@@ -509,7 +517,7 @@ function buildHeaders(headers: Record<string, string> = {}, apiKey?: string): Re
     }
   }
   if (apiKey && !result.Authorization) {
-    result.Authorization = `Bearer ${apiKey}`;
+    result.Authorization = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
   }
   if (!result['Content-Type']) {
     result['Content-Type'] = 'application/json';

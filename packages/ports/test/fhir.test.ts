@@ -175,6 +175,30 @@ describe('resource helpers', () => {
     const [key] = put.mock.calls[0]!;
     expect(key).toBe('secret-path');
   });
+
+  it('rejects attachments with invalid base64 payloads', async () => {
+    const repo = buildRepository();
+    const store: ObjectStore = {
+      put: vi.fn(),
+      get: vi.fn<Required<ObjectStore>['get']>(),
+    };
+    const resource = {
+      resourceType: 'DocumentReference',
+      content: [
+        {
+          attachment: {
+            data: 'not-base64',
+          },
+        },
+      ],
+    };
+
+    await expect(createDocumentReferenceResource(repo, resource, { objectStore: store })).rejects.toThrow(
+      /invalid_base64/,
+    );
+    expect(store.put).not.toHaveBeenCalled();
+    expect(repo.createDocumentReference).not.toHaveBeenCalled();
+  });
 });
 
 describe('withFhirValidation', () => {
@@ -186,6 +210,46 @@ describe('withFhirValidation', () => {
     await wrapped.createTask(resource);
 
     expect(repo.createTask).toHaveBeenCalledWith(resource, { profile: 'http://example.org/BaseProfile' });
+  });
+
+  it('forwards object store options through the validation wrapper', async () => {
+    const repo = buildRepository();
+    const put = vi.fn<Required<ObjectStore>['put']>().mockResolvedValue({
+      url: 'https://object.example/documents/doc-789/0',
+    });
+    const store: ObjectStore = {
+      put,
+      get: vi.fn<Required<ObjectStore>['get']>(),
+    };
+
+    const wrapped = withFhirValidation(repo);
+
+    const payload = {
+      resourceType: 'DocumentReference',
+      content: [
+        {
+          attachment: {
+            data: Buffer.from('payload', 'utf8').toString('base64'),
+          },
+        },
+      ],
+    };
+
+    await wrapped.createDocumentReference(payload, {
+      objectStore: store,
+      objectKeyFactory: () => 'custom/safe/key',
+    });
+
+    expect(put).toHaveBeenCalledWith('custom/safe/key', expect.any(Uint8Array), 'application/octet-stream');
+    expect(repo.createDocumentReference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: [
+          expect.objectContaining({
+            attachment: expect.objectContaining({ url: 'https://object.example/documents/doc-789/0' }),
+          }),
+        ],
+      }),
+    );
   });
 
   it('prevents invalid resources from reaching the repository', async () => {

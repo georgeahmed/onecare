@@ -5,5 +5,7 @@ export interface BillingClaim {
   encounterId: string;
   amount: number;
   currency: string;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    [k: string]: unknown;
+  };
 }
