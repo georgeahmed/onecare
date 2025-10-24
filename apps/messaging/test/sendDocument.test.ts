@@ -17,6 +17,7 @@ describe('sendDocument', () => {
     },
     pdsLookup: true,
     pdfMaxMb: 2,
+    pdfHostAllowlist: ['example.com'],
   };
 
   let repo: FhirRepository;
@@ -105,6 +106,11 @@ describe('sendDocument', () => {
       Topics.messaging.sendDocRequested,
       Topics.messaging.sendDocSent,
     ]);
-    expect((events[1]?.payload as { messageId: string }).messageId).toBe('MSG123');
+    const sent = events.find((evt) => evt.topic === Topics.messaging.sendDocSent)?.payload as {
+      messageId: string;
+      mexAckWorkflowId?: string;
+    };
+    expect(sent?.messageId).toBe('MSG123');
+    expect(sent?.mexAckWorkflowId).toBe(config.mesh.ackWorkflowId);
   });
 });

@@ -6,9 +6,9 @@ This guide documents the conventions and safeguards that keep our metrics useful
 
 The compose stack now exposes Prometheus on `http://localhost:9090` via the `prometheus` service in `docker-compose.yml`. Configuration lives in `infra/monitoring/prometheus.yml` and includes:
 
-- **Selective scraping** of the OTEL collector (`otel-collector:8888` for collector health) and application exporters (`orchestrator:3001/metrics`, `safety-gate:8081/metrics`). Telephony ingress metrics (`telephony_http_*`) can be added by pointing Prometheus at the telephony service when it is deployed.
+- **Selective scraping** of the OTEL collector (`otel-collector:8888` for collector health) and application exporters (`orchestrator:3001/metrics`, `safety-gate:8081/metrics`, `ics-hub:7100/metrics`, `analytics:9400/metrics`, `scribe:8082/metrics`). Telephony ingress metrics (`telephony_http_*`) can be added by pointing Prometheus at the telephony service when it is deployed.
 - **Label dropping** for sensitive or high-cardinality labels (`user`, `email`, `token`, `traceId`, etc.).
-- **Histogram focus**: keeps `http_server_duration_{bucket,sum,count}`, `http_server_requests_total`, `http_server_errors_total`, plus booking and Safety Gate families (`booking_http_*`, `gp_connect_*`, `booking_event_*`, `safety_gate_request_latency_seconds_*`, `safety_gate_requests_total`) so dashboards surface latency, upstream reliability, and DLQ throughput without excess noise.
+- **Histogram focus**: keeps `http_server_duration_{bucket,sum,count}`, `http_server_requests_total`, `http_server_errors_total`, plus booking, ICS, and Safety Gate families (`booking_http_*`, `gp_connect_*`, `booking_event_*`, `ics_routing_latency_ms_*`, `ics_ack_latency_ms_*`, `ics_backpressure_wait_ms_*`, `safety_gate_request_latency_seconds_*`, `safety_gate_requests_total`) alongside analytics ingest metrics (`analytics_ingest_lag_ms_*`, `analytics_sink_latency_ms_*`) so dashboards surface latency, upstream reliability, and DLQ throughput without excess noise.
 - **15-day retention** via the Prometheus command-line flag for easy local comparisons.
 
 When adding new services, expose metrics on a dedicated port and whitelist the target in `static_configs`.

@@ -58,12 +58,13 @@ export function createMessagingServer(options: MessagingServerOptions): Messagin
     const correlationId = ensureCorrelationId(req);
     setCorrelationId(correlationId);
     let outcomeRecorded = false;
+    const routeLabel = req.url ? normalizePath(req.url) : 'unknown';
 
     const recordOutcome = (outcome: string, status: number) => {
       outcomeRecorded = true;
       const elapsed = Date.now() - start;
-      messagingHttpRequests.add(1, { route: req.url ?? 'unknown', method: req.method ?? 'unknown', outcome });
-      messagingHttpDuration.record(elapsed, { route: req.url ?? 'unknown', method: req.method ?? 'unknown' });
+      messagingHttpRequests.add(1, { route: routeLabel, method: req.method ?? 'unknown', outcome });
+      messagingHttpDuration.record(elapsed, { route: routeLabel, method: req.method ?? 'unknown' });
     };
 
     try {

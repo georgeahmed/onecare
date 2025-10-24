@@ -76,7 +76,7 @@ export async function releaseIdempotency(store: IdempotencyStore, key: string): 
     return;
   }
   try {
-    await store.put(key, 1);
+    await store.put(key, 0);
   } catch {
     // ignore best-effort fallback failures
   }

@@ -59,6 +59,7 @@ describe('messaging HTTP server', () => {
       },
       pdsLookup: true,
       pdfMaxMb: 2,
+      pdfHostAllowlist: ['example.com'],
     };
 
     server = createMessagingServer(buildOptions());

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import time
 from collections.abc import AsyncIterator
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse, urlunparse
 
@@ -20,6 +21,7 @@ from .audio_store import DEFAULT_CONFIG_PATH, create_audio_store
 from .quality import evaluate_quality
 from .llm_client import SummaryLLM
 from .postprocess import highlight_uncertainty
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 _ALLOWED_AUDIO_SCHEMES = {"https", "s3"}
 
@@ -161,8 +163,60 @@ app = FastAPI(title="Scribe Service", version="0.1.0", lifespan=lifespan)
 instrument_fastapi(app)
 
 
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next: Callable[..., Response]) -> Response:
+    start = time.perf_counter()
+    response: Optional[Response] = None
+    error: Optional[BaseException] = None
+    try:
+        response = await call_next(request)
+        return response
+    except BaseException as exc:  # pragma: no cover - propagated
+        error = exc
+        raise
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        route = request.url.path
+        method = request.method
+        status_code = getattr(response, "status_code", 500)
+        _REQUEST_COUNTER.labels(_SERVICE_LABEL, method, route, str(status_code)).inc()
+        _DURATION_HISTOGRAM.labels(_SERVICE_LABEL, route, method).observe(duration_ms)
+        if error is None and 200 <= status_code < 400:
+            _SUCCESS_COUNTER.labels(_SERVICE_LABEL, route).inc()
+
+
 _TRANSCRIBE_AUTH = require_service_auth(env_var="SCRIBE_SERVICE_API_KEY", required_scope="scribe:transcribe")
 _DRAFT_AUTH = require_service_auth(env_var="SCRIBE_SERVICE_API_KEY", required_scope="scribe:draft")
+
+_SERVICE_LABEL = "scribe"
+_HTTP_LATENCY_BUCKETS_MS = (
+    10.0,
+    25.0,
+    50.0,
+    100.0,
+    200.0,
+    400.0,
+    800.0,
+    1_500.0,
+    3_000.0,
+    5_000.0,
+)
+_REQUEST_COUNTER = Counter(
+    "http_server_requests_total",
+    "HTTP requests",
+    ("service", "method", "route", "status"),
+)
+_SUCCESS_COUNTER = Counter(
+    "http_server_success_total",
+    "Successful HTTP responses",
+    ("service", "route"),
+)
+_DURATION_HISTOGRAM = Histogram(
+    "http_server_duration_ms",
+    "HTTP request duration in milliseconds",
+    ("service", "route", "method"),
+    buckets=_HTTP_LATENCY_BUCKETS_MS,
+)
 
 
 @app.get("/health")
@@ -180,6 +234,15 @@ def ready(request: Request, response: Response) -> dict[str, str]:
         return {"status": "ready"}
     _attach_correlation_headers(response, correlation_id)
     raise HTTPException(status_code=503, detail={"status": "not_ready"})
+
+
+@app.get("/metrics")
+def metrics_endpoint(request: Request) -> Response:
+    correlation_id = _extract_correlation_id(request)
+    body = generate_latest()
+    metrics_response = Response(content=body, media_type=CONTENT_TYPE_LATEST)
+    _attach_correlation_headers(metrics_response, correlation_id)
+    return metrics_response
 
 
 class TranscriptQuality(BaseModel):
