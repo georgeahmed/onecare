@@ -47,7 +47,7 @@ Key flags:
 
 The generator runs entirely in-process, making it safe for CI and local tuning. To exercise the NATS-backed
 deployment, point the analytics service at a test namespace, run the generator, and compare counters/histograms
-(`analytics.ingest.*`, `analytics.sink.latency_ms`) to the script’s summary.
+(`analytics_ingest_*`, `analytics_sink_latency_ms`) to the script’s summary.
 
 ## Recommended Experiments
 
@@ -74,11 +74,11 @@ Collect the script output together with Prometheus snapshots (lag histograms, re
 
 ## Integrating With Observability
 
-- Dashboard panels (`docs/ANALYTICS_DASHBOARDS.md`) surface `analytics.ingest.*` counters and `analytics.sink.latency_ms`.
+- Dashboard panels (`docs/ANALYTICS_DASHBOARDS.md`) surface `analytics_ingest_*` counters and `analytics_sink_latency_ms`.
 - Compare generator summaries to dashboard percentiles to ensure instrumentation alignment.
 - Create alerts when:
-  - `analytics.ingest.lag_ms` p95 exceeds 5 seconds for >5 minutes.
-  - `analytics.ingest.retry` or `analytics.ingest.dlq` grows continuously during steady load.
+  - `analytics_ingest_lag_ms` p95 exceeds 5 seconds for >5 minutes.
+  - `analytics_ingest_retry_total` or `analytics_ingest_dlq_total` grows continuously during steady load.
 
 ## Next Steps
 

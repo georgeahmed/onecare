@@ -27,7 +27,7 @@ spec:
             description: |
               Routing decisions exceed the 40ms p95 target. Check processing limiter metrics,
               inbound backlog, and downstream dependencies.
-            runbook: "https://onecare/runbooks/ics-routing-latency"
+            runbook: "https://onecare/runbooks/oncall#ics-acknowledgements"
         - alert: ICSAckLatencyHigh
           expr: |
             histogram_quantile(
@@ -45,4 +45,4 @@ spec:
             description: |
               Ack publishing exceeds the 30ms p95 budget. Review bus health, audit spool backlog,
               and idempotency store latency.
-            runbook: "https://onecare/runbooks/ics-ack-latency"
+            runbook: "https://onecare/runbooks/oncall#ics-acknowledgements"

@@ -11,8 +11,18 @@ export * from './pharmacy-outcome';
 export * from './fhir-patient';
 export * from './fhir-communication';
 export * from './fhir-document-reference';
-export * from './fhir-bundle-entry-resource';
-export * from './fhir-bundle-transaction';
+export type {
+  FHIRBundleEntryResource,
+  BundleEntryPatient,
+  BundleEntryCommunication,
+  BundleEntryDocumentReference,
+} from './fhir-bundle-entry-resource';
+export type {
+  FhirTransactionMethod,
+  FHIRTransactionBundle,
+  FhirTransactionEntry,
+  FhirTransactionRequest,
+} from './fhir-bundle-transaction';
 export * from './scribe';
 export * from './safety';
 export * from './portal';

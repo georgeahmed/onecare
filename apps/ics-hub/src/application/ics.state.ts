@@ -569,6 +569,11 @@ export class RoutedState extends BaseState<IcsContext, IcsEvent> {
             },
             correlationId,
           );
+          if (retryAfterMs !== undefined) {
+            ctx.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+            ctx.responseHeaders ??= {};
+            ctx.responseHeaders['Retry-After'] = String(ctx.retryAfterSeconds);
+          }
           throw error;
         } finally {
           span.end();

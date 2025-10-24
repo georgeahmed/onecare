@@ -1,6 +1,7 @@
 export interface MeshSendDocumentPayload {
   workflowId: string;
   mexWorkflowId: string;
+  mexAckWorkflowId?: string;
   mexTo: string;
   mexLocalId: string;
   senderMailbox: string;

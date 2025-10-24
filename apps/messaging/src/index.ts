@@ -256,6 +256,10 @@ function handleSendDocumentError(res: ServerResponse, error: unknown, correlatio
     switch (error.code) {
       case 'pdf_fetch_failed':
       case 'pdf_too_large':
+      case 'pdf_url_invalid':
+      case 'pdf_insecure':
+      case 'pdf_host_not_allowed':
+      case 'pdf_content_type_invalid':
       case 'task_missing_patient':
       case 'patient_identifier_missing':
       case 'nhs_number_missing':

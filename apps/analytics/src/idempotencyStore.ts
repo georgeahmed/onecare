@@ -1,15 +1,35 @@
 import type { IdempotencyStore } from '@onecare/ports';
 
 type StoreEntry = { expiresAt: number };
+const PRUNE_BATCH_SIZE = 64;
 
 export function createInMemoryIdempotencyStore(): IdempotencyStore {
   const entries = new Map<string, StoreEntry>();
+  let pruneIterator: Iterator<[string, StoreEntry]> | null = null;
 
   const pruneExpired = (now: number): void => {
-    for (const [key, entry] of entries) {
+    if (entries.size === 0) {
+      pruneIterator = null;
+      return;
+    }
+    if (!pruneIterator) {
+      pruneIterator = entries.entries();
+    }
+    let processed = 0;
+    while (processed < PRUNE_BATCH_SIZE) {
+      const next = pruneIterator.next();
+      if (next.done) {
+        pruneIterator = entries.entries();
+        break;
+      }
+      const [key, entry] = next.value;
       if (entry.expiresAt <= now) {
         entries.delete(key);
       }
+      processed += 1;
+    }
+    if (entries.size === 0) {
+      pruneIterator = null;
     }
   };
 

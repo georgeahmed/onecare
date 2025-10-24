@@ -30,13 +30,14 @@ export interface SendDocumentConfig {
   };
   pdsLookup: boolean;
   pdfMaxMb: number;
+  pdfHostAllowlist?: string[];
 }
 
 export interface SendDocumentResult {
   messageId: string;
   mexLocalId: string;
   taskReference: string;
-  ackDueAt: string;
+  ackDueAt: string | null;
 }
 
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -97,12 +98,20 @@ export async function sendDocument(
   await publishEvent(bus, Topics.messaging.sendDocRequested, requestedEvent, correlationId);
 
   const bundle = await readResource<Record<string, unknown>>(deps.fhirRepository, command.compositionBundleRef, correlationId);
-  const pdfBytes = await downloadPdf(fetcher, command.pdfUrl, deps.config.pdfMaxMb, correlationId);
+  const pdfBytes = await downloadPdf(
+    fetcher,
+    command.pdfUrl,
+    deps.config.pdfMaxMb,
+    correlationId,
+    deps.config.pdfHostAllowlist,
+  );
 
   const mexLocalId = randomUUID();
+  const ackWorkflowId = deps.config.mesh.ackWorkflowId?.trim();
   const meshPayload: MeshSendDocumentPayload = {
     workflowId: deps.config.mesh.workflowId,
     mexWorkflowId: deps.config.mesh.workflowId,
+    ...(ackWorkflowId ? { mexAckWorkflowId: ackWorkflowId } : {}),
     mexTo: buildMexTo(patient),
     mexLocalId,
     senderMailbox: deps.config.mesh.senderMailbox,
@@ -116,19 +125,29 @@ export async function sendDocument(
 
   const meshResult = await deps.meshClient.sendDocument(meshPayload);
 
-  await updateTaskStatus(deps.fhirRepository, taskRef.reference, patient.patientReference, meshResult.messageId, meshResult.mexLocalId, correlationId);
+  await updateTaskStatus(
+    deps.fhirRepository,
+    taskRef,
+    patient.patientReference,
+    meshResult.messageId,
+    meshResult.mexLocalId,
+    nowFn(),
+    correlationId,
+  );
 
   const ackDueAt = computeAckDeadline(nowFn(), deps.config.mesh.ackTimeoutMinutes);
+  const retryAfter = determineInitialRetryAfter(nowFn(), deps.config.mesh.backoffSchedule, deps.config.mesh.ackTimeoutMinutes);
   const sentEvent: SendDocumentSent = {
     taskId: taskRef.reference,
     patientId: patient.patientReference,
     messageId: meshResult.messageId,
     mexTo: meshPayload.mexTo,
     mexWorkflowId: deps.config.mesh.workflowId,
+    ...(ackWorkflowId ? { mexAckWorkflowId: ackWorkflowId } : {}),
     mexLocalId: meshResult.mexLocalId,
     sentAt: nowFn().toISOString(),
     attempt: 1,
-    retryAfter: deps.config.mesh.maxRetries > 0 ? ackDueAt : null,
+    retryAfter: deps.config.mesh.maxRetries > 0 ? retryAfter : null,
   };
 
   await publishEvent(bus, Topics.messaging.sendDocSent, sentEvent, correlationId);
@@ -184,7 +203,9 @@ async function readResource<T>(repo: FhirRepository, reference: string, correlat
   }
   const normalised = normaliseReferenceFromAny(reference);
   try {
-    return await repo.readResource<T>(normalised.reference);
+    return await repo.readResource<T>(normalised.reference, {
+      headers: correlationId ? { 'x-correlation-id': correlationId } : undefined,
+    });
   } catch (error) {
     logger.error('messaging.send_document.fhir_read_failed', {
       reference: normalised.reference,
@@ -195,13 +216,36 @@ async function readResource<T>(repo: FhirRepository, reference: string, correlat
   }
 }
 
-async function downloadPdf(fetcher: Fetcher, url: string, maxMb: number, correlationId?: string): Promise<Uint8Array> {
+async function downloadPdf(
+  fetcher: Fetcher,
+  url: string,
+  maxMb: number,
+  correlationId?: string,
+  allowedHosts?: string[],
+): Promise<Uint8Array> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new SendDocumentError('pdf_url_invalid', 'pdf_url_invalid');
+  }
+  if (parsedUrl.protocol !== 'https:') {
+    throw new SendDocumentError('pdf_insecure', 'pdf_insecure');
+  }
+  const normalizedHost = parsedUrl.host.toLowerCase();
+  if (Array.isArray(allowedHosts) && allowedHosts.length > 0) {
+    const allowList = allowedHosts.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+    if (allowList.length > 0 && !allowList.includes(normalizedHost)) {
+      throw new SendDocumentError('pdf_host_not_allowed', 'pdf_host_not_allowed');
+    }
+  }
+
   let response: Response;
   try {
-    response = await fetcher(url);
+    response = await fetcher(parsedUrl.toString());
   } catch (error) {
     logger.error('messaging.send_document.pdf_fetch_failed', {
-      url,
+      url: parsedUrl.toString(),
       correlationId,
       reason: error instanceof Error ? error.message : 'unknown_error',
     });
@@ -209,11 +253,15 @@ async function downloadPdf(fetcher: Fetcher, url: string, maxMb: number, correla
   }
   if (!response.ok) {
     logger.error('messaging.send_document.pdf_fetch_error_status', {
-      url,
+      url: parsedUrl.toString(),
       status: response.status,
       correlationId,
     });
     throw new SendDocumentError('pdf_fetch_failed', 'pdf_fetch_failed');
+  }
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.toLowerCase().includes('application/pdf')) {
+    throw new SendDocumentError('pdf_content_type_invalid', 'pdf_content_type_invalid');
   }
   const arrayBuffer = await response.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
@@ -225,9 +273,10 @@ async function downloadPdf(fetcher: Fetcher, url: string, maxMb: number, correla
 }
 
 function buildMexTo(patient: PatientDetails): string {
-  const dob = patient.dateOfBirth.replace(/-/g, '');
+  const dob = patient.dateOfBirth.replace(/[^0-9]/g, '');
+  const nhsNumber = patient.nhsNumber.replace(/[^0-9]/g, '');
   const surname = patient.surname.replace(/[^A-Za-z]/g, '').toUpperCase() || 'UNKNOWN';
-  return `GPPROVIDER_${patient.nhsNumber}_${dob}_${surname}`;
+  return `GPPROVIDER_${nhsNumber}_${dob}_${surname}`;
 }
 
 function buildSubject(patient: PatientDetails, metadata?: Record<string, string>): string {
@@ -239,10 +288,11 @@ function buildSubject(patient: PatientDetails, metadata?: Record<string, string>
 
 async function updateTaskStatus(
   repo: FhirRepository,
-  taskReference: string,
+  taskRef: NormalisedReference,
   patientReference: string,
   messageId: string,
   mexLocalId: string,
+  now: Date,
   correlationId?: string,
 ): Promise<void> {
   if (!repo.updateTask) {
@@ -250,13 +300,13 @@ async function updateTaskStatus(
   }
   const patch: Record<string, unknown> = {
     resourceType: 'Task',
-    id: taskReference.replace(/^Task\//, ''),
+    id: taskRef.id,
     status: 'in-progress',
     businessStatus: { text: 'document_sent' },
     note: [
       {
         text: `Document dispatch queued (messageId=${messageId})`,
-        time: new Date().toISOString(),
+        time: now.toISOString(),
         authorString: 'messaging-send-document-service',
       },
     ],
@@ -268,10 +318,10 @@ async function updateTaskStatus(
     ],
   };
   try {
-    await repo.updateTask(taskReference, patch);
+    await repo.updateTask(taskRef.id, patch);
   } catch (error) {
     logger.warn('messaging.send_document.task_update_failed', {
-      taskReference,
+      taskReference: taskRef.reference,
       correlationId,
       reason: error instanceof Error ? error.message : 'unknown_error',
     });
@@ -379,19 +429,37 @@ function normaliseReference(resourceType: string, value: string): NormalisedRefe
 }
 
 function normaliseReferenceFromAny(value: string): NormalisedReference {
-  const parts = value.split('/').filter(Boolean);
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { id: '', reference: '' };
+  }
+  let parts: string[];
+  try {
+    const asUrl = new URL(trimmed);
+    parts = asUrl.pathname.split('/').filter(Boolean);
+  } catch {
+    parts = trimmed.split('/').filter(Boolean);
+  }
+  if (parts.length >= 4 && parts[parts.length - 2].toLowerCase() === '_history') {
+    const type = parts[parts.length - 4];
+    const id = parts[parts.length - 3];
+    return { id, reference: `${type}/${id}` };
+  }
   if (parts.length >= 2) {
     const type = parts[parts.length - 2];
     const id = parts[parts.length - 1];
     return { id, reference: `${type}/${id}` };
   }
-  return { id: value, reference: value };
+  const first = parts[0] ?? trimmed;
+  return { id: first, reference: trimmed };
 }
 
-function computeAckDeadline(now: Date, ackTimeoutMinutes: number): string {
-  const timeoutMs = Math.max(1, ackTimeoutMinutes) * 60 * 1000;
-  const deadline = new Date(now.getTime() + timeoutMs);
-  return deadline.toISOString();
+function computeAckDeadline(now: Date, ackTimeoutMinutes: number): string | null {
+  if (!Number.isFinite(ackTimeoutMinutes) || ackTimeoutMinutes <= 0) {
+    return null;
+  }
+  const timeoutMs = ackTimeoutMinutes * 60 * 1000;
+  return new Date(now.getTime() + timeoutMs).toISOString();
 }
 
 function createPublishHeaders(correlationId: string | undefined, messageId: string): Record<string, string> {
@@ -406,4 +474,30 @@ function normaliseCorrelationId(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function determineInitialRetryAfter(now: Date, schedule: string[], ackTimeoutMinutes: number): string | null {
+  const first = schedule.find((entry) => typeof entry === 'string' && entry.trim().length > 0);
+  if (first) {
+    const parsed = parseIsoDurationMs(first.trim());
+    if (parsed && parsed > 0) {
+      return new Date(now.getTime() + parsed).toISOString();
+    }
+  }
+  return computeAckDeadline(now, ackTimeoutMinutes);
+}
+
+function parseIsoDurationMs(value: string): number | null {
+  const pattern = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i;
+  const match = pattern.exec(value);
+  if (!match) {
+    return null;
+  }
+  const [, days, hours, minutes, seconds] = match;
+  const totalMs =
+    (days ? Number(days) * 24 * 60 * 60 * 1000 : 0) +
+    (hours ? Number(hours) * 60 * 60 * 1000 : 0) +
+    (minutes ? Number(minutes) * 60 * 1000 : 0) +
+    (seconds ? Number(seconds) * 1000 : 0);
+  return Number.isFinite(totalMs) && totalMs > 0 ? totalMs : null;
 }

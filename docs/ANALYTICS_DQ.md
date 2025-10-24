@@ -41,12 +41,12 @@ Threshold Catalogue
 | `errors_total` | Missing labels | `labels.service` absent | Reject, update producer instrumentation, backfill via playback/backfill |
 | `requests_total` | Missing numeric `value` | Non-numeric (NaN/empty) | Reject and fix producer type coercion |
 | Any metric | Missing `name` | Schema validation failure | Block at ingress; raise incident with producing team |
-| Any metric | Ingest lag | `analytics.ingest.lag_ms` p95 > 5 s for >10 min | Treat as pipeline incident; examine bus backpressure |
+| Any metric | Ingest lag | `analytics_ingest_lag_ms` p95 > 5 s for >10 min | Treat as pipeline incident; examine bus backpressure |
 
 Remediation Playbook
 --------------------
 
-1. **Identify** — Use `analytics.ingest.*` counters and quality reports to isolate impacted metrics.
+1. **Identify** — Use `analytics_ingest_*` counters and quality reports to isolate impacted metrics.
 2. **Isolate** — Filter the quarantine NDJSON by `reason` to understand the failure class quickly.
 3. **Fix** — Patch the upstream producer (labels/value types) or adjust metric throttles.
 4. **Replay** — After remediation, run the playback or backfill tooling to restore gaps.

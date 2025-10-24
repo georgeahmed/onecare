@@ -29,11 +29,13 @@ scrape_configs:
       - targets:
           - orchestrator:3001
           - safety-gate:8081
+          - ics-hub:7100
+          - analytics:9400
     metric_relabel_configs:
       - action: labeldrop
         regex: '(?i)(user|email|token|password|secret|authorization|session)'
       - action: labeldrop
         regex: '(?i)(trace.*|span.*|request.*|correlation.*)'
       - source_labels: [__name__]
-        regex: '(http_server_duration_(bucket|sum|count)|http_server_requests_total|http_server_errors_total|booking_http_.+|gp_connect_.+|booking_event_.+|safety_gate_request_latency_seconds_(bucket|sum|count)|safety_gate_requests_total|safety_gate_queue_depth|telephony_http_.+|telephony_reject_total|telephony_queue)'
+        regex: '(http_server_duration_(bucket|sum|count)|http_server_requests_total|http_server_errors_total|booking_http_.+|gp_connect_.+|booking_event_.+|safety_gate_request_latency_seconds_(bucket|sum|count)|safety_gate_requests_total|safety_gate_queue_depth|telephony_http_.+|telephony_reject_total|telephony_queue|ics_.+|analytics_ingest_.+|analytics_sink_latency_ms_(bucket|sum|count))'
         action: keep

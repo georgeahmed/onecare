@@ -11,9 +11,9 @@ import {
   ValidatedState,
   type IcsContext,
   type IcsEvent,
-  type RoutingConfig,
   type InboundStateOptions,
 } from './ics.state';
+import type { RoutingConfig } from './routing';
 
 export interface BuildIcsMachineOptions {
   policies?: Record<string, IcsOrganisationPolicy>;

@@ -5,22 +5,29 @@ import type { TriageDecision } from '@onecare/events';
 import { validate, type ValidationError } from '@onecare/domain';
 import type { IdempotencyStore } from '@onecare/ports';
 import { executeWithIdempotency } from '@onecare/ports';
-import { logger, ensureTracing, createCounter, createHistogram, setCorrelationId, withCorrelationContext } from '@onecare/observability';
+import {
+  createCounter,
+  createHistogram,
+  ensureTracing,
+  logger,
+  setCorrelationId,
+  withCorrelationContext,
+} from '@onecare/observability';
 import { createInMemoryIdempotencyStore } from './idempotencyStore';
 
 ensureTracing('analytics-triage-decision');
 
 const TRIAGE_DECISION_SCHEMA_ID = 'https://onecare/schemas/triage/triage-decision.json';
-const TRIAGE_DECISION_ALLOWED_TOPICS = new Set<string>([
-  Topics.triage.decision ?? 'triage.decision',
-  Topics.broker.deadLetter,
-]);
+const TRIAGE_DECISION_TOPIC = Topics.triage.decision ?? 'triage.decision';
+const TRIAGE_DECISION_ALLOWED_TOPICS = new Set<string>([TRIAGE_DECISION_TOPIC, Topics.broker.deadLetter]);
 
 const triageDecisionCounter = createCounter('analytics.triage_decision.observed_total');
 const triageDecisionDuplicateCounter = createCounter('analytics.triage_decision.duplicate_total');
 const triageDecisionScoreHistogram = createHistogram('analytics.triage_decision.score');
 const triageDecisionInvalidCounter = createCounter('analytics.triage_decision.invalid_total');
 const triageDecisionReplaySuppressedCounter = createCounter('analytics.triage_decision.replay_suppressed_total');
+
+const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 
 export interface TriageDecisionObserverOptions {
   bus?: MessageBus;
@@ -40,6 +47,7 @@ export class TriageDecisionObserver {
     const ttl = options.idempotencyTtlSeconds;
     this.idempotencyTtlSeconds =
       typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+
     this.bus = isGuardedBus(baseBus)
       ? baseBus
       : withMessageGuards(baseBus, {
@@ -49,47 +57,41 @@ export class TriageDecisionObserver {
 
   async start(): Promise<void> {
     if (this.subscription) return;
-    this.subscription = await this.bus.subscribe<TypedEnvelope<TriageDecision>>(
-      Topics.triage.decision ?? 'triage.decision',
-      async (message) => {
-        await this.handleEnvelope(message.payload);
-      },
-    );
-    logger.info('triage decision observer subscribed', { topic: Topics.triage.decision ?? 'triage.decision' });
+    this.subscription = await this.bus.subscribe<TypedEnvelope<TriageDecision>>(TRIAGE_DECISION_TOPIC, async (message) => {
+      await this.handleEnvelope(message.payload);
+    });
+    logger.info('triage decision observer subscribed', { topic: TRIAGE_DECISION_TOPIC });
   }
 
   async stop(): Promise<void> {
     if (!this.subscription) return;
     await this.subscription.unsubscribe();
     this.subscription = null;
-    logger.info('triage decision observer unsubscribed', { topic: Topics.triage.decision ?? 'triage.decision' });
+    logger.info('triage decision observer unsubscribed', { topic: TRIAGE_DECISION_TOPIC });
   }
 
   private async handleEnvelope(envelope: TypedEnvelope<TriageDecision>): Promise<void> {
     await withCorrelationContext(async () => {
-      const { correlationId } = envelope;
-      if (correlationId) {
-        setCorrelationId(correlationId);
+      if (envelope.correlationId) {
+        setCorrelationId(envelope.correlationId);
       }
-
-      const key = this.deriveIdempotencyKey(envelope);
-      if (!key) {
+      const idempotencyKey = this.deriveIdempotencyKey(envelope);
+      if (!idempotencyKey) {
         await this.processEnvelope(envelope);
         return;
       }
-
       const result = await executeWithIdempotency({
         store: this.idempotencyStore,
-        key,
+        key: idempotencyKey,
         ttlSeconds: this.idempotencyTtlSeconds,
         execute: async () => {
           await this.processEnvelope(envelope);
-          return true;
+          return true as const;
         },
         onDuplicate: () => {
           const priority = envelope.payload?.priority ?? 'UNKNOWN';
           triageDecisionReplaySuppressedCounter.add(1, { priority });
-          logger.warn('triage.decision duplicate_suppressed', {
+          logger.warn('triage.decision.duplicate_suppressed', {
             topic: envelope.topic,
             correlationId: envelope.correlationId,
             eventId: envelope.id,
@@ -97,7 +99,6 @@ export class TriageDecisionObserver {
           });
         },
       });
-
       if (result.status === 'skipped') {
         return;
       }
@@ -105,20 +106,21 @@ export class TriageDecisionObserver {
   }
 
   private async processEnvelope(envelope: TypedEnvelope<TriageDecision>): Promise<void> {
-    const { correlationId, payload, id, topic } = envelope;
+    const { correlationId, payload, id } = envelope;
     const validation = validate(TRIAGE_DECISION_SCHEMA_ID, payload);
     if (!validation.ok) {
       triageDecisionInvalidCounter.add(1, { reason: 'validation_failed' });
+      const errors = sanitizeValidationErrors(validation.errors);
       logger.warn('triage.decision payload failed validation', {
         correlationId,
         errorCount: validation.errors.length,
-        errors: sanitizeValidationErrors(validation.errors),
+        errors,
       });
       await this.publishToDlq({
         correlationId,
         envelope,
         cause: 'validation_failed',
-        details: { errors: sanitizeValidationErrors(validation.errors) },
+        details: { errors },
       });
       return;
     }
@@ -142,15 +144,19 @@ export class TriageDecisionObserver {
       duplicate,
       reasons: payload.reasons?.slice(0, 5),
       hasAssignment: Boolean(payload.assignment?.owner || payload.assignment?.team),
-      topic,
+      topic: envelope.topic,
     });
   }
 
   private deriveIdempotencyKey(envelope: TypedEnvelope<TriageDecision>): string | undefined {
-    if (envelope.id && envelope.id.trim().length > 0) {
-      return `triage:${envelope.id.trim()}`;
+    if (!envelope.id) {
+      return undefined;
     }
-    return undefined;
+    const trimmed = envelope.id.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return `triage:${trimmed}`;
   }
 
   private async publishToDlq(input: {
@@ -179,30 +185,34 @@ export class TriageDecisionObserver {
     }
     const envelopeToPublish = createEnvelope(Topics.broker.deadLetter, dlqPayload, correlationId);
     try {
-      await this.bus.publish(Topics.broker.deadLetter, envelopeToPublish, correlationId ? { 'x-correlation-id': correlationId } : undefined);
+      await this.bus.publish(
+        Topics.broker.deadLetter,
+        envelopeToPublish,
+        correlationId ? { 'x-correlation-id': correlationId } : undefined,
+      );
       logger.warn('triage.decision.dlq_published', {
         correlationId,
         eventId: envelope.id,
         cause,
       });
-    } catch (err) {
+    } catch (error) {
       logger.error('triage.decision.dlq_publish_failed', {
         correlationId,
         eventId: envelope.id,
         cause,
-        error: err instanceof Error ? err.message : err,
+        reason: error instanceof Error ? error.message : error,
       });
     }
   }
 }
 
-export async function startTriageDecisionObserver(options: TriageDecisionObserverOptions = {}): Promise<TriageDecisionObserver> {
+export async function startTriageDecisionObserver(
+  options: TriageDecisionObserverOptions = {},
+): Promise<TriageDecisionObserver> {
   const observer = new TriageDecisionObserver(options);
   await observer.start();
   return observer;
 }
-
-const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 
 function sanitizeValidationErrors(errors: ValidationError[]): Array<{ path: string; keyword: string }> {
   return errors.slice(0, 5).map((err) => ({

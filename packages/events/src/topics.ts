@@ -31,6 +31,7 @@ export const Topics = {
   pharmacy: {
     referral: 'pharmacy.referral',
     outcome: 'pharmacy.outcome',
+    notification: 'pharmacy.notification',
   },
   ics: {
     referralRequest: 'ics.referral.request',

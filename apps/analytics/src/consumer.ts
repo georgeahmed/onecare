@@ -1,4 +1,4 @@
-import type { Message, MessageBus, Subscription } from '@onecare/bus';
+import type { MessageBus, Subscription } from '@onecare/bus';
 import { getBus, withMessageGuards, isGuardedBus } from '@onecare/bus';
 import { Topics, type TypedEnvelope, createEnvelope } from '@onecare/events';
 import type { IdempotencyStore } from '@onecare/ports';
@@ -119,23 +119,11 @@ export class AnalyticsConsumer {
     this.retryPolicy = normalizeRetryPolicy(options.retryPolicy);
 
     const baseBus = options.bus ?? getBus();
-    const guardOptions = {
-      allowedTopics: ANALYTICS_ALLOWED_TOPICS,
-      idempotencyStore: this.idempotencyStore,
-      idempotencyTtlSeconds: this.idempotencyTtlSeconds,
-      onDuplicate: (message: Message<TypedEnvelope<Metric>>) => {
-        const envelope = message.payload;
-        const duplicateMetricName = envelope?.payload?.name ?? 'unknown';
-        ingestOkCounter.add(1, { metricName: duplicateMetricName, duplicate: true });
-        logger.warn('analytics.metric.duplicate_suppressed', {
-          correlationId: envelope?.correlationId,
-          metricName: duplicateMetricName,
-          envelopeId: envelope?.id,
+    this.bus = isGuardedBus(baseBus)
+      ? baseBus
+      : withMessageGuards(baseBus, {
+          allowedTopics: ANALYTICS_ALLOWED_TOPICS,
         });
-      },
-    };
-
-    this.bus = isGuardedBus(baseBus) ? withMessageGuards(baseBus, guardOptions) : withMessageGuards(baseBus, guardOptions);
   }
 
   async start(): Promise<void> {

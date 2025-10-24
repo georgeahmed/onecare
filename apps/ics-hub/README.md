@@ -21,17 +21,17 @@ State Flow
 Routing Policies
 ----------------
 - `InboundState` loads organisation policies from `@onecare/config` and normalises org IDs. Policies define destination endpoints, authentication headers, rate limits, and automation feature flags.
-- Token bucket rate limiting enforces per-organisation throughput; when depleted, responses return HTTP 429 with `Retry-After` while logging `ics.routing.rate_limited_total`.
+- Token bucket rate limiting enforces per-organisation throughput; when depleted, responses return HTTP 429 with `Retry-After` while logging `ics_routing_rate_limited_total`.
 - SSRF guardrails reject non-HTTPS, loopback, or credential-bearing endpoints before invocation.
-- Route decisions capture both policy metadata and dynamic overrides (priority, tenancy). They are logged, metered (`ics.routing.decisions_total`), and piped into automation if enabled.
+- Route decisions capture both policy metadata and dynamic overrides (priority, tenancy). They are logged, metered (`ics_routing_decisions_total`), and piped into automation if enabled.
 - Fallback routing (`policy: 'fallback'`) keeps the service operating if the policy cache is stale; operators must refresh configuration to restore precise routing (see ADR `2025-10-20-ics-routing.md`).
 
 Acknowledgement Semantics
 -------------------------
-- Referrals are acknowledged via `IcsClient.sendReferral` with per-route timeouts and retries. Successful acks emit `ics.referral.ack_published` logs and increment `ics.ack.published_total`.
-- Ack publishing wraps `publishReferralAck` with idempotency. Keys follow `ics:ack:{orgId}:{referralId}:{envelopeId}` and reuse `IdempotencyStore` to dedupe retries; duplicates add `ics.ack.duplicate_total`.
-- Failures fall back to guarded retries and DLQ emission with summarised payload (`Topics.broker.deadLetter`). `ics.ack.failed_total` increments alongside failure logs; audit entries capture rationale for replay.
-- Ack latency histograms (`ics.ack.latency_ms`) and structured traces identify slow downstreams. Correlation IDs propagate end-to-end so providers and auditors can reconcile acknowledgements.
+- Referrals are acknowledged via `IcsClient.sendReferral` with per-route timeouts and retries. Successful acks emit `ics.referral.ack_published` logs and increment `ics_ack_published_total`.
+- Ack publishing wraps `publishReferralAck` with idempotency. Keys follow `ics:ack:{orgId}:{referralId}:{envelopeId}` and reuse `IdempotencyStore` to dedupe retries; duplicates add `ics_ack_duplicate_total`.
+- Failures fall back to guarded retries and DLQ emission with summarised payload (`Topics.broker.deadLetter`). `ics_ack_failed_total` increments alongside failure logs; audit entries capture rationale for replay.
+- Ack latency histograms (`ics_ack_latency_ms`) and structured traces identify slow downstreams. Correlation IDs propagate end-to-end so providers and auditors can reconcile acknowledgements.
 
 Automation Bridge
 -----------------
@@ -41,7 +41,7 @@ Automation Bridge
 
 Backpressure, DLQ, and Reprocessing
 -----------------------------------
-- `ProcessingLimiter` caps concurrent referrals (`ICS_PROCESSING_MAX_CONCURRENCY`) and queues (size `ICS_PROCESSING_QUEUE_LIMIT`). High-watermarks emit `ics.backpressure.overload_total` and return `Retry-After` headers derived from configuration.
+- `ProcessingLimiter` caps concurrent referrals (`ICS_PROCESSING_MAX_CONCURRENCY`) and queues (size `ICS_PROCESSING_QUEUE_LIMIT`). High-watermarks emit `ics_backpressure_overload_total` and return `Retry-After` headers derived from configuration.
 - `AuditSpool` absorbs transient publish failures. It retries up to `ICS_AUDIT_SPOOL_ATTEMPTS` with delay `ICS_AUDIT_SPOOL_DELAY_MS` before DLQ routing, ensuring audit trails are durable without stalling referrals.
 - All DLQ events contain correlation IDs, attempt counts, and summarised payload pointers for safe replay. Operators can use `src/dev/replay.ts` to drain DLQs back through the state machine once issues are resolved.
 
@@ -64,7 +64,7 @@ Configuration
 
 Operational Notes
 -----------------
-- Metrics: `ics.routing.*`, `ics.ack.*`, `ics.backpressure.*`, and automation counters feed SLO dashboards.
+- Metrics: `ics_routing_*`, `ics_ack_*`, `ics_backpressure_*`, and automation counters feed SLO dashboards.
 - Replay: `src/dev/sandbox.ts` + deterministic fixtures underpin contract tests and offline debugging (`npm run test -- apps/ics-hub/test`).
 - Performance harness `test/ics.perf.test.ts` enforces ≤ 20 ms referral calls and ≤ 15 ms ack latency under load.
 - Refer to ADRs `2025-10-20-ics-routing.md` and `2025-10-20-automation-design.md` for rationale, failure modes, and reprocessing playbooks.

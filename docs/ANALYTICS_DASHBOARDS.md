@@ -16,12 +16,13 @@ Data Sources
   - `p95` (95th percentile across numeric values; `null` if insufficient numeric data)
   - `generatedAt` (ISO timestamp when the rollup was produced)
 - **Runtime ingest metrics** — The TypeScript consumer emits counters/histograms (see `apps/analytics/src/consumer.ts`):
-  - `analytics.ingest.ok` — Successful writes (attributes: `metricName`, `attempt`, `duplicate`)
-  - `analytics.ingest.error` — Failures after retries (attributes include `reason`)
-  - `analytics.ingest.retry` — Retry attempts (attributes: `metricName`, `attempt`)
-  - `analytics.ingest.dlq` — Messages routed to DLQ (attributes mirror error counter)
-  - `analytics.ingest.lag_ms` — Histogram of clock skew between payload timestamp and persistence time
-  - `analytics.sink.latency_ms` — Histogram of sink write duration
+  - `analytics_ingest_ok_total` — Successful writes (attributes: `metricName`, `attempt`, `duplicate`, `result`)
+  - `analytics_ingest_error_total` — Failures after retries (attributes include `metricName`, `reason`)
+  - `analytics_ingest_retry_total` — Retry attempts (attributes: `metricName`, `attempt`)
+  - `analytics_ingest_duplicate_total` — Duplicates suppressed before persisting (`metricName`)
+  - `analytics_ingest_dlq_total` — Messages routed to DLQ (`metricName`, `cause`, optional `reason`)
+  - `analytics_ingest_lag_ms` — Histogram of clock skew between payload timestamp and persistence time
+  - `analytics_sink_latency_ms` — Histogram of sink write duration
 - **Offline ETL metrics** — Command-line jobs emit structured counters/histograms via `@onecare/observability`:
   - Rollups: `analytics.rollup.run`, `analytics.rollup.metrics_processed`, `analytics.rollup.windows_emitted`, `analytics.rollup.duration_ms`, `analytics.rollup.errors`
   - Data quality: `analytics.quality.run`, `analytics.quality.records_processed`, `analytics.quality.missing_fields`, `analytics.quality.quarantine_records`, `analytics.quality.duration_ms`, `analytics.quality.errors`
@@ -56,15 +57,15 @@ Dashboard Layout
 
 5. **Pipeline Health (Lag & Reliability)**
    - Charts:
-     - Histogram/percentiles of `analytics.ingest.lag_ms` to monitor end-to-end ingest latency.
-     - Line chart of `analytics.ingest.ok` vs `analytics.ingest.error`/`analytics.ingest.dlq` (stacked or side-by-side) to gauge reliability.
-     - Bar chart or sparkline of `analytics.ingest.retry` to uncover flapping sinks.
+    - Histogram/percentiles of `analytics_ingest_lag_ms` to monitor end-to-end ingest latency.
+    - Line chart of `analytics_ingest_ok_total` vs `analytics_ingest_error_total`/`analytics_ingest_dlq_total` (stacked or side-by-side) to gauge reliability.
+    - Bar chart or sparkline of `analytics_ingest_retry_total` to uncover flapping sinks.
      - Offline job summary table tracking `analytics.rollup.run`, `analytics.quality.run`, and `analytics.quarantine_export.run` counts per day to prove jobs executed.
      - Duration trend panels for `analytics.rollup.duration_ms`, `analytics.quality.duration_ms`, and `analytics.quarantine_export.duration_ms` with thresholds for timeouts/SLOs.
    - Notes: break down by `metricName` attribute where volumes justify it; alert when errors or DLQ counts exceed agreed thresholds.
 
 6. **DLQ Intake (Bar)**
-   - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day (combine with `analytics.ingest.dlq` for cross-check).
+  - Query: count DLQ events with `originalTopic = 'analytics.metric'` per day (combine with `analytics_ingest_dlq_total` for cross-check).
    - Visual: bar chart to highlight ingestion failures. Use the same color palette as error rate for correlation.
 
 Recommended Queries

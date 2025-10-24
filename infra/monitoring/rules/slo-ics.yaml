@@ -16,7 +16,7 @@ groups:
         annotations:
           summary: "ICS Hub outbound latency >2s p95"
           description: "ICS Hub outbound latency exceeded 2s for 15 minutes."
-          runbook: https://onecare/runbooks/ics-hub
+          runbook: https://onecare/runbooks/oncall#ics-acknowledgements
       - alert: IcshubErrorRate
         expr: |
           (
@@ -32,4 +32,4 @@ groups:
         annotations:
           summary: "ICS Hub error rate >5%"
           description: "ICS Hub outbound error rate exceeded 5% over the last 10 minutes."
-          runbook: https://onecare/runbooks/ics-hub
+          runbook: https://onecare/runbooks/oncall#ics-acknowledgements
