@@ -29,7 +29,7 @@ spec:
             description: |-
               The scribe backlog (queue={{QUEUE_LABEL}}) averaged above {{WARNING_THRESHOLD}} items across {{WARNING_WINDOW}}.
               Investigate upstream ingestion, transcription throughput, and worker availability before SLAs slip.
-            runbook: "https://onecare/runbooks/scribe-backlog"
+            runbook: "https://onecare/runbooks/oncall#scribe-backlog"
             dashboard: "{{DASHBOARD_URL}}"
         - alert: ScribeBacklogCritical
           expr: |
@@ -51,5 +51,5 @@ spec:
             description: |-
               Backlog has remained above {{CRITICAL_THRESHOLD}} items for {{CRITICAL_WINDOW}} or is projected to exceed that level soon.
               Add capacity, pause new intake, or switch to transcript-only fallback to protect user commitments.
-            runbook: "https://onecare/runbooks/scribe-backlog"
+            runbook: "https://onecare/runbooks/oncall#scribe-backlog"
             dashboard: "{{DASHBOARD_URL}}"
