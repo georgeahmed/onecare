@@ -16,7 +16,7 @@
   "dependencies": {
     "@onecare/events": "file:../../packages/events",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react-dom": "^19.2.0",
     "react-intl": "^7.1.14",
     "react-router-dom": "^6.22.3",
     "uuid": "^13.0.0"
@@ -25,7 +25,7 @@
     "@playwright/test": "^1.48.2",
     "@types/pa11y": "^5.3.7",
     "@types/react": "^18.2.47",
-    "@types/react-dom": "^18.2.18",
+    "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^4.2.1",
     "axe-core": "^4.11.0",
     "eslint": "^8.57.0",
