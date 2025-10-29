@@ -27,7 +27,7 @@ spec:
             description: |-
               No successful materialiser runs for view {{VIEW_LABEL}} in the past {{STALL_WINDOW}}.
               Investigate the pipeline (npm run feature:views -- --view {{VIEW_LABEL}} --online) and confirm the offline dataset is available.
-            runbook: "https://onecare/runbooks/feature-views"
+            runbook: "https://onecare/runbooks/oncall#analytics-materialiser"
             dashboard: "{{DASHBOARD_URL}}"
         - alert: FeatureViewMaterialiserSlow
           expr: |
@@ -48,5 +48,5 @@ spec:
             description: |-
               The p{{DURATION_QUANTILE_PERCENT}} duration for view {{VIEW_LABEL}} exceeded {{DURATION_THRESHOLD_MS}} ms over {{DURATION_WINDOW}}.
               Review recent runs, check upstream data volume, and ensure the job has sufficient resources.
-            runbook: "https://onecare/runbooks/feature-views"
+            runbook: "https://onecare/runbooks/oncall#analytics-materialiser"
             dashboard: "{{DASHBOARD_URL}}"

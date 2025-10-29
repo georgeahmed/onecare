@@ -21,8 +21,8 @@
 - `NATS_DLQ_MESSAGE_LIMIT` (default `256`): maximum characters preserved in DLQ `errorMessage` to avoid leaking PHI.
 
 ## Connection Lifecycle
-- Orchestrator uses exponential backoff with jitter for reconnects; attempts are tracked via the `bus.reconnect.scheduled` counter and `bus.reconnect.delay` histogram.
-- Status events from the NATS client increment `bus.reconnect.events` (for `reconnect`) and `bus.disconnect.events` (for `disconnect`, `error`, `reconnecting`, `staleConnection`, `pingTimer`, `ldm`).
+- Orchestrator uses exponential backoff with jitter for reconnects; attempts are tracked via the `bus_reconnect_scheduled_total` counter and `bus_reconnect_delay` histogram.
+- Status events from the NATS client increment `bus_reconnect_events_total` (for `reconnect`) and `bus_disconnect_events_total` (for `disconnect`, `error`, `reconnecting`, `staleConnection`, `pingTimer`, `ldm`).
 - `markNatsBusConnected` mirrors the live connection state into diagnostics exposed by `@onecare/bus`.
 - `/ready` and `/readyz` now consult cached `getNatsBusHealth()` snapshots; backpressure or disconnections yield HTTP 503 with details in the payload.
 
@@ -39,7 +39,7 @@
 
 ## Operational Checklist
 1. **Reconnect Storms**  
-   - Inspect `bus.reconnect.delay` for large spikes; adjust `NATS_RECONNECT_BASE_DELAY_MS` / `MAX_DELAY_MS` if the cluster is slow to recover.  
+   - Inspect `bus_reconnect_delay` for large spikes; adjust `NATS_RECONNECT_BASE_DELAY_MS` / `MAX_DELAY_MS` if the cluster is slow to recover.  
    - Validate infrastructure health (DevOps runbooks) before widening backoff to avoid thundering herds.
 2. **DLQ Growth**  
    - Check the DLQ payload references for `deliveries` vs. `maxDeliveries`. If max is hit consistently, verify downstream services honour `x-message-id` dedupe and escalate to feature owners.
@@ -52,7 +52,7 @@
 6. **Backpressure Handling**  
    - When `backpressure` toggles true in diagnostics, orchestrator will log `bus readiness degraded`. Investigate pending counts and reduce producers until metrics stabilize.
 7. **DLQ Poison Messages**  
-   - Non-retryable failures (e.g., schema/validation errors) set `payloadRef.retryable=false` and increment `bus.nats.dlq.poison`. Review `x-failure-category`/`x-error-code` headers to triage upstream fixes.
+   - Non-retryable failures (e.g., schema/validation errors) set `payloadRef.retryable=false` and increment `bus_nats_dlq_poison_total`. Review `x-failure-category`/`x-error-code` headers to triage upstream fixes.
 
 ## DLQ Requeue Utility
 - `node scripts/dlq-requeue.js <topic> <payload.json>` republishes a sanitized payload to the original topic using the current bus configuration. Supply the JSON payload you want to re-drive; the script reuses partition hashing and headers automatically.

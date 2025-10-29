@@ -3,7 +3,7 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir --target /opt/python uvicorn fastapi "pydantic>=1.10,<2"
+RUN pip install --no-cache-dir --target /opt/python uvicorn fastapi "pydantic>=1.10,<2" prometheus-client==0.20.0
 COPY common ./common
 COPY scribe_service ./scribe_service
 

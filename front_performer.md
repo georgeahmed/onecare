@@ -57,7 +57,7 @@ If the page never loads, clear the browser cache (Chrome → Application → Ser
 ## Step 3. Complete the Patient Intake Scenario
 
 Use the built-in demo credentials:
-- Practice: **Demo Practice** (already selected)
+- Practice ID: `demo` (type the ID without spaces; the label “Demo Practice” may appear, but the field expects the ID `demo`)
 - Patient ID: `demo-patient` (or any “demo-*” string)
 
 **Action**
