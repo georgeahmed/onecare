@@ -29,7 +29,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "axe-core": "^4.11.0",
     "eslint": "^8.57.0",
-    "jsdom": "^27.0.0",
+    "jsdom": "^27.0.1",
     "json-schema-to-typescript": "^13.1.2",
     "pa11y": "^9.0.1",
     "tsx": "^4.20.6",
