@@ -3,7 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { logger, setCorrelationId, createHistogram, createCounter } from '@onecare/observability';
+import {
+  logger,
+  setCorrelationId,
+  createHistogram,
+  createCounter,
+  getCounterRecords,
+  getHistogramRecords,
+} from '@onecare/observability';
 import type { BookingAssistedOutcome } from '@onecare/events';
 import type { MessageBus } from '@onecare/bus';
 import {
@@ -29,6 +36,7 @@ const DEFAULT_MAX_CONCURRENCY = 20;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const READINESS_CACHE_MIN_MS = 250;
 const DEFAULT_READINESS_CACHE_MS = 1_000;
+const BOOKING_LATENCY_BUCKETS_MS = [50, 100, 200, 400, 800, 1_500, 3_000, 5_000, 10_000];
 
 const bookingHttpDuration = createHistogram('booking_http_duration_ms');
 const bookingHttpRequests = createCounter('booking_http_requests_total');
@@ -200,9 +208,15 @@ export function createBookingServer(options: BookingServerOptions): BookingHttpS
     };
 
     try {
-      if (readiness.isShuttingDown() && !(req.method === 'GET' && path === '/healthz')) {
+      if (readiness.isShuttingDown() && !(req.method === 'GET' && (path === '/healthz' || path === '/metrics'))) {
         const status = sendJson(res, 503, { ok: false, reason: 'shutting_down' });
         recordOutcome('shutting_down', status);
+        return;
+      }
+      if (req.method === 'GET' && path === '/metrics') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/plain; version=0.0.4');
+        res.end(renderPrometheusMetrics());
         return;
       }
       if (req.method === 'GET' && path === '/healthz') {
@@ -643,6 +657,157 @@ function sendError(
   res.setHeader('content-type', JSON_CONTENT_TYPE);
   res.end(JSON.stringify(envelope));
   return res.statusCode;
+}
+
+function renderPrometheusMetrics(): string {
+  const lines: string[] = [];
+
+  lines.push('# HELP booking_http_duration_ms Booking HTTP request duration in milliseconds');
+  lines.push('# TYPE booking_http_duration_ms histogram');
+  const durationLines = renderHistogramMetric('booking_http_duration_ms', BOOKING_LATENCY_BUCKETS_MS, [
+    'route',
+    'method',
+    'status',
+    'outcome',
+  ]);
+  if (durationLines.length === 0) {
+    lines.push('booking_http_duration_ms_bucket{le="+Inf"} 0');
+    lines.push('booking_http_duration_ms_count 0');
+    lines.push('booking_http_duration_ms_sum 0');
+  } else {
+    lines.push(...durationLines);
+  }
+
+  lines.push('# HELP booking_http_requests_total Booking HTTP requests');
+  lines.push('# TYPE booking_http_requests_total counter');
+  const requestLines = renderCounterMetric('booking_http_requests_total', ['route', 'method', 'status', 'outcome']);
+  if (requestLines.length === 0) {
+    lines.push('booking_http_requests_total 0');
+  } else {
+    lines.push(...requestLines);
+  }
+
+  lines.push('# HELP booking_http_backpressure_total Booking requests rejected due to backpressure');
+  lines.push('# TYPE booking_http_backpressure_total counter');
+  const backpressureLines = renderCounterMetric('booking_http_backpressure_total', ['route', 'method', 'status', 'outcome']);
+  if (backpressureLines.length === 0) {
+    lines.push('booking_http_backpressure_total 0');
+  } else {
+    lines.push(...backpressureLines);
+  }
+
+  lines.push('# HELP booking_event_dlq_total Booking appointment events routed to the DLQ');
+  lines.push('# TYPE booking_event_dlq_total counter');
+  const eventDlqLines = renderCounterMetric('booking_event_dlq_total', ['topic']);
+  if (eventDlqLines.length === 0) {
+    lines.push('booking_event_dlq_total 0');
+  } else {
+    lines.push(...eventDlqLines);
+  }
+
+  lines.push('# HELP booking_event_publish_error_total Booking appointment publish errors');
+  lines.push('# TYPE booking_event_publish_error_total counter');
+  const publishErrorLines = renderCounterMetric('booking_event_publish_error_total', ['stage']);
+  if (publishErrorLines.length === 0) {
+    lines.push('booking_event_publish_error_total 0');
+  } else {
+    lines.push(...publishErrorLines);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function renderHistogramMetric(name: string, buckets: number[], labelKeys: string[]): string[] {
+  const records = getHistogramRecords(name);
+  if (records.length === 0) {
+    return [];
+  }
+  const aggregates = new Map<string, { labelPairs: string[]; counts: number[]; sum: number; count: number }>();
+  for (const record of records) {
+    const value = Number(record.value ?? 0);
+    if (!Number.isFinite(value)) continue;
+    const labelPairs = collectLabelPairs(record.attributes ?? {}, labelKeys);
+    const key = labelPairs.join(',');
+    let aggregate = aggregates.get(key);
+    if (!aggregate) {
+      aggregate = {
+        labelPairs,
+        counts: new Array(buckets.length + 1).fill(0),
+        sum: 0,
+        count: 0,
+      };
+      aggregates.set(key, aggregate);
+    }
+    let bucketIndex = buckets.findIndex((boundary) => value <= boundary);
+    if (bucketIndex === -1) bucketIndex = buckets.length;
+    aggregate.counts[bucketIndex] += 1;
+    aggregate.sum += value;
+    aggregate.count += 1;
+  }
+
+  const lines: string[] = [];
+  for (const aggregate of Array.from(aggregates.values()).sort((a, b) => a.labelPairs.join(',').localeCompare(b.labelPairs.join(',')))) {
+    const baseLabels = aggregate.labelPairs;
+    let cumulative = 0;
+    buckets.forEach((boundary, idx) => {
+      cumulative += aggregate.counts[idx];
+      const labels = formatLabelText([...baseLabels, `le="${boundary}"`]);
+      lines.push(`${name}_bucket${labels} ${cumulative}`);
+    });
+    cumulative += aggregate.counts[aggregate.counts.length - 1];
+    const infLabels = formatLabelText([...baseLabels, 'le="+Inf"']);
+    lines.push(`${name}_bucket${infLabels} ${cumulative}`);
+    const countLabels = formatLabelText(baseLabels);
+    lines.push(`${name}_count${countLabels} ${aggregate.count}`);
+    lines.push(`${name}_sum${countLabels} ${aggregate.sum.toFixed(6)}`);
+  }
+
+  return lines;
+}
+
+function renderCounterMetric(name: string, labelKeys: string[]): string[] {
+  const records = getCounterRecords(name);
+  if (records.length === 0) {
+    return [];
+  }
+  const totals = new Map<string, { labelPairs: string[]; value: number }>();
+  for (const record of records) {
+    const value = Number(record.value ?? 0);
+    if (!Number.isFinite(value)) continue;
+    const labelPairs = collectLabelPairs(record.attributes ?? {}, labelKeys);
+    const key = labelPairs.join(',');
+    const existing = totals.get(key);
+    if (existing) {
+      existing.value += value;
+    } else {
+      totals.set(key, { labelPairs, value });
+    }
+  }
+
+  return Array.from(totals.values())
+    .sort((a, b) => a.labelPairs.join(',').localeCompare(b.labelPairs.join(',')))
+    .map((entry) => `${name}${formatLabelText(entry.labelPairs)} ${entry.value}`);
+}
+
+function collectLabelPairs(attributes: Record<string, unknown>, keys: string[]): string[] {
+  const pairs: string[] = [];
+  for (const key of keys) {
+    const raw = attributes[key];
+    if (raw === undefined || raw === null) continue;
+    pairs.push(`${key}="${escapeLabelValue(raw)}"`);
+  }
+  return pairs;
+}
+
+function escapeLabelValue(value: unknown): string {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function formatLabelText(pairs: string[]): string {
+  if (pairs.length === 0) {
+    return '';
+  }
+  return `{${pairs.join(',')}}`;
 }
 
 function handleSearchError(res: ServerResponse, error: unknown, correlationId: string): number {

@@ -46,7 +46,8 @@ export class PatientNotificationAdapter implements PatientNotifier {
     if (!options.bus) {
       throw new Error('pharmacy_notification_bus_missing');
     }
-    this.topic = options.topic ?? Topics.pharmacy.notification;
+    const defaultTopic = (Topics.pharmacy as Record<string, string>).notification ?? 'pharmacy.notification';
+    this.topic = options.topic ?? defaultTopic;
     this.consentEvaluator = options.consentEvaluator;
     this.retryPolicy = normalizeRetryPolicy(options);
     this.bus = withMessageGuards(options.bus, {

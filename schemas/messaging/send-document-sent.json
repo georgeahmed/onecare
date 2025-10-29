@@ -9,6 +9,7 @@
     "messageId": { "type": "string", "minLength": 1 },
     "mexTo": { "type": "string", "minLength": 1 },
     "mexWorkflowId": { "type": "string", "minLength": 1 },
+    "mexAckWorkflowId": { "type": "string", "minLength": 1 },
     "mexLocalId": { "type": "string", "minLength": 1 },
     "sentAt": { "type": "string", "format": "date-time" },
     "attempt": { "type": "integer", "minimum": 1 },

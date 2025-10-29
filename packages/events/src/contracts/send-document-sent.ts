@@ -6,6 +6,7 @@ export interface SendDocumentSent {
   messageId: string;
   mexTo: string;
   mexWorkflowId: string;
+  mexAckWorkflowId?: string;
   mexLocalId: string;
   sentAt: string;
   attempt: number;

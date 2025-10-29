@@ -76,6 +76,12 @@ This runbook supports SRE and service teams responding to alerts generated from 
 3. Verify new deployments/rollouts for the service and roll back if necessary.
 4. Tune readiness probes (initial delay, failure threshold) only after root-cause is confirmed.
 
+## Scribe Backlog
+
+1. Check the Scribe `/metrics` endpoint for `http_server_requests_total` vs `http_server_success_total` to understand the backlog and success rate.
+2. Inspect application logs for queue saturation or external service latency; confirm that upstream audio storage is reachable.
+3. Scale transcription workers or enable degraded summaries if latency persists; escalate to the ML/NLP owner when backlog exceeds agreed thresholds.
+
 ## Post-Incident Checklist
 
 - Update incident timeline, root cause, and action items within 24 hours.

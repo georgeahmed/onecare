@@ -246,7 +246,7 @@ Access to the above paths is gated by Vault policies and audited. Request access
 - All environments must connect to NATS over TLS. Local development uses self-signed certificates generated via `scripts/ops/generate-dev-certs.sh`, which emits a CA bundle plus server/client certificates under `infra/tls/dev/`.
 - Docker Compose mounts the certificates into NATS (`/etc/nats/certs/*`) and the Node services (`/etc/onecare/tls/*`) and enforces mutual TLS (`NATS_TLS_ENABLED=1`, `NATS_TLS_REQUIRED=1`).
 - Production/staging certificates must be provisioned through the managed secrets pipeline (Vault + sealed secrets). Never reuse the dev CA for shared environments.
-- When rotating broker certificates, deploy the new CA + server/client material to staging first, trigger `npm run bus:tls:refresh` (or restart the pods), verify successful reconnect, then promote to production. Update the rotation log with timestamps and operators.
+- When rotating broker certificates, deploy the new CA + server/client material to staging first, roll the NATS clients to pick up the new credentials (restart the pods or redeploy the workloads), verify successful reconnect, then promote to production. Update the rotation log with timestamps and operators.
 
 ## Pentest Playbook
 

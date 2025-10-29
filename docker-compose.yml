@@ -92,7 +92,8 @@ services:
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
       - PY_SAFETY_GATE_HOST_ALLOWLIST=safety-gate
       - PY_SCRIBE_URL=http://scribe:8082
-      - BUS_IMPL=nats
+      - BUS_IMPL=memory
+      - ORCHESTRATOR_CORS_ORIGINS=${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:5173}
       - NATS_URL=nats://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
@@ -101,7 +102,7 @@ services:
       - NATS_TLS_ENABLED=0
       - NATS_TLS_REQUIRED=0
       - CONFIG_ROOT=/app/config
-      - FHIR_BASE_URL=${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4}
+      - FHIR_BASE_URL=${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4/}
       - SECURITY_SHARED_SECRET=${SECURITY_SHARED_SECRET:-dev-shared-secret}
     ports:
       - "3001:3001"

@@ -84,10 +84,115 @@ const HEADER_TOKEN_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const MAX_ALLOWED_BODY_BYTES = 1_048_576; // 1 MiB ceiling for ingress payloads
 const HTTP_LATENCY_BUCKETS_MS = [50, 100, 200, 400, 800, 1_500, 3_000, 5_000, 10_000];
+const BUS_PENDING_LAG_BUCKETS = [1, 5, 10, 50, 100, 500, 1_000, 5_000, 10_000];
+const BUS_RECONNECT_DELAY_BUCKETS = [10, 50, 100, 200, 400, 800, 1_500, 3_000, 5_000, 10_000];
 const httpServerDuration = createHistogram('http_server_duration_ms');
 const httpServerRequests = createCounter('http_server_requests_total');
 const httpServerErrors = createCounter('http_server_errors_total');
 const ORCHESTRATOR_SERVICE_LABEL = 'orchestrator';
+type CorsConfig =
+  | { mode: 'disabled' }
+  | { mode: 'wildcard' }
+  | { mode: 'allowlist'; origins: Set<string> };
+
+const DEFAULT_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'] as const;
+
+const corsConfig: CorsConfig = (() => {
+  const raw = process.env.ORCHESTRATOR_CORS_ORIGINS;
+  if (typeof raw === 'string') {
+    const parsed = raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (parsed.length === 0) {
+      return { mode: 'disabled' };
+    }
+    if (parsed.includes('*')) {
+      return { mode: 'wildcard' };
+    }
+    return { mode: 'allowlist', origins: new Set(parsed) };
+  }
+  if (process.env.NODE_ENV !== 'production') {
+    return { mode: 'allowlist', origins: new Set(DEFAULT_DEV_CORS_ORIGINS) };
+  }
+  return { mode: 'disabled' };
+})();
+
+function resolveCorsOrigin(originHeader: string | undefined): string | null {
+  if (!originHeader) {
+    return null;
+  }
+  if (corsConfig.mode === 'disabled') {
+    return null;
+  }
+  if (corsConfig.mode === 'wildcard') {
+    return '*';
+  }
+  return corsConfig.origins.has(originHeader) ? originHeader : null;
+}
+
+function appendVaryHeader(res: http.ServerResponse, value: string): void {
+  const existing = res.getHeader('Vary');
+  if (!existing) {
+    res.setHeader('Vary', value);
+    return;
+  }
+  const normalized = Array.isArray(existing)
+    ? existing.join(',')
+    : typeof existing === 'number'
+      ? String(existing)
+      : existing;
+  const values = normalized
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (!values.includes(value)) {
+    values.push(value);
+  }
+  res.setHeader('Vary', values.join(', '));
+}
+
+function applyCorsHeaders(res: http.ServerResponse, origin: string): void {
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  appendVaryHeader(res, 'Origin');
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'x-correlation-id,x-request-id'
+  );
+}
+
+function handleCorsPreflight(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  corsOrigin: string | null,
+): boolean {
+  if (req.method !== 'OPTIONS') {
+    return false;
+  }
+  if (!corsOrigin) {
+    res.statusCode = 403;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(errorEnvelope('forbidden', 'CORS origin denied')));
+    return true;
+  }
+  applyCorsHeaders(res, corsOrigin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  const requestHeaders = req.headers['access-control-request-headers'];
+  if (requestHeaders) {
+    const value = Array.isArray(requestHeaders) ? requestHeaders.join(',') : requestHeaders;
+    res.setHeader('Access-Control-Allow-Headers', value);
+    appendVaryHeader(res, 'Access-Control-Request-Headers');
+  } else {
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'content-type,authorization,x-request-id,x-correlation-id,x-idempotency-key,accept-language,x-consent-reference',
+    );
+  }
+  res.setHeader('Access-Control-Max-Age', '300');
+  res.statusCode = 204;
+  res.end();
+  return true;
+}
 
 function containsHeaderControlChars(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
@@ -2254,6 +2359,16 @@ async function respondReady(res: http.ServerResponse): Promise<void> {
 }
 
 const server = http.createServer((req, res) => withCorrelationContext(() => {
+  const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+  const corsOrigin = resolveCorsOrigin(originHeader);
+  if (corsOrigin) {
+    applyCorsHeaders(res, corsOrigin);
+  } else if (originHeader && corsConfig.mode !== 'disabled') {
+    appendVaryHeader(res, 'Origin');
+  }
+  if (handleCorsPreflight(req, res, corsOrigin)) {
+    return;
+  }
   if (!req.url) {
     res.statusCode = 400;
     res.end('Bad Request');
@@ -5289,40 +5404,186 @@ function extractNextCursor(bundle: FhirBundle): string | undefined {
   return encodeCursor(relative);
 }
 
+interface HistogramMetricConfig {
+  name: string;
+  help: string;
+  buckets: number[];
+  labelKeys: string[];
+  sourceName?: string;
+}
+
+interface CounterMetricConfig {
+  name: string;
+  help: string;
+  labelKeys: string[];
+  sourceName?: string;
+}
+
+const HISTOGRAM_METRICS: HistogramMetricConfig[] = [
+  {
+    name: 'http_server_duration_ms',
+    help: 'HTTP server request duration in milliseconds',
+    buckets: HTTP_LATENCY_BUCKETS_MS,
+    labelKeys: ['service', 'route', 'method'],
+  },
+  {
+    name: 'bus_reconnect_delay',
+    help: 'NATS reconnect delay in milliseconds observed by the orchestrator',
+    buckets: BUS_RECONNECT_DELAY_BUCKETS,
+    labelKeys: [],
+    sourceName: 'bus.reconnect.delay',
+  },
+  {
+    name: 'bus_nats_pending_lag',
+    help: 'Pending JetStream backlog observed by the orchestrator',
+    buckets: BUS_PENDING_LAG_BUCKETS,
+    labelKeys: ['topic'],
+    sourceName: 'bus.nats.pending_lag',
+  },
+  {
+    name: 'bus_nats_publish_latency_ms',
+    help: 'NATS publish latency in milliseconds',
+    buckets: BUS_RECONNECT_DELAY_BUCKETS,
+    labelKeys: ['topic', 'subject', 'result'],
+    sourceName: 'bus.nats.publish.latency_ms',
+  },
+  {
+    name: 'bus_nats_handler_latency_ms',
+    help: 'NATS handler latency in milliseconds',
+    buckets: BUS_RECONNECT_DELAY_BUCKETS,
+    labelKeys: ['topic', 'result'],
+    sourceName: 'bus.nats.handler.latency_ms',
+  },
+];
+
+const COUNTER_METRICS: CounterMetricConfig[] = [
+  {
+    name: 'http_server_requests_total',
+    help: 'HTTP server requests',
+    labelKeys: ['service', 'route', 'method', 'status', 'outcome'],
+  },
+  {
+    name: 'http_server_errors_total',
+    help: 'HTTP server 5xx responses',
+    labelKeys: ['service', 'route', 'method', 'status', 'outcome'],
+  },
+  {
+    name: 'bus_reconnect_events_total',
+    help: 'NATS reconnect events observed by the orchestrator',
+    labelKeys: ['event'],
+    sourceName: 'bus.reconnect.events',
+  },
+  {
+    name: 'bus_reconnect_scheduled_total',
+    help: 'NATS reconnect attempts scheduled by the orchestrator',
+    labelKeys: [],
+    sourceName: 'bus.reconnect.scheduled',
+  },
+  {
+    name: 'bus_disconnect_events_total',
+    help: 'NATS disconnect events observed by the orchestrator',
+    labelKeys: ['event'],
+    sourceName: 'bus.disconnect.events',
+  },
+  {
+    name: 'bus_nats_dlq_published_total',
+    help: 'NATS DLQ publishes',
+    labelKeys: ['topic'],
+    sourceName: 'bus.nats.dlq.published',
+  },
+  {
+    name: 'bus_nats_dlq_errors_total',
+    help: 'NATS DLQ publish errors',
+    labelKeys: ['topic'],
+    sourceName: 'bus.nats.dlq.errors',
+  },
+  {
+    name: 'bus_nats_dlq_poison_total',
+    help: 'NATS DLQ poison message count',
+    labelKeys: ['category', 'code'],
+    sourceName: 'bus.nats.dlq.poison',
+  },
+  {
+    name: 'bus_nats_publish_errors_total',
+    help: 'NATS publish errors',
+    labelKeys: ['topic', 'reason'],
+    sourceName: 'bus.nats.publish.errors',
+  },
+  {
+    name: 'bus_nats_handler_errors_total',
+    help: 'NATS handler errors',
+    labelKeys: ['topic'],
+    sourceName: 'bus.nats.handler.errors',
+  },
+  {
+    name: 'bus_nats_retries_scheduled_total',
+    help: 'NATS retries scheduled',
+    labelKeys: ['topic'],
+    sourceName: 'bus.nats.retries.scheduled',
+  },
+  {
+    name: 'bus_nats_backpressure_events_total',
+    help: 'NATS backpressure state transitions',
+    labelKeys: ['state'],
+    sourceName: 'bus.nats.backpressure.events',
+  },
+  {
+    name: 'bus_quota_block_total',
+    help: 'Bus quota enforcement events',
+    labelKeys: ['tenant', 'topic'],
+    sourceName: 'bus.quota.block',
+  },
+  {
+    name: 'bus_tenant_throughput_total',
+    help: 'Bus tenant throughput',
+    labelKeys: ['tenant', 'topic'],
+    sourceName: 'bus.tenant.throughput',
+  },
+  {
+    name: 'bus_msg_too_large_total',
+    help: 'Bus payload too large rejections',
+    labelKeys: ['topic'],
+    sourceName: 'bus.msg.too_large',
+  },
+  {
+    name: 'bus_msg_compressed_total',
+    help: 'Bus payloads compressed before publish',
+    labelKeys: ['topic'],
+    sourceName: 'bus.msg.compressed',
+  },
+  {
+    name: 'bus_partition_hot_key_total',
+    help: 'Bus hot partition detections',
+    labelKeys: ['topic', 'partition', 'tenant'],
+    sourceName: 'bus.partition.hot_key',
+  },
+];
+
 function renderPrometheusMetrics(): string {
   const lines: string[] = [];
 
-  lines.push('# HELP http_server_duration_ms HTTP server request duration in milliseconds');
-  lines.push('# TYPE http_server_duration_ms histogram');
-  const histogramLines = renderHistogramMetric('http_server_duration_ms', HTTP_LATENCY_BUCKETS_MS, [
-    'service',
-    'route',
-    'method',
-  ]);
-  if (histogramLines.length === 0) {
-    lines.push('http_server_duration_ms_bucket{le="+Inf"} 0');
-    lines.push('http_server_duration_ms_count 0');
-    lines.push('http_server_duration_ms_sum 0');
-  } else {
-    lines.push(...histogramLines);
+  for (const metric of HISTOGRAM_METRICS) {
+    lines.push(`# HELP ${metric.name} ${metric.help}`);
+    lines.push(`# TYPE ${metric.name} histogram`);
+    const histogramLines = renderHistogramMetric(metric.name, metric.buckets, metric.labelKeys, metric.sourceName);
+    if (histogramLines.length === 0) {
+      lines.push(`${metric.name}_bucket{le="+Inf"} 0`);
+      lines.push(`${metric.name}_count 0`);
+      lines.push(`${metric.name}_sum 0`);
+    } else {
+      lines.push(...histogramLines);
+    }
   }
 
-  lines.push('# HELP http_server_requests_total HTTP server requests');
-  lines.push('# TYPE http_server_requests_total counter');
-  const requestLines = renderCounterMetric('http_server_requests_total', ['service', 'route', 'method', 'status', 'outcome']);
-  if (requestLines.length === 0) {
-    lines.push('http_server_requests_total 0');
-  } else {
-    lines.push(...requestLines);
-  }
-
-  lines.push('# HELP http_server_errors_total HTTP server 5xx responses');
-  lines.push('# TYPE http_server_errors_total counter');
-  const errorLines = renderCounterMetric('http_server_errors_total', ['service', 'route', 'method', 'status', 'outcome']);
-  if (errorLines.length === 0) {
-    lines.push('http_server_errors_total 0');
-  } else {
-    lines.push(...errorLines);
+  for (const metric of COUNTER_METRICS) {
+    lines.push(`# HELP ${metric.name} ${metric.help}`);
+    lines.push(`# TYPE ${metric.name} counter`);
+    const counterLines = renderCounterMetric(metric.name, metric.labelKeys, metric.sourceName);
+    if (counterLines.length === 0) {
+      lines.push(`${metric.name} 0`);
+    } else {
+      lines.push(...counterLines);
+    }
   }
 
   return `${lines.join('\n')}\n`;
@@ -5335,8 +5596,8 @@ interface HistogramAggregate {
   count: number;
 }
 
-function renderHistogramMetric(name: string, buckets: number[], labelKeys: string[]): string[] {
-  const records = getHistogramRecords(name);
+function renderHistogramMetric(name: string, buckets: number[], labelKeys: string[], sourceName?: string): string[] {
+  const records = getHistogramRecords(sourceName ?? name);
   if (records.length === 0) return [];
 
   const aggregates = new Map<string, HistogramAggregate>();
@@ -5385,8 +5646,8 @@ function renderHistogramMetric(name: string, buckets: number[], labelKeys: strin
   return lines;
 }
 
-function renderCounterMetric(name: string, labelKeys: string[]): string[] {
-  const records = getCounterRecords(name);
+function renderCounterMetric(name: string, labelKeys: string[], sourceName?: string): string[] {
+  const records = getCounterRecords(sourceName ?? name);
   if (records.length === 0) return [];
 
   const totals = new Map<string, { labelPairs: string[]; value: number }>();

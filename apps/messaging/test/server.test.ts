@@ -59,6 +59,7 @@ describe('messaging HTTP server', () => {
       },
       pdsLookup: true,
       pdfMaxMb: 2,
+      pdfHostAllowlist: ['example.com'],
     };
 
     server = createMessagingServer(buildOptions());
@@ -90,6 +91,17 @@ describe('messaging HTTP server', () => {
       body: 'not json',
     });
     expect(response.status).toBe(415);
+  });
+
+  it('exposes Prometheus metrics', async () => {
+    const health = await fetch(`${baseUrl}/healthz`);
+    expect(health.status).toBe(200);
+
+    const metrics = await fetch(`${baseUrl}/metrics`);
+    expect(metrics.status).toBe(200);
+    const body = await metrics.text();
+    expect(body).toContain('messaging_http_requests_total{route="/healthz"');
+    expect(body).toContain('messaging_http_duration_ms_bucket{le="+Inf"}');
   });
 
   function buildOptions(overrides: Partial<MessagingServerOptions> = {}): MessagingServerOptions {

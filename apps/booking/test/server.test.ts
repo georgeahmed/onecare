@@ -174,6 +174,17 @@ describe('booking HTTP server', () => {
     const bookingServer = server as BookingHttpServer;
     await expect(bookingServer.initiateShutdown(100)).resolves.toBeUndefined();
   });
+
+  it('exposes Prometheus metrics', async () => {
+    const healthResponse = await fetch(`${baseUrl}/healthz`);
+    expect(healthResponse.status).toBe(200);
+
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    expect(metricsResponse.status).toBe(200);
+    const body = await metricsResponse.text();
+    expect(body).toContain('booking_http_requests_total{route="/healthz"');
+    expect(body).toContain('booking_http_duration_ms_bucket{le="+Inf"}');
+  });
 });
 
 function buildOptions(overrides: Partial<BookingServerOptions> = {}): BookingServerOptions {

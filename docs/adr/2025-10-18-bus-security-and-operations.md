@@ -13,13 +13,13 @@ Decision
 - Require `BUS_IMPL=nats` and `NATS_URL` pointing at the JetStream cluster; queue groups (`NATS_QUEUE_GROUP`) and partition count (`NATS_PARTITIONS`) are configured per service to avoid hot spots.
 - Health/readiness surfaces `pendingLag`, `inFlight`, `reconnects`, and backpressure flags. Alert when lag exceeds `BUS_READY_PENDING_LAG` or when DLQ publish failures increment beyond threshold.
 - DLQ handling: messages land on `broker.dlq` with hashed identifiers (`patientRef`, `messageId`). Operators replay via `node scripts/dlq-requeue.js` (honours `NATS_URL`, TLS, creds) after sanitising payloads and confirming downstream readiness.
-- Tenant quotas: enforce per-tenant token buckets on publish with `NATS_TENANT_RATE_TPS`/`NATS_TENANT_RATE_BURST` and optional JSON overrides (`NATS_TENANT_RATE_OVERRIDES`). Breaches emit `bus.quota.block` and requests fail fast (`tenant_quota_exceeded`) so operators can surface abusive tenants.
-- Compression: large payloads auto-compress (`NATS_COMPRESSION_THRESHOLD_BYTES`) before publish. Compression emits `bus.msg.compressed`; if the message still exceeds `NATS_MAX_MESSAGE_BYTES`, we log `bus.msg.too_large` and fail the publish so callers can move binaries to object storage.
+- Tenant quotas: enforce per-tenant token buckets on publish with `NATS_TENANT_RATE_TPS`/`NATS_TENANT_RATE_BURST` and optional JSON overrides (`NATS_TENANT_RATE_OVERRIDES`). Breaches emit `bus_quota_block_total` and requests fail fast (`tenant_quota_exceeded`) so operators can surface abusive tenants.
+- Compression: large payloads auto-compress (`NATS_COMPRESSION_THRESHOLD_BYTES`) before publish. Compression emits `bus_msg_compressed_total`; if the message still exceeds `NATS_MAX_MESSAGE_BYTES`, we log `bus_msg_too_large_total` and fail the publish so callers can move binaries to object storage.
 - Credential rotation & TLS refresh: 1) generate new creds/certs, 2) deploy to secret store, 3) restart services (graceful drain). Automated jobs publish rotation events for audit.
-- Document incident actions: throttle publish rate or scale consumers when `bus.nats.backpressure.events` spikes; trigger fail-open to MemoryBus only in lower environments.
+- Document incident actions: throttle publish rate or scale consumers when `bus_nats_backpressure_events_total` spikes; trigger fail-open to MemoryBus only in lower environments.
 
 Consequences
 - Secrets management must supply certs/creds on disk or tmpfs before the service boots; startup fails fast if TLS/creds are missing when required.
-- Observability dashboards need to track the new metrics (`bus.nats.handler.errors`, `bus.nats.dlq.published`, `bus.nats.pending_lag`). Ops should set alerts tied to patient-impacting thresholds.
+- Observability dashboards need to track the new metrics (`bus_nats_handler_errors_total`, `bus_nats_dlq_published_total`, `bus_nats_pending_lag`). Ops should set alerts tied to patient-impacting thresholds.
 - DLQ replay is controlled and auditable. Since payloads are already redacted, operators do not access PHI during triage.
 - Regular credential rotation introduces short service restarts; readiness gates ensure traffic resumes only after the fresh connection stabilises.
