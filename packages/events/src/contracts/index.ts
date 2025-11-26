@@ -1,5 +1,7 @@
 export * from './envelope';
 export * from './ingest';
+export * from './guided-help-session-request';
+export * from './guided-help-session-response';
 export * from './triage';
 export * from './triage-decision';
 export * from './booking';

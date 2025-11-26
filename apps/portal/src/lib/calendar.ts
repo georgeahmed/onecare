@@ -67,11 +67,11 @@ export const buildIcsDataUri = (
   const dtStamp = formatDateForCalendar(new Date().toISOString());
   const start = formatDateForCalendar(result.start);
   const end = formatDateForCalendar(result.end);
-  const uid = `${result.appointmentId}@onecare`;
+  const uid = `${result.appointmentId}@vecells`;
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//OneCare//Portal//EN',
+    'PRODID:-//Vecells//Portal//EN',
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${dtStamp}`,

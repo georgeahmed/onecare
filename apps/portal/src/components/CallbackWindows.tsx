@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useIntl } from 'react-intl';
 import {
   getConfiguredCallbackWindows,
@@ -24,10 +24,23 @@ const WINDOW_LABEL_IDS: Record<CallbackWindowCode, string> = {
 
 export interface CallbackWindowsProps {
   config?: CallbackWindowsConfig;
+  variant?: 'default' | 'compact';
 }
 
-const CallbackWindows = ({ config }: CallbackWindowsProps) => {
+const CallbackWindows = ({ config, variant = 'default' }: CallbackWindowsProps) => {
   const intl = useIntl();
+  const [isWide, setIsWide] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(min-width: 768px)');
+    const handler = (event: MediaQueryListEvent) => setIsWide(event.matches);
+    media.addEventListener('change', handler);
+    return () => media.removeEventListener('change', handler);
+  }, []);
 
   const resolved = useMemo<CallbackWindowsConfig>(
     () => config ?? getConfiguredCallbackWindows(),
@@ -50,6 +63,47 @@ const CallbackWindows = ({ config }: CallbackWindowsProps) => {
   });
 
   const sectionTitle = intl.formatMessage({ id: 'callback.windows.title' });
+
+  if (variant === 'compact') {
+    return (
+      <section
+        aria-labelledby="callback-windows-title"
+        className="callback-windows callback-windows--compact"
+      >
+        <h2 id="callback-windows-title">{sectionTitle}</h2>
+        <div className="callback-windows__chips" role="list">
+          {items.map(({ priority, priorityLabel, windowLabel }) => (
+            <div key={priority} role="listitem" className="callback-chip">
+              <span className="callback-chip__label">{priorityLabel}</span>
+              <span className="callback-chip__value">{windowLabel}</span>
+            </div>
+          ))}
+        </div>
+        <details className="callback-windows__details" open={isWide}>
+          <summary>
+            {intl.formatMessage({ id: 'callback.windows.viewDetails', defaultMessage: 'View details' })}
+          </summary>
+          <div className="callback-windows__body">
+            <p>{intro}</p>
+            <dl>
+              {items.map(({ priority, priorityLabel, windowLabel }) => (
+                <div key={priority} className="callback-window">
+                  <dt>{priorityLabel}</dt>
+                  <dd>{windowLabel}</dd>
+                </div>
+              ))}
+            </dl>
+            {outsideHoursNote ? (
+              <p className="callback-windows-note">
+                <strong>{outsideHoursLabel}</strong>{' '}
+                <span>{outsideHoursNote}</span>
+              </p>
+            ) : null}
+          </div>
+        </details>
+      </section>
+    );
+  }
 
   return (
     <section aria-labelledby="callback-windows-title" className="callback-windows">

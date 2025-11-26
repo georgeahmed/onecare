@@ -6,9 +6,10 @@ import {
   __safetyGateTesting,
   SafetyGateHttpError,
 } from '../src/adapters/services/safetyGate';
+import { PRACTICE_ID } from './practice';
 
 const sample = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'abc' },
   narrative: 'test',
   channel: 'web' as const,

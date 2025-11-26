@@ -2,12 +2,31 @@ import { sanitizeText } from './security';
 
 const PATIENT_CONTEXT_STORAGE_KEY = 'onecare.portal.patient';
 export const PATIENT_CONTEXT_EVENT = 'onecare:patient-context';
+const PATIENT_CONTEXT_TTL_MS = 4 * 60 * 60 * 1000;
 
 export interface PatientContext {
   id: string;
 }
 
-const hasStorage = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const getStorage = (): Storage | undefined => {
+  if (typeof window === 'undefined') {
+    return undefined;
+  }
+  try {
+    if (window.sessionStorage) {
+      return window.sessionStorage;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+};
+
+const hasStorage = (): boolean => Boolean(getStorage());
 
 const serialize = (context: PatientContext): string =>
   JSON.stringify({
@@ -15,11 +34,21 @@ const serialize = (context: PatientContext): string =>
     updatedAt: Date.now(),
   });
 
+const isExpired = (updatedAt: number | undefined): boolean => {
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) {
+    return true;
+  }
+  return Date.now() - updatedAt > PATIENT_CONTEXT_TTL_MS;
+};
+
 const deserialize = (raw: string | null): PatientContext | null => {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { id?: unknown };
+    const parsed = JSON.parse(raw) as { id?: unknown; updatedAt?: unknown };
     if (typeof parsed?.id !== 'string') {
+      return null;
+    }
+    if (isExpired(parsed.updatedAt as number | undefined)) {
       return null;
     }
     const id = sanitizeText(parsed.id, 120);
@@ -34,7 +63,14 @@ export const readPatientContext = (): PatientContext | null => {
     return null;
   }
   try {
-    return deserialize(window.localStorage.getItem(PATIENT_CONTEXT_STORAGE_KEY));
+    const storage = getStorage();
+    if (!storage) return null;
+    const envelope = storage.getItem(PATIENT_CONTEXT_STORAGE_KEY);
+    const deserialized = deserialize(envelope);
+    if (!deserialized && envelope) {
+      storage.removeItem(PATIENT_CONTEXT_STORAGE_KEY);
+    }
+    return deserialized;
   } catch {
     return null;
   }
@@ -44,13 +80,17 @@ export const persistPatientContext = (context: PatientContext): void => {
   if (!hasStorage()) {
     return;
   }
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
   const sanitizedId = sanitizeText(context.id, 120);
   if (!sanitizedId) {
     clearPatientContext();
     return;
   }
   try {
-    window.localStorage.setItem(
+    storage.setItem(
       PATIENT_CONTEXT_STORAGE_KEY,
       serialize({ id: sanitizedId }),
     );
@@ -65,7 +105,8 @@ export const clearPatientContext = (): void => {
     return;
   }
   try {
-    window.localStorage.removeItem(PATIENT_CONTEXT_STORAGE_KEY);
+    const storage = getStorage();
+    storage?.removeItem(PATIENT_CONTEXT_STORAGE_KEY);
     notify(null);
   } catch {
     // Ignore failures (private mode, quota, etc.).
@@ -80,7 +121,8 @@ const notify = (context: PatientContext | null): void => {
   try {
     window.dispatchEvent(
       new CustomEvent(PATIENT_CONTEXT_EVENT, {
-        detail: context,
+        // Avoid broadcasting PHI across scripts; listeners should re-read from storage.
+        detail: context ? { changed: true } : null,
       }),
     );
   } catch {

@@ -865,11 +865,6 @@ class PortalSubmission(BaseModel):
     )
     channel: PortalSubmissionChannel = Field(..., title='PortalSubmissionChannel')
 
-# Maintain backwards-compatible attribute names without overriding earlier FHIR models
-PortalSubmissionPatientModel = PortalSubmissionPatient
-PortalSubmissionAttachmentModel = PortalSubmissionAttachment
-Channel = PortalSubmissionChannel
-
 # --- messaging/send-document-ack.json ---
 class SendDocumentAckType(Enum):
     technical = 'technical'
@@ -954,6 +949,7 @@ class SendDocumentSent(BaseModel):
     messageId: constr(min_length=1)
     mexTo: constr(min_length=1)
     mexWorkflowId: constr(min_length=1)
+    mexAckWorkflowId: Optional[constr(min_length=1)] = None
     mexLocalId: constr(min_length=1)
     sentAt: datetime
     attempt: conint(ge=1)

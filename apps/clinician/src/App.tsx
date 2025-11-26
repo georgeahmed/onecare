@@ -1,5 +1,5 @@
-import { Link, Navigate, Route, Routes } from 'react-router-dom';
-import { useId } from 'react';
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useId } from 'react';
 import { useIntl } from 'react-intl';
 import QueuePage from './pages/Queue';
 import CasePage from './pages/Case';
@@ -11,6 +11,8 @@ import { AuthProvider } from './lib/auth';
 import useAuth from './hooks/useAuth';
 import ProtectedRoute from './routes/ProtectedRoute';
 import ClinicSwitcher from './components/ClinicSwitcher';
+import VecellsLogo from './components/VecellsLogo';
+import { setQueueGatewayAuth } from './adapters/gateway';
 
 const App = () => {
   return (
@@ -27,7 +29,16 @@ const App = () => {
 const AppShell = () => {
   const intl = useIntl();
   const navLabelId = useId();
-  const { status } = useAuth();
+  const { status, session, activeClinicId, hasRole } = useAuth();
+
+  useEffect(() => {
+    setQueueGatewayAuth({
+      userId: session?.userId,
+      token: session?.token,
+      clinicId: activeClinicId ?? undefined
+    });
+  }, [activeClinicId, session?.token, session?.userId]);
+
   return (
     <div className="app-shell">
       <div className="skip-links" aria-label={intl.formatMessage({ id: 'app.skip.links' })}>
@@ -38,16 +49,21 @@ const AppShell = () => {
       </div>
       <header>
         <div className="app-header-bar">
+          <div className="app-brand" aria-label={intl.formatMessage({ id: 'app.brand.label', defaultMessage: 'Vecells clinician console' })}>
+            <span className="app-brand__mark" aria-hidden="true">
+              <VecellsLogo className="app-brand__logo" />
+            </span>
+            <span className="app-brand__product">Vecells Clinician Console</span>
+          </div>
           {status === 'authenticated' ? (
             <nav id="primary-navigation" aria-labelledby={navLabelId}>
               <h2 id={navLabelId} className="visually-hidden">Primary navigation</h2>
-              <Link to="/queue">{intl.formatMessage({ id: 'app.nav.queue' })}</Link>
-              <Link to="/settings">{intl.formatMessage({ id: 'app.nav.settings' })}</Link>
+              <NavLink to="/queue">{intl.formatMessage({ id: 'app.nav.queue' })}</NavLink>
+              {hasRole(['admin']) ? <NavLink to="/settings">{intl.formatMessage({ id: 'app.nav.settings' })}</NavLink> : null}
             </nav>
-          ) : (
-            <span className="app-brand">OneCare Clinician Console</span>
-          )}
+          ) : null}
           <div className="app-header-tools">
+            {status === 'authenticated' && session ? <UserBadge name={session.displayName} /> : null}
             <ClinicSwitcher />
             <ThemeSwitcher />
           </div>
@@ -56,9 +72,11 @@ const AppShell = () => {
       <main id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/login" element={status === 'authenticated' ? <Navigate to="/queue" replace /> : <LoginPage />} />
-          <Route element={<ProtectedRoute />}> 
+          <Route element={<ProtectedRoute />}>
             <Route path="/queue" element={<QueuePage />} />
             <Route path="/case/:id" element={<CasePage />} />
+          </Route>
+          <Route element={<ProtectedRoute roles={['admin']} />}>
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
           <Route
@@ -67,6 +85,20 @@ const AppShell = () => {
           />
         </Routes>
       </main>
+    </div>
+  );
+};
+
+const UserBadge = ({ name }: { name: string }) => {
+  const intl = useIntl();
+  const initials = name.trim().slice(0, 2).toUpperCase();
+  return (
+    <div className="user-badge" aria-label={intl.formatMessage({ id: 'app.user.badge', defaultMessage: 'Signed-in clinician' })}>
+      <span aria-hidden="true" className="user-badge__avatar">{initials}</span>
+      <span className="user-badge__meta">
+        <span className="user-badge__name">{name}</span>
+        <span className="user-badge__status">{intl.formatMessage({ id: 'app.user.onDuty', defaultMessage: 'On duty today' })}</span>
+      </span>
     </div>
   );
 };

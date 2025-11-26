@@ -23,11 +23,12 @@ function createReferralEnvelope(overrides: Partial<PharmacyReferral> = {}) {
       reference: 'slot-1',
     },
   };
-  return createEnvelope(Topics.pharmacy.referral, { ...payload, ...overrides });
+  return createEnvelope(Topics.pharmacy.referral, { ...payload, ...overrides }, 'corr-pharmacy-test');
 }
 
 describe('PharmacyRouterConsumer', () => {
   let bus: MemoryBus;
+  const correlationHeaders = { 'x-correlation-id': 'corr-pharmacy-test' };
 
   beforeEach(() => {
     bus = new MemoryBus();
@@ -66,7 +67,7 @@ describe('PharmacyRouterConsumer', () => {
 
     const consumer = new PharmacyRouterConsumer({ bus, processor });
     await consumer.start();
-    await bus.publish(Topics.pharmacy.referral, createReferralEnvelope());
+    await bus.publish(Topics.pharmacy.referral, createReferralEnvelope(), correlationHeaders);
     await consumer.stop();
 
     expect(processor).toHaveBeenCalledTimes(1);
@@ -88,8 +89,8 @@ describe('PharmacyRouterConsumer', () => {
     const invalidEnvelope = createEnvelope(Topics.pharmacy.referral, {
       condition: 'UTI',
       pharmacyOrg: 'pharmacy/demo',
-    });
-    await bus.publish(Topics.pharmacy.referral, invalidEnvelope);
+    }, 'corr-pharmacy-test');
+    await bus.publish(Topics.pharmacy.referral, invalidEnvelope, correlationHeaders);
     await consumer.stop();
 
     expect(processor).not.toHaveBeenCalled();
@@ -108,7 +109,7 @@ describe('PharmacyRouterConsumer', () => {
     const consumer = new PharmacyRouterConsumer({ bus, processor, maxAttempts: 3 });
 
     await consumer.start();
-    await bus.publish(Topics.pharmacy.referral, createReferralEnvelope());
+    await bus.publish(Topics.pharmacy.referral, createReferralEnvelope(), correlationHeaders);
     await consumer.stop();
 
     expect(processor).toHaveBeenCalledTimes(1);
@@ -138,7 +139,7 @@ describe('PharmacyRouterConsumer', () => {
     });
 
     await consumer.start();
-    const publishPromise = bus.publish(Topics.pharmacy.referral, createReferralEnvelope());
+    const publishPromise = bus.publish(Topics.pharmacy.referral, createReferralEnvelope(), correlationHeaders);
     await vi.runAllTimersAsync();
     await publishPromise;
     await consumer.stop();

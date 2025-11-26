@@ -405,6 +405,9 @@ function renderHistogramMetric(name: string, buckets: number[], labelKeys: strin
     return [];
   }
   const aggregates = new Map<string, { labelPairs: string[]; counts: number[]; sum: number; count: number }>();
+  let totalCounts: number[] | null = null;
+  let totalSum = 0;
+  let totalCount = 0;
   for (const record of records) {
     const value = Number(record.value ?? 0);
     if (!Number.isFinite(value)) continue;
@@ -425,6 +428,12 @@ function renderHistogramMetric(name: string, buckets: number[], labelKeys: strin
     aggregate.counts[bucketIndex] += 1;
     aggregate.sum += value;
     aggregate.count += 1;
+    if (!totalCounts) {
+      totalCounts = new Array(buckets.length + 1).fill(0);
+    }
+    totalCounts[bucketIndex] += 1;
+    totalSum += value;
+    totalCount += 1;
   }
 
   const lines: string[] = [];
@@ -433,15 +442,27 @@ function renderHistogramMetric(name: string, buckets: number[], labelKeys: strin
     let cumulative = 0;
     buckets.forEach((boundary, idx) => {
       cumulative += aggregate.counts[idx];
-      const labels = formatLabelText([...baseLabels, `le="${boundary}"`]);
+      const labels = formatLabelText([`le="${boundary}"`, ...baseLabels]);
       lines.push(`${name}_bucket${labels} ${cumulative}`);
     });
     cumulative += aggregate.counts[aggregate.counts.length - 1];
-    const infLabels = formatLabelText([...baseLabels, 'le="+Inf"']);
+    const infLabels = formatLabelText(['le="+Inf"', ...baseLabels]);
     lines.push(`${name}_bucket${infLabels} ${cumulative}`);
     const countLabels = formatLabelText(baseLabels);
     lines.push(`${name}_count${countLabels} ${aggregate.count}`);
     lines.push(`${name}_sum${countLabels} ${aggregate.sum.toFixed(6)}`);
+  }
+
+  if (totalCounts && totalCount > 0) {
+    let cumulative = 0;
+    buckets.forEach((boundary, idx) => {
+      cumulative += totalCounts![idx];
+      lines.push(`${name}_bucket{le="${boundary}"} ${cumulative}`);
+    });
+    cumulative += totalCounts[totalCounts.length - 1];
+    lines.push(`${name}_bucket{le="+Inf"} ${cumulative}`);
+    lines.push(`${name}_count ${totalCount}`);
+    lines.push(`${name}_sum ${totalSum.toFixed(6)}`);
   }
 
   return lines;

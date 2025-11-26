@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { loadConfig, type ResolvedConfig } from '@onecare/config';
 import { BaseState } from '@onecare/statekit';
@@ -261,9 +262,16 @@ function normalizeCorrelationId(value: string | undefined): string | undefined {
 }
 
 function ensureCorrelationId(ctx: TelephonyContext): string | undefined {
-  const normalized = normalizeCorrelationId(ctx.correlationId);
-  ctx.correlationId = normalized;
-  return normalized;
+  const normalized = normalizeCorrelationId(
+    ctx.correlationId ?? ctx.callId ?? ctx.intentClassificationInput?.callId,
+  );
+  if (normalized) {
+    ctx.correlationId = normalized;
+    return normalized;
+  }
+  const generated = randomUUID();
+  ctx.correlationId = generated;
+  return generated;
 }
 
 function raiseContractValidationError(

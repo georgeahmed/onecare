@@ -79,7 +79,7 @@ export interface ErrorAlertProps {
   autoFocus?: boolean;
 }
 
-const DEFAULT_SUPPORT_URL = 'mailto:support@onecare.example';
+const DEFAULT_SUPPORT_URL = 'mailto:support@vecells.example';
 
 const ErrorAlert = ({
   error,

@@ -1,9 +1,11 @@
 const STORAGE_KEY = 'onecare.portal.interpreter.preferences';
+const PREFERENCES_TTL_MS = 4 * 60 * 60 * 1000;
 
 export interface StoredInterpreterPreferences {
   requiresInterpreter: boolean;
   preferredLanguages: string[];
   requiresInterpreterConfirmed?: boolean;
+  storedAt?: number;
 }
 
 const isStoredInterpreterPreferences = (value: unknown): value is StoredInterpreterPreferences => {
@@ -27,15 +29,20 @@ export const readStoredInterpreterPreferences = (): StoredInterpreterPreferences
   }
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!isStoredInterpreterPreferences(parsed)) {
-      return null;
-    }
-    return parsed;
-  } catch {
+  if (!raw) return null;
+  const parsed = JSON.parse(raw) as StoredInterpreterPreferences;
+  if (!isStoredInterpreterPreferences(parsed)) {
     return null;
   }
+  if (typeof parsed.storedAt === 'number' && Number.isFinite(parsed.storedAt)) {
+    if (Date.now() - parsed.storedAt > PREFERENCES_TTL_MS) {
+      return null;
+    }
+  }
+  return parsed;
+} catch {
+  return null;
+}
 };
 
 export const persistInterpreterPreferences = (value: StoredInterpreterPreferences): void => {
@@ -43,7 +50,13 @@ export const persistInterpreterPreferences = (value: StoredInterpreterPreference
     return;
   }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        ...value,
+        storedAt: Date.now()
+      })
+    );
   } catch {
     // ignore write failures
   }
@@ -59,4 +72,3 @@ export const clearInterpreterPreferences = (): void => {
     // ignore removal failures
   }
 };
-

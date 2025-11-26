@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from scribe_service.main import (
@@ -23,5 +25,15 @@ def test_metrics_endpoint_reports_counters() -> None:
     assert metrics_response.headers.get("x-correlation-id") == "metrics-test"
 
     body = metrics_response.text
-    assert 'http_server_requests_total{service="scribe",method="GET",route="/health",status="200"} 1' in body
-    assert 'http_server_success_total{service="scribe",route="/health"} 1' in body
+    requests_line = next((line for line in body.splitlines() if line.startswith("http_server_requests_total{")), "")
+    success_line = next((line for line in body.splitlines() if line.startswith("http_server_success_total{")), "")
+
+    assert "service=\"scribe\"" in requests_line
+    assert "method=\"GET\"" in requests_line
+    assert "route=\"/health\"" in requests_line
+    assert "status=\"200\"" in requests_line
+    assert requests_line.rstrip().endswith((" 1", " 1.0"))
+
+    assert "service=\"scribe\"" in success_line
+    assert "route=\"/health\"" in success_line
+    assert success_line.rstrip().endswith((" 1", " 1.0"))

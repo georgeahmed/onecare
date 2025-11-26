@@ -1,4 +1,4 @@
-const CARE_RESOURCES = ['QuestionnaireResponse', 'Communication', 'Slot'] as const;
+const CARE_RESOURCES = ['QuestionnaireResponse', 'Communication', 'DocumentReference', 'Slot'] as const;
 const FEATURE_RESOURCES = ['FeatureLog'] as const;
 
 function buildConsentEntries(patientId: string) {

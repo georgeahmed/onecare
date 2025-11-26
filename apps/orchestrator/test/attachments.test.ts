@@ -3,9 +3,10 @@ import type { AddressInfo } from 'node:net';
 import type { SecurityServices } from '@onecare/security';
 import { setSecurityServices, resetSecurityServices, setConsentEvidenceForTest } from '../src/adapters/security';
 import { setConsentFixtureEnv, consentReference } from './consentFixture';
+import { PRACTICE_ID } from './practice';
 
 const submission = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'patient-123' },
   narrative: 'Persistent headache',
   channel: 'web' as const,

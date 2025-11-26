@@ -16,6 +16,7 @@ import { server, setBusReadyForTest, getMessageBusForTest, setIdempotencyStoreFo
 import { InMemoryIdempotencyStore, deriveIdempotencyKey } from '../src/application/idempotency';
 import { resetSecurityServices } from '../src/adapters/security';
 import { setConsentFixtureEnv } from './consentFixture';
+import { PRACTICE_ID } from './practice';
 
 let bus: MessageBus;
 let baseUrl: string;
@@ -70,7 +71,7 @@ describe('safety gate fallback', () => {
 
     const requestId = 'fallback-test';
     const payload: PortalSubmission = {
-      practiceId: 'practice-1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-1' },
       narrative: 'fallback scenario',
       channel: 'web',

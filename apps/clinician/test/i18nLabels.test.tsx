@@ -11,7 +11,7 @@ describe('Clinician i18n labels', () => {
       </StaticRouter>
     );
     expect(html).toContain('Accessibility shortcuts');
-    expect(html).toContain('OneCare Clinician Console');
+    expect(html).toContain('Vecells Clinician Console');
     expect(html).toContain('Theme');
   });
 });

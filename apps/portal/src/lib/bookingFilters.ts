@@ -87,13 +87,13 @@ export const resolveFilterBounds = (
 ): { from: number | null; to: number | null } => {
   const parseStart = (value: string | undefined): number | null => {
     if (!isValidDate(value)) return null;
-    const timestamp = Date.parse(`${normalizeDate(value)}T00:00:00.000`);
+    const timestamp = Date.parse(`${normalizeDate(value)}T00:00:00.000Z`);
     return Number.isNaN(timestamp) ? null : timestamp;
   };
 
   const parseEnd = (value: string | undefined): number | null => {
     if (!isValidDate(value)) return null;
-    const timestamp = Date.parse(`${normalizeDate(value)}T23:59:59.999`);
+    const timestamp = Date.parse(`${normalizeDate(value)}T23:59:59.999Z`);
     return Number.isNaN(timestamp) ? null : timestamp;
   };
 

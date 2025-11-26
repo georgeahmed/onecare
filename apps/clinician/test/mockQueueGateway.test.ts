@@ -27,4 +27,11 @@ describe('MockQueueGateway', () => {
       return error instanceof QueueGatewayError && error.code === 'conflict';
     });
   });
+
+  it('records audit entries with the current user context', async () => {
+    const gateway = new MockQueueGateway();
+    gateway.setAuthContext({ userId: 'auditor-1' });
+    const updated = await gateway.assign('t-002', 'auditor-1');
+    expect(updated.audit.at(-1)?.who).toBe('auditor-1');
+  });
 });

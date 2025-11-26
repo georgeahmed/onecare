@@ -527,7 +527,12 @@ function applySafetyGateShadowConfig(raw: unknown): SafetyGateShadowConfig | und
       source?.fraction ??
       source?.traffic_fraction,
   );
-  const normalisedSampleRate = sampleRateCandidate !== undefined ? clamp(sampleRateCandidate, 0, 1) : undefined;
+  let normalisedSampleRate: number | undefined;
+  if (sampleRateCandidate !== undefined) {
+    const scaled =
+      sampleRateCandidate > 1 && sampleRateCandidate <= 100 ? sampleRateCandidate / 100 : sampleRateCandidate;
+    normalisedSampleRate = clamp(scaled, 0, 1);
+  }
 
   const endpoint = pickString(
     process.env.PY_SAFETY_GATE_SHADOW_URL,
@@ -634,6 +639,7 @@ function applyIdempotencyConfig(raw: unknown): IdempotencyConfig {
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined;
   const configValue = source ? parseTtl(source.ttlSeconds ?? source.ttl_seconds) : undefined;
   let ttl = envOverride ?? configValue ?? IDEMPOTENCY_TTL_DEFAULT;
+  ttl = Math.round(ttl);
   ttl = clamp(ttl, IDEMPOTENCY_TTL_MIN, IDEMPOTENCY_TTL_MAX);
   return { ttlSeconds: ttl };
 }
@@ -728,7 +734,8 @@ function applyTokenBucketConfig(
   };
 }
 
-function applyAccessGateConfig(raw: unknown): AccessGateConfig {
+function applyAccessGateConfig(raw: unknown): AccessGateConfig | undefined {
+  if (raw === null || raw === false) return undefined;
   const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
   const rateLimitSource: Record<string, unknown> =
     (isPlainObject(source?.rateLimit) ? (source?.rateLimit as Record<string, unknown>) : undefined) ??
@@ -1185,6 +1192,9 @@ function parsePharmacyEligibilityRule(
       readRecordValue(source, 'maxAge') ??
       defaults?.age?.max,
   );
+  if (minAge !== undefined && maxAge !== undefined && minAge > maxAge) {
+    throw new Error('pharmacy_age_bounds_invalid');
+  }
   if (minAge !== undefined || maxAge !== undefined) {
     rule.age = {};
     if (minAge !== undefined) rule.age.min = Math.max(0, Math.round(minAge));
@@ -1256,16 +1266,26 @@ function parseTlsConfig(raw: unknown, envPrefix: string): IcsTlsConfig | undefin
   return Object.keys(tls).length > 0 ? tls : undefined;
 }
 
-function parseIcsRoute(key: string, raw: unknown, defaults?: IcsRouteConfig): IcsRouteConfig | undefined {
+function normaliseEnvPrefix(key: string): string {
+  return key.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+function parseIcsRoute(
+  key: string,
+  raw: unknown,
+  defaults?: IcsRouteConfig,
+  envPrefix?: string,
+): IcsRouteConfig | undefined {
   const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
   const endpoint = pickString(source?.endpoint, source?.url, source?.base_url, defaults?.endpoint);
   if (!endpoint) return undefined;
   const apiKey = pickString(source?.apiKey, source?.api_key, source?.token, defaults?.apiKey);
   const authRef = pickString(source?.authRef, source?.auth_ref, defaults?.authRef);
+  const envHeaderPrefix = envPrefix ?? `ICS_${normaliseEnvPrefix(key)}`;
   const headers = {
     ...parseHeadersRecord(defaults?.headers),
     ...parseHeadersRecord(source?.headers ?? source?.defaultHeaders),
-    ...parseEnvHeaderOverrides(`ICS_${key.toUpperCase()}`),
+    ...parseEnvHeaderOverrides(envHeaderPrefix),
   };
   const timeoutMs = parseNumberish(
     readRecordValue(source, 'timeoutMs') ??
@@ -1328,7 +1348,7 @@ function parseIcsRoute(key: string, raw: unknown, defaults?: IcsRouteConfig): Ic
     readRecordValue(source, 'correlation_header'),
     defaults?.correlationHeader,
   );
-  const tls = parseTlsConfig(source?.tls, `ICS_${key.toUpperCase()}`) ?? defaults?.tls;
+  const tls = parseTlsConfig(source?.tls, envHeaderPrefix) ?? defaults?.tls;
   const rateLimitPerMinute = parseNumberish(
     readRecordValue(source, 'rateLimitPerMinute') ?? readRecordValue(source, 'rate_limit_per_minute'),
   );
@@ -1351,11 +1371,11 @@ function parseIcsRoute(key: string, raw: unknown, defaults?: IcsRouteConfig): Ic
   return route;
 }
 
-function applyIcsConfig(raw: unknown): IcsConfig | undefined {
+function applyIcsConfig(raw: unknown, envPrefix?: string): IcsConfig | undefined {
   const source = isPlainObject(raw) ? (raw as Record<string, unknown>) : undefined;
   const routesSource = isPlainObject(source?.routes) ? (source?.routes as Record<string, unknown>) : undefined;
   const defaultSource = source?.default ?? source?.defaultRoute;
-  const defaultRoute = parseIcsRoute('default', defaultSource);
+  const defaultRoute = parseIcsRoute('default', defaultSource, undefined, envPrefix);
 
   const envDefaultEndpoint = pickString(process.env.ICS_DEFAULT_ENDPOINT, process.env.ICS_ENDPOINT);
   const envDefaultApiKey = pickString(process.env.ICS_API_KEY, process.env.ICS_TOKEN);
@@ -1373,7 +1393,7 @@ function applyIcsConfig(raw: unknown): IcsConfig | undefined {
   const routes: Record<string, IcsRouteConfig> = {};
   if (routesSource) {
     for (const [org, value] of Object.entries(routesSource)) {
-      const parsed = parseIcsRoute(org, value, defaultRoute ?? envDefaultRoute);
+      const parsed = parseIcsRoute(org, value, defaultRoute ?? envDefaultRoute, envPrefix);
       if (parsed) {
         routes[org] = parsed;
       }
@@ -1516,7 +1536,7 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
     mergedConfig = mergeRecords(
       mergedConfig,
       options.overrides as unknown as Record<string, unknown>,
-      arrayStrategies,
+      {},
       '',
     );
   }
@@ -1528,8 +1548,17 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
   resolved.idempotency = applyIdempotencyConfig(idempotencyRaw ?? resolved.idempotency);
   const cpcsRaw = (mergedConfig as Record<string, unknown>).cpcs ?? resolved.cpcs;
   resolved.cpcs = applyCpcsConfig(cpcsRaw);
-  const icsRaw = (mergedConfig as Record<string, unknown>).ics ?? resolved.ics;
-  resolved.ics = applyIcsConfig(icsRaw);
+  const routesFallback =
+    (mergedConfig as Record<string, unknown>).ics === undefined &&
+    isPlainObject((mergedConfig as Record<string, unknown>).routes)
+      ? { routes: (mergedConfig as Record<string, unknown>).routes as Record<string, unknown> }
+      : undefined;
+  const icsRaw = (mergedConfig as Record<string, unknown>).ics ?? routesFallback ?? resolved.ics;
+  const icsEnvPrefix = icsId ? `ICS_${normaliseEnvPrefix(icsId)}` : undefined;
+  resolved.ics = applyIcsConfig(icsRaw, icsEnvPrefix);
+  if (routesFallback) {
+    delete (resolved as Record<string, unknown>).routes;
+  }
   const billingRaw = (mergedConfig as Record<string, unknown>).billing ?? resolved.billing;
   resolved.billing = applyBillingConfig(billingRaw);
   const bookingRaw = (mergedConfig as Record<string, unknown>).booking ?? resolved.booking;
@@ -1546,8 +1575,8 @@ export function loadConfig(practiceId: string, options?: LoadConfigOptions): Res
         ? { ...(resolved.triage as Record<string, unknown>) }
         : {};
   const fallbackConfig = applyTriageFallbackConfig(triageSection.fallback);
-  resolved.triageFallback = fallbackConfig;
-  triageSection.fallback = fallbackConfig;
+  resolved.triageFallback = fallbackConfig ? { ...fallbackConfig } : undefined;
+  triageSection.fallback = fallbackConfig ? { ...fallbackConfig } : undefined;
   resolved.triage = triageSection;
 
   if (pcnId || icsId || mergedSources.length > 0) {

@@ -350,6 +350,117 @@ sequenceDiagram
 ```
 ---
 
+Guided Narrative Helper (Portal Narrative, LLM‑assisted)
+```mermaid
+sequenceDiagram
+  participant Patient
+  participant Portal
+  participant Orc as Orchestrator
+  participant LLM as "Guided‑Help LLM (stub/OpenAI)"
+
+  Patient->>Portal: Types free‑text narrative
+  Patient->>Portal: Clicks "Start guided help"
+  Portal->>Orc: POST /guided-help/step (step1, seedNarrative, conversation)
+  Orc->>LLM: CallGuidedHelpLLM(purpose="step", request, missingFields)
+  LLM-->>Orc: GuidedHelpSessionResponse (question, redFlags, qualityScore, needsStep6, summary?)
+  Orc-->>Portal: JSON response
+  Portal-->>Patient: Chat‑style Q&A (up to 5 steps + optional final detail)
+  Patient->>Portal: Clicks "Generate summary"
+  Portal-->>Patient: Suggested description + "Use this as my description" / "Edit before using"
+```
+
+```pseudocode
+GuidedHelpSession(request: GuidedHelpSessionRequest):
+  # 1) Validate + practice guardrail
+  assert request.practiceId == Config.practice_id
+  validateAgainstSchema(request)                        # JSON Schema (request)
+
+  # 2) Derive coverage/missing fields
+  axes := ["onset", "location", "severity", "otherSymptoms"]
+  covered := {}                                        # axes with useful answers
+  for msg in request.conversation or []:
+    if msg.role != "user": continue
+    for tag in msg.fieldTags or []:
+      if tag in axes: covered.add(tag)
+  if covered.empty():
+    covered := InferCoveredFromStep(request.stepId)    # compatibility fallback
+
+  missing := axes \ covered                            # hint to LLM which axis to ask about next
+
+  # 3) Quality & low‑signal heuristics
+  userText := JoinUserTexts(request.seedNarrative, request.conversation)
+  wordCount := CountWords(userText)
+  diversity := UniqueWordRatio(userText)
+  lowSignalReasons := DetectLowSignalPhrases(userText) # "idk", "n/a", "nothing", etc.
+
+  qualityScore := 0.0
+  qualityScore += CoverageComponent(covered.size)      # +0.0–0.4
+  qualityScore += LengthComponent(wordCount)           # +0.0–0.3
+  qualityScore += DiversityComponent(diversity)        # +0.0–0.2
+  qualityScore := Clamp(qualityScore, 0.0, 1.0)
+
+  # 4) Red‑flag classifier (inline safety net)
+  redFlags := DetectHighRiskPhrases(userText)          # chest_pain, shortness_of_breath, etc.
+  if redFlags != ["none"]:
+    # Stop guided help; UI shows neutral emergency advice and disables summary.
+    return StubGuidedHelpResponse(request, {
+      stepId: request.stepId,
+      redFlags,
+      proceedToSummary: false,
+      needsStep6: false,
+    })
+
+  # 5) LLM‑assisted follow‑up (single question)
+  if Env.GUIDED_HELP_LLM_MODE == "openai":
+    llmResponse := CallOpenAiChat({
+      endpoint: Env.LLM_API_ENDPOINT,
+      apiKey: Env.LLM_API_KEY,
+      model: Env.LLM_MODEL,                  # e.g., gpt‑4o
+      systemPrompt: BuildGuidedHelpSystemPrompt(request.locale),
+      developerPrompt: BuildStepDeveloperPrompt(request.stepId, missing, maxSteps=5),
+      inputPayload: Redacted(request, covered, missing, qualityScore, lowSignalReasons),
+      # payload excludes identifiers; narrative text is truncated
+    })
+    candidate := ParseJson(llmResponse.content)        # model returns JSON only
+    if validateAgainstSchema(candidate):               # JSON Schema (response)
+      response := MergeWithDefaults(candidate, {
+        sessionId: request.sessionId,
+        stepId: request.stepId,
+        redFlags: ["none"],
+        proceedToSummary: false,
+        needsStep6: false,
+        telemetryMeta: { llmProvider: "openai", llmModel: Env.LLM_MODEL },
+      })
+    else:
+      Log("guided_help.llm.response_validation_failed", validationErrors)
+      response := StubGuidedHelpResponse(request, { covered, missing, qualityScore })
+  else:
+    response := StubGuidedHelpResponse(request, { covered, missing, qualityScore })
+
+  # 6) Conditional final detail (Step 6) gate
+  if request.stepId == "step5":
+    needsStep6 := (covered.size < 2) or (qualityScore <= 0.4) or (lowSignalReasons.nonEmpty)
+    response.needsStep6 := needsStep6
+    response.proceedToSummary := not needsStep6
+    response.qualityScore := qualityScore
+    response.limitations := lowSignalReasons           # explain why more detail was needed
+
+  # 7) Summary (optional, used by "Generate summary")
+  # Current implementation uses a safe stubbed summary; future iteration can call LLM
+  # with purpose="summary" and the same schema‑validation + fallback pattern.
+
+  EmitMetrics({
+    guided_help_steps_total += 1,
+    guided_help_sessions_started_total += 1 if request.stepId == "step1",
+    guided_help_needs_step6_total += 1 if response.needsStep6,
+    guided_help_red_flag_total += 1 if redFlags != ["none"],
+  })
+
+  return response
+```
+
+---
+
 Send Document Delivery (GP Connect Messaging)
 ```mermaid
 sequenceDiagram

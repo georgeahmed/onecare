@@ -1,0 +1,97 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic "Atajos de accesibilidad" [ref=e4]:
+    - link "Ir al contenido principal" [ref=e5] [cursor=pointer]:
+      - /url: "#main-content"
+    - link "Ir a la navegación" [ref=e6] [cursor=pointer]:
+      - /url: "#primary-navigation"
+  - banner [ref=e7]:
+    - generic [ref=e8]:
+      - generic "OneCare" [ref=e9]:
+        - generic [ref=e10]: ◎
+        - generic [ref=e11]:
+          - generic [ref=e12]: OneCare
+          - generic [ref=e13]: Comparte solo la información esencial para que nuestro equipo pueda revisar la solicitud con rapidez.
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - generic [ref=e16]: Idioma
+          - combobox "Idioma" [ref=e17]:
+            - option "Inglés"
+            - option "Español" [selected]
+            - option "Árabe"
+        - generic [ref=e18]:
+          - generic [ref=e19]: Tema
+          - combobox "Tema" [ref=e20]:
+            - option "Claro" [selected]
+            - option "Oscuro"
+            - option "Alto contraste"
+    - navigation "Navegación principal" [ref=e21]:
+      - link "Ingreso" [ref=e22] [cursor=pointer]:
+        - /url: /intake
+      - link "Reservas" [ref=e23] [cursor=pointer]:
+        - /url: /booking
+  - main [active] [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - paragraph [ref=e27]: Ingreso
+        - heading "Ingreso al portal" [level=1] [ref=e28]
+        - paragraph [ref=e29]: Comparte solo la información esencial para que nuestro equipo pueda revisar la solicitud con rapidez.
+      - region "Expectativas de devolución de llamada" [ref=e31]:
+        - heading "Expectativas de devolución de llamada" [level=2] [ref=e32]
+        - paragraph [ref=e33]: Priorizamos las solicitudes para atender los casos urgentes con rapidez. Estas son las ventanas de llamada estimadas para cada prioridad.
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - term [ref=e36]: Crítico (STAT)
+            - definition [ref=e37]: Le llamamos de inmediato.
+          - generic [ref=e38]:
+            - term [ref=e39]: Urgente
+            - definition [ref=e40]: Nuestro objetivo es llamarle dentro de 2 horas.
+          - generic [ref=e41]:
+            - term [ref=e42]: Próximo
+            - definition [ref=e43]: Planeamos llamarle el mismo día.
+          - generic [ref=e44]:
+            - term [ref=e45]: Rutina
+            - definition [ref=e46]: Le llamamos dentro de 48 horas.
+        - paragraph [ref=e47]:
+          - strong [ref=e48]: Fuera del horario central seguimos aceptando solicitudes.
+          - text: If we are outside core hours we will review requests as soon as we reopen.
+    - generic [ref=e50]:
+      - navigation "Progreso de la solicitud" [ref=e51]:
+        - list [ref=e52]:
+          - listitem [ref=e53]:
+            - generic [ref=e54]: "1"
+            - button "Detalles de la clínica" [ref=e55] [cursor=pointer]
+          - listitem [ref=e56]:
+            - generic [ref=e57]: "2"
+            - generic [ref=e58]: ¿A quién ayudamos?
+          - listitem [ref=e59]:
+            - generic [ref=e60]: "3"
+            - generic [ref=e61]: ¿Qué está ocurriendo?
+          - listitem [ref=e62]:
+            - generic [ref=e63]: "4"
+            - generic [ref=e64]: Revisar y enviar
+      - generic [ref=e65]:
+        - heading "Detalles de la clínica" [level=2] [ref=e66]
+        - paragraph [ref=e67]: Comienza con el ID de la clínica para dirigir la solicitud correctamente.
+      - status [ref=e68]: Borrador guardado a las 21:15.
+      - generic [ref=e69]:
+        - generic [ref=e70]:
+          - text: Practice ID
+          - generic [ref=e71]: "*"
+        - textbox "Practice ID" [ref=e72]
+      - group "Channel" [ref=e73]:
+        - generic [ref=e74]:
+          - text: Channel
+          - generic [ref=e75]: "*"
+        - generic [ref=e76]:
+          - radio "Web" [checked] [ref=e77]
+          - text: Web
+        - generic [ref=e78]:
+          - radio "Phone (IVR)" [ref=e79]
+          - text: Phone (IVR)
+      - generic [ref=e80]:
+        - button "Atrás" [disabled] [ref=e81]
+        - button "Siguiente" [ref=e82] [cursor=pointer]
+```

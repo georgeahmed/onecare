@@ -5,6 +5,8 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
+import { I18nProvider } from '../src/i18n';
+import { ThemeProvider } from '../src/theme';
 import App from '../src/App';
 
 type AxeResults = Awaited<ReturnType<typeof axe.run>>;
@@ -24,7 +26,15 @@ const runAxeForRoute = async (initialPath: string): Promise<AxeViolation[]> => {
     createElement(
       MemoryRouter,
       { initialEntries: [initialPath] },
-      createElement(App)
+      createElement(
+        I18nProvider,
+        null,
+        createElement(
+          ThemeProvider,
+          null,
+          createElement(App)
+        )
+      )
     )
   );
 
@@ -33,13 +43,17 @@ const runAxeForRoute = async (initialPath: string): Promise<AxeViolation[]> => {
     pretendToBeVisual: true,
     runScripts: 'outside-only'
   });
+  const resolvedLocale = url.searchParams.get('locale') ?? 'en';
+  const langValue = resolvedLocale === 'en' ? 'en-US' : resolvedLocale;
+  dom.window.document.documentElement.lang = langValue;
+  dom.window.document.documentElement.setAttribute('xml:lang', langValue);
 
   const axeScript = axe.source;
   dom.window.eval(axeScript);
   const axeRuntime = (dom.window as typeof dom.window & { axe: typeof axe }).axe;
 
   if (!dom.window.document.title) {
-    dom.window.document.title = 'OneCare Portal';
+    dom.window.document.title = 'Vecells Portal';
   }
 
   const results = await axeRuntime.run(dom.window.document, {
@@ -56,7 +70,13 @@ const runAxeForRoute = async (initialPath: string): Promise<AxeViolation[]> => {
 
 const describeViolations = (violations: AxeViolation[]): string =>
   violations
-    .map((violation) => `${violation.id} (${violation.impact ?? 'unknown'}): ${violation.help}`)
+    .map((violation) => {
+      const targets =
+        violation.nodes?.map((node) => (Array.isArray(node.target) ? node.target.join(' | ') : '')).filter(Boolean) ??
+        [];
+      const targetText = targets.length > 0 ? ` [targets: ${targets.join('; ')}]` : '';
+      return `${violation.id} (${violation.impact ?? 'unknown'}): ${violation.help}${targetText}`;
+    })
     .join('\n');
 
 describe('Accessibility audit (axe)', () => {

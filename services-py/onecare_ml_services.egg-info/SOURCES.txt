@@ -71,6 +71,7 @@ tests/test_quality.py
 tests/test_request_validation.py
 tests/test_safety_gate.py
 tests/test_safety_samples.py
+tests/test_scribe_metrics.py
 tests/test_security_hardening.py
 tests/test_timeout_fallback.py
 tests/test_token_truncation.py

@@ -50,4 +50,18 @@ describe('ProtectedRoute', () => {
 
     expect(screen.getByText('Protected')).toBeTruthy();
   });
+
+  it('blocks settings for non-admin roles', async () => {
+    renderWithProviders(
+      <Routes>
+        <Route element={<ProtectedRoute roles={['admin']} />}>
+          <Route path="/settings" element={<div>Settings</div>} />
+        </Route>
+      </Routes>,
+      { initialEntries: ['/settings'], session: createDevSession() }
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Access');
+  });
 });

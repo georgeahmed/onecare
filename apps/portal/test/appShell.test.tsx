@@ -3,12 +3,18 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
+import { I18nProvider } from '../src/i18n';
+import { ThemeProvider } from '../src/theme';
 import App from '../src/App';
 
 const renderApp = () =>
   renderToStaticMarkup(
     <StaticRouter location="/intake">
-      <App />
+      <I18nProvider>
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      </I18nProvider>
     </StaticRouter>
   );
 

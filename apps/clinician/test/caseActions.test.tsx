@@ -17,13 +17,16 @@ const detail: ClinicianTaskDetail = {
 const testGateway: QueueGateway = {
   list: async (_f: QueueFilters) => ({ items: [detail as unknown as ClinicianTaskSummary] }),
   getById: async (_id: string) => detail,
-  assign: async () => ({ ...detail, status: 'IN_PROGRESS', assignee: 'me' }),
-  unassign: async () => ({ ...detail, status: 'NEW', assignee: undefined }),
-  resolve: async () => ({ ...detail, status: 'DONE', audit: [{ when: new Date().toISOString(), who: 'me', what: 'resolve' }] }),
-  scheduleCallback: async () => ({ ...detail, status: 'IN_PROGRESS' }),
-  bookSlot: async () => ({ ...detail, status: 'DONE' }),
-  recordCall: async () => ({ ...detail, audit: [...detail.audit, { when: new Date().toISOString(), who: 'me', what: 'call' }] }),
-  escalate: async () => ({ ...detail, status: 'IN_PROGRESS' })
+  assign: async (_id: string, _assignee?: string) => ({ ...detail, status: 'IN_PROGRESS', assignee: 'me' }),
+  unassign: async (_id: string) => ({ ...detail, status: 'NEW', assignee: undefined }),
+  resolve: async (_id: string, _outcome?: string, _note?: string) => ({ ...detail, status: 'DONE', audit: [{ when: new Date().toISOString(), who: 'me', what: 'resolve' }] }),
+  scheduleCallback: async (_id: string, _when?: string, _note?: string) => ({ ...detail, status: 'IN_PROGRESS' }),
+  bookSlot: async (_id: string, _slotId?: string) => ({ ...detail, status: 'DONE' }),
+  recordCall: async (_id: string) => ({ ...detail, audit: [...detail.audit, { when: new Date().toISOString(), who: 'me', what: 'call' }] }),
+  escalate: async (_id: string) => ({ ...detail, status: 'IN_PROGRESS' }),
+  assistedOutcome: async (_id: string, _outcome?: string) => detail,
+  recommendWindows: async (_id: string) => [],
+  setAuthContext: () => {}
 };
 
 describe('Case actions basic render', () => {
