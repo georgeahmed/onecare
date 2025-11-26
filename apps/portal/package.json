@@ -10,8 +10,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "preview:e2e": "npm run build && VITE_ORCH_URL=http://localhost:3001 vite preview --port=5173 --strictPort",
-    "test:e2e": "playwright test"
+    "preview:e2e": "node scripts/preview-e2e.js",
+    "test:e2e": "node scripts/run-e2e.js"
   },
   "dependencies": {
     "@onecare/events": "file:../../packages/events",

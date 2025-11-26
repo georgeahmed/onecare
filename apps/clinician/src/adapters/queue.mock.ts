@@ -3,9 +3,7 @@ import { QueueGatewayError, type QueueFilters, type QueueGateway, type Recommend
 
 const now = Date.now();
 
-const currentUserId = 'clinician-dev';
-
-const seeded: ClinicianTaskDetail[] = [
+const defaultSeed: ClinicianTaskDetail[] = [
   {
     id: 't-001',
     clinicId: 'demo',
@@ -33,7 +31,7 @@ const seeded: ClinicianTaskDetail[] = [
     createdAt: new Date(now - 40 * 60 * 1000).toISOString(),
     narrative: 'Fever at 39.5°C, headache since last night.',
     attachments: [],
-    actionsAllowed: ['CALL', 'SCHEDULE', 'RESOLVE'],
+    actionsAllowed: ['CALL', 'SCHEDULE', 'BOOK', 'RESOLVE'],
     audit: [],
     correlationId: 'corr-urg-002'
   },
@@ -48,7 +46,7 @@ const seeded: ClinicianTaskDetail[] = [
     createdAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
     narrative: 'Question about dosage for prescribed medication.',
     attachments: [],
-    actionsAllowed: ['CALL', 'SCHEDULE', 'RESOLVE'],
+    actionsAllowed: ['CALL', 'SCHEDULE', 'BOOK', 'RESOLVE'],
     audit: [],
     correlationId: 'corr-rt-003'
   },
@@ -81,7 +79,7 @@ const seeded: ClinicianTaskDetail[] = [
     createdAt: new Date(now - 20 * 60 * 1000).toISOString(),
     narrative: 'Refill needed before weekend travel.',
     attachments: [],
-    actionsAllowed: ['CALL', 'SCHEDULE', 'RESOLVE'],
+    actionsAllowed: ['CALL', 'SCHEDULE', 'BOOK', 'RESOLVE'],
     audit: [],
     correlationId: 'corr-soon-005'
   }
@@ -110,9 +108,21 @@ const matchesTimeWindow = (detail: ClinicianTaskDetail, filters: QueueFilters): 
 };
 
 export class MockQueueGateway implements QueueGateway {
+  private readonly tasks: ClinicianTaskDetail[];
+  private currentUserId: string;
+
+  constructor(userId = 'clinician-dev', seed: ClinicianTaskDetail[] = defaultSeed) {
+    this.currentUserId = userId;
+    this.tasks = structuredClone(seed);
+  }
+
+  setAuthContext(context: { userId?: string; clinicId?: string }): void {
+    this.currentUserId = context.userId?.trim() || 'clinician-dev';
+  }
+
   async list(filters: QueueFilters): Promise<{ items: ClinicianTaskSummary[]; nextCursor?: string }> {
     await randomDelay();
-    const items = seeded
+    const items = this.tasks
       .filter((d) => d.clinicId === filters.clinicId)
       .filter((d) => (filters.priority ? d.priority === filters.priority : true))
       .filter((d) => (filters.status ? d.status === filters.status : true))
@@ -122,7 +132,7 @@ export class MockQueueGateway implements QueueGateway {
           return !('assignee' in d) || !d.assignee;
         }
         if (filters.assignee === 'me') {
-          return ('assignee' in d && d.assignee === currentUserId) === true;
+          return ('assignee' in d && d.assignee === this.currentUserId) === true;
         }
         return true;
       })
@@ -134,26 +144,26 @@ export class MockQueueGateway implements QueueGateway {
 
   async getById(id: string): Promise<ClinicianTaskDetail> {
     await randomDelay();
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     return structuredClone(found);
   }
 
   async assign(id: string, assignee?: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
-    if (found.assignee && found.assignee !== currentUserId) {
+    if (found.assignee && found.assignee !== this.currentUserId) {
       throw new QueueGatewayError('conflict', 'Task already assigned', found.correlationId);
     }
-    (found as any).assignee = assignee ?? currentUserId;
+    (found as any).assignee = assignee ?? this.currentUserId;
     (found as any).status = 'IN_PROGRESS';
-    found.audit.push({ when: new Date().toISOString(), who: currentUserId, what: 'assign' });
+    found.audit.push({ when: new Date().toISOString(), who: this.currentUserId, what: 'assign' });
     return structuredClone(found);
   }
 
   async unassign(id: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     if (!found.assignee) {
@@ -161,21 +171,22 @@ export class MockQueueGateway implements QueueGateway {
     }
     delete (found as any).assignee;
     (found as any).status = 'NEW';
-    found.audit.push({ when: new Date().toISOString(), who: currentUserId, what: 'unassign' });
+    found.audit.push({ when: new Date().toISOString(), who: this.currentUserId, what: 'unassign' });
     return structuredClone(found);
   }
 
   async resolve(id: string, outcome: string, note?: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     (found as any).status = 'DONE';
+    (found as any).actionsAllowed = [];
     (found as any).audit.push({ when: new Date().toISOString(), who: 'me', what: `resolve:${outcome}${note ? ':' + note : ''}` });
     return structuredClone(found);
   }
 
   async scheduleCallback(id: string, whenIso: string, note?: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     (found as any).audit.push({ when: new Date().toISOString(), who: 'me', what: `schedule:${whenIso}${note ? ':' + note : ''}` });
@@ -184,7 +195,7 @@ export class MockQueueGateway implements QueueGateway {
   }
 
   async bookSlot(id: string, slotId: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     (found as any).audit.push({ when: new Date().toISOString(), who: 'me', what: `book:${slotId}` });
@@ -198,13 +209,13 @@ export class MockQueueGateway implements QueueGateway {
     outcome: 'booked' | 'no_time' | 'pharmacy_referral_sent',
     options?: { start?: string; end?: string; location?: string; serviceType?: string; notes?: string; patientId?: string },
   ): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
     const stamp = new Date().toISOString();
     const note = options?.notes ? `:${options.notes}` : '';
     const slotPart = options?.start && options?.end ? `:${options.start}->${options.end}` : '';
-    (found as any).audit.push({ when: stamp, who: currentUserId, what: `assisted:${outcome}${slotPart}${note}` });
+    (found as any).audit.push({ when: stamp, who: this.currentUserId, what: `assisted:${outcome}${slotPart}${note}` });
     if (outcome === 'booked' || outcome === 'pharmacy_referral_sent') {
       (found as any).status = 'DONE';
       (found as any).actionsAllowed = [];
@@ -215,18 +226,18 @@ export class MockQueueGateway implements QueueGateway {
   }
 
   async recordCall(id: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
-    found.audit.push({ when: new Date().toISOString(), who: currentUserId, what: 'call:initiated' });
+    found.audit.push({ when: new Date().toISOString(), who: this.currentUserId, what: 'call:initiated' });
     return structuredClone(found);
   }
 
   async escalate(id: string): Promise<ClinicianTaskDetail> {
-    const found = seeded.find((d) => d.id === id);
+    const found = this.tasks.find((d) => d.id === id);
     await randomDelay();
     if (!found) throw new QueueGatewayError('not_found', 'Task not found', 'mock');
-    found.audit.push({ when: new Date().toISOString(), who: currentUserId, what: 'escalate:manual' });
+    found.audit.push({ when: new Date().toISOString(), who: this.currentUserId, what: 'escalate:manual' });
     (found as any).status = 'IN_PROGRESS';
     return structuredClone(found);
   }

@@ -1,8 +1,19 @@
-import type { BookingModality, BookingQueryFilters, BookingSlot } from './booking';
-import type { ErrorEnvelope, PortalSubmission, SafetyDecision } from './types';
+import type {
+  BookingModality,
+  BookingQueryFilters,
+  BookingSlot,
+} from './booking';
+import type {
+  ErrorEnvelope,
+  GuidedHelpSessionRequest,
+  GuidedHelpSessionResponse,
+  PortalSubmission,
+  SafetyDecision,
+} from './types';
 import type { ErrorObject } from '@onecare/events/src/contracts/error-envelope';
 import { getJson, postJson, HttpError } from './dataClient';
 import { createCorrelationId, getSessionCorrelationId } from './telemetry';
+import { createHmacSignature } from './security';
 
 export interface SubmitIntakeOptions {
   signal?: AbortSignal;
@@ -42,11 +53,57 @@ const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
 const isKnownErrorCode = (code: string | undefined): code is ErrorObject['code'] =>
   (KNOWN_ERROR_CODES as readonly string[]).includes(code ?? '');
 
-const resolveOrchestratorBaseUrl = (override?: string): string =>
-  override ?? import.meta.env.VITE_ORCH_URL ?? 'http://localhost:3001';
+const normalizeBaseUrl = (candidate: string | undefined): string | null => {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    const isLocal =
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '::1';
+    if (url.protocol !== 'https:' && !(isLocal && url.protocol === 'http:')) {
+      return null;
+    }
+    url.hash = '';
+    const normalized = url.toString().replace(/\/+$/, '');
+    return normalized;
+  } catch {
+    return null;
+  }
+};
 
-const resolveBookingBaseUrl = (override?: string): string =>
-  override ?? import.meta.env.VITE_BOOKING_API_URL ?? import.meta.env.VITE_ORCH_URL ?? 'http://localhost:3001';
+const resolveOrchestratorBaseUrl = (override?: string): string => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const candidates = [
+    override,
+    env.VITE_ORCH_URL,
+    typeof window !== 'undefined' ? window.location.origin : undefined,
+    'http://localhost:3001'
+  ];
+  const resolved = candidates.map(normalizeBaseUrl).find((item) => item);
+  if (!resolved) {
+    throw new Error('Orchestrator base URL is not configured with a secure value.');
+  }
+  return resolved;
+};
+
+const resolveBookingBaseUrl = (override?: string): string => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const candidates = [
+    override,
+    env.VITE_BOOKING_API_URL,
+    env.VITE_ORCH_URL,
+    typeof window !== 'undefined' ? window.location.origin : undefined,
+    'http://localhost:3001'
+  ];
+  const resolved = candidates.map(normalizeBaseUrl).find((item) => item);
+  if (!resolved) {
+    throw new Error('Booking API base URL is not configured with a secure value.');
+  }
+  return resolved;
+};
 
 export interface FetchBookingSlotsOptions {
   signal?: AbortSignal;
@@ -90,6 +147,14 @@ const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
     return null;
   }
 
+  if (modality.canonical === 'unknown') {
+    return null;
+  }
+
+  const canonicalModality: BookingModality = modality.canonical;
+  const originalModality =
+    modality.raw !== canonicalModality && modality.raw.trim().length > 0 ? modality.raw.trim() : undefined;
+
   const location = typeof record.location === 'string' && record.location.trim().length > 0
     ? record.location.trim()
     : undefined;
@@ -98,8 +163,8 @@ const normalizeBookingSlot = (value: unknown): BookingSlot | null => {
     id,
     start,
     end,
-    modality: modality.canonical,
-    originalModality: modality.canonical === 'unknown' ? modality.raw : undefined,
+    modality: canonicalModality,
+    originalModality,
     serviceType: serviceType && serviceType.length > 0 ? serviceType : undefined,
     location
   };
@@ -281,6 +346,62 @@ const normalizeErrorEnvelopeFromHttpError = (error: HttpError): ErrorEnvelope =>
   return fallback;
 };
 
+const toHex = (buffer: ArrayBuffer): string =>
+  Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+
+const getSubtleCrypto = (): SubtleCrypto => {
+  const globalCrypto = typeof crypto !== 'undefined' ? crypto : undefined;
+  if (globalCrypto?.subtle) return globalCrypto.subtle;
+  const webcrypto = (globalCrypto as unknown as { webcrypto?: Crypto }).webcrypto;
+  if (webcrypto?.subtle) return webcrypto.subtle;
+  throw new Error('Subtle crypto unavailable');
+};
+
+const sha256Hex = async (value: string): Promise<string> => {
+  const encoder = new TextEncoder();
+  const digest = await getSubtleCrypto().digest('SHA-256', encoder.encode(value));
+  return toHex(digest);
+};
+
+type SubmissionAttachment = NonNullable<PortalSubmission['attachments']>[number];
+
+const deriveAttachmentDigest = async (attachment: SubmissionAttachment): Promise<string> => {
+  const contentType = typeof attachment?.contentType === 'string' ? attachment.contentType : '';
+  const url = typeof attachment?.url === 'string' ? attachment.url : '';
+  return sha256Hex(`${contentType}\u0000${url}`);
+};
+
+const deriveSafetyIdempotencyKey = async (submission: PortalSubmission): Promise<string> => {
+  const base = {
+    practiceId: submission.practiceId,
+    patientId: submission.patient?.id,
+    narrativeLength: submission.narrative?.length ?? 0,
+    channel: submission.channel,
+    attachmentsCount: Array.isArray(submission.attachments) ? submission.attachments.length : 0
+  };
+
+  const segments: string[] = [JSON.stringify(base)];
+
+  if (submission.narrative) {
+    segments.push(await sha256Hex(submission.narrative));
+  }
+
+  if (Array.isArray(submission.attachments) && submission.attachments.length > 0) {
+    const attachmentDigests = await Promise.all(submission.attachments.map(deriveAttachmentDigest));
+    attachmentDigests.sort();
+    segments.push(...attachmentDigests);
+  }
+
+  const actorId = typeof submission.patient?.id === 'string' ? submission.patient.id.trim() : '';
+  if (actorId) {
+    segments.push(`:${actorId}`);
+  }
+
+  return sha256Hex(segments.join(''));
+};
+
 export interface SubmitIntakeResult {
   decision: SafetyDecision;
   correlationId?: string;
@@ -293,6 +414,12 @@ export const submitIntake = async (
   const baseUrl = resolveOrchestratorBaseUrl(options.baseUrl);
   const correlationId = createCorrelationId();
   const requestId = createCorrelationId();
+  const idempotencyKey = await deriveSafetyIdempotencyKey(payload);
+  const patientId = typeof payload.patient?.id === 'string' ? payload.patient.id.trim() : '';
+  const fingerprint = `${requestId}:${idempotencyKey}`;
+  const authHeaders = patientId
+    ? await buildAuthHeaders(fingerprint, { type: 'patient', id: patientId }, ['patient:submit'])
+    : {};
 
   try {
     const { data, response } = await postJson<SafetyDecision>('safety-check', {
@@ -302,7 +429,11 @@ export const submitIntake = async (
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       correlationId,
       requestId,
-      headers: options.locale ? { 'accept-language': options.locale } : undefined,
+      headers: {
+        ...(options.locale ? { 'accept-language': options.locale } : {}),
+        'x-idempotency-key': idempotencyKey,
+        ...authHeaders
+      },
       retry: options.retry,
       onRetry: options.onRetry
         ? ({ attempt, maxRetries }) => options.onRetry?.({ attempt, maxRetries, correlationId })
@@ -324,6 +455,66 @@ export const submitIntake = async (
       const envelope = normalizeErrorEnvelopeFromHttpError(error);
       const enhanced = Object.assign(new Error(envelope.error.message ?? 'Request failed'), {
         envelope
+      });
+      throw enhanced;
+    }
+    throw error;
+  }
+};
+
+export interface GuidedHelpStepOptions {
+  signal?: AbortSignal;
+  baseUrl?: string;
+  timeoutMs?: number;
+  locale?: string;
+}
+
+const deriveGuidedHelpIdempotencyKey = (payload: GuidedHelpSessionRequest): string => {
+  const raw = `${payload.practiceId}:${payload.patientId}:${payload.sessionId}:${payload.stepId}`;
+  return raw.slice(0, 120);
+};
+
+export const requestGuidedHelpStep = async (
+  payload: GuidedHelpSessionRequest,
+  options: GuidedHelpStepOptions = {},
+): Promise<{ data: GuidedHelpSessionResponse; correlationId?: string }> => {
+  const baseUrl = resolveOrchestratorBaseUrl(options.baseUrl);
+  const correlationId = createCorrelationId();
+  const requestId = createCorrelationId();
+  const idemKey = deriveGuidedHelpIdempotencyKey(payload);
+  const fingerprint = `${requestId}:guidedhelp:${payload.sessionId}:${payload.stepId}`;
+  const authHeaders = await buildAuthHeaders(fingerprint, { type: 'patient', id: payload.patientId }, [
+    'patient:guided_help:write'
+  ]);
+
+  try {
+    const { data, response } = await postJson<GuidedHelpSessionResponse>('guided-help/step', {
+      baseUrl,
+      body: payload,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      correlationId,
+      requestId,
+      headers: {
+        ...(options.locale ? { 'accept-language': options.locale } : {}),
+        'x-idempotency-key': idemKey,
+        ...authHeaders
+      },
+      retry: { maxRetries: 1, baseDelayMs: 200, jitter: true },
+    });
+
+    const responseCorrelation = response.headers.get('x-correlation-id') ?? correlationId;
+    return { data, correlationId: responseCorrelation };
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError') {
+      const abortError = error as Error & { __clientCancelled?: boolean };
+      abortError.__clientCancelled = true;
+      throw abortError;
+    }
+    if (error instanceof HttpError) {
+      const envelope = normalizeErrorEnvelopeFromHttpError(error);
+      const enhanced = Object.assign(new Error(envelope.error.message ?? 'Request failed'), {
+        envelope,
       });
       throw enhanced;
     }
@@ -395,6 +586,31 @@ const normalizeBookingApiError = (error: HttpError): BookingApiError => {
   return bookingError;
 };
 
+const resolveSharedSecret = (): string | null => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const raw = env.VITE_SECURITY_SHARED_SECRET;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const buildAuthHeaders = async (
+  fingerprint: string,
+  actor: { type: 'patient'; id: string },
+  scopes: string[],
+): Promise<Record<string, string>> => {
+  const secret = resolveSharedSecret();
+  if (!secret) return {};
+  const token = await createHmacSignature(fingerprint, secret);
+  if (!token) return {};
+  return {
+    Authorization: `Bearer ${token}`,
+    'x-actor-type': actor.type,
+    'x-actor-id': actor.id,
+    'x-auth-scope': scopes.join(' ')
+  };
+};
+
 export const confirmBooking = async (
   payload: ConfirmBookingPayload,
   options: ConfirmBookingOptions
@@ -402,6 +618,10 @@ export const confirmBooking = async (
   const baseUrl = resolveBookingBaseUrl(options.baseUrl);
   const correlationId = options.correlationId ?? createCorrelationId();
   const requestId = createCorrelationId();
+  const fingerprint = `${requestId}:booking:confirm:${payload.slotId}:${payload.patientId}`;
+  const authHeaders = await buildAuthHeaders(fingerprint, { type: 'patient', id: payload.patientId }, [
+    'patient:booking:confirm'
+  ]);
 
   try {
     const { data, response } = await postJson<unknown>('booking/confirm', {
@@ -412,7 +632,8 @@ export const confirmBooking = async (
       correlationId,
       requestId,
       headers: {
-        'Idempotency-Key': options.idempotencyKey
+        'Idempotency-Key': options.idempotencyKey,
+        ...authHeaders
       },
       retry: { maxRetries: 1, baseDelayMs: 300, jitter: true }
     });

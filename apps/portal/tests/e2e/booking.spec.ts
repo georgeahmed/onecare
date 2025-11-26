@@ -19,6 +19,8 @@ const MOCK_CONFIRMATION = {
 };
 
 const BOOKING_PATH = '/booking';
+const enableE2E = process.env.PORTAL_E2E_ENABLE === 'true' && process.env.PORTAL_E2E_SKIP !== 'true';
+const describeIfEnabled = enableE2E ? test.describe : test.describe.skip;
 
 const interceptSlots = async (page) => {
   await page.route('**/booking/slots**', (route) => {
@@ -62,9 +64,20 @@ const interceptConflictOnce = async (page) => {
 };
 
 const selectFirstSlot = async (page) => {
-  const slot = page.getByRole('option').first();
+  const listbox = page.getByRole('listbox', { name: /available booking slots/i });
+  await expect(listbox).toBeVisible();
+  const slot = listbox.getByRole('option').first();
   await expect(slot).toBeVisible();
   await slot.click();
+};
+
+const seedPatientContext = async (page) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'onecare.portal.patient',
+      JSON.stringify({ id: 'patient-e2e', updatedAt: Date.now() })
+    );
+  });
 };
 
 const confirmBooking = async (page) => {
@@ -77,11 +90,12 @@ const expectSuccessScreen = async (page) => {
   await expect(page.getByText(MOCK_CONFIRMATION.appointmentId)).toBeVisible();
 };
 
-test.describe('Booking E2E', () => {
+describeIfEnabled('Booking E2E', () => {
   test('happy path', async ({ page }) => {
     await interceptSlots(page);
     await interceptConfirm(page);
 
+    await seedPatientContext(page);
     await page.goto(BOOKING_PATH);
     await selectFirstSlot(page);
     await confirmBooking(page);
@@ -93,6 +107,7 @@ test.describe('Booking E2E', () => {
     await interceptConflictOnce(page);
     await interceptConfirm(page);
 
+    await seedPatientContext(page);
     await page.goto(BOOKING_PATH);
     await selectFirstSlot(page);
     await confirmBooking(page);

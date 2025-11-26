@@ -19,6 +19,8 @@ const mappings = [
   { in: 'common/error-envelope.json', out: 'packages/events/src/contracts/error-envelope.ts' },
   { in: 'common/dlq-event.json', out: 'packages/events/src/contracts/dlq-event.ts' },
   { in: 'ingest/portal-submission.json', out: 'packages/events/src/contracts/ingest.ts' },
+  { in: 'ingest/guided-help-session.request.json', out: 'packages/events/src/contracts/guided-help-session-request.ts' },
+  { in: 'ingest/guided-help-session.response.json', out: 'packages/events/src/contracts/guided-help-session-response.ts' },
   { in: 'triage/triage-input.json', out: 'packages/events/src/contracts/triage.ts' },
   { in: 'triage/triage-decision.json', out: 'packages/events/src/contracts/triage-decision.ts' },
   { in: 'booking/booking-search-request.json', out: 'packages/events/src/contracts/booking.ts' },

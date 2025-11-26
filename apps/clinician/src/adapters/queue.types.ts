@@ -47,6 +47,8 @@ export interface QueueGateway {
     id: string,
     options?: { windowStart?: string; windowEnd?: string; location?: string; serviceType?: string },
   ): Promise<RecommendedWindow[]>;
+
+  setAuthContext(context: QueueAuthContext): void;
 }
 
 export interface RecommendedWindow {
@@ -54,4 +56,10 @@ export interface RecommendedWindow {
   end: string;
   location?: string;
   serviceType?: string;
+}
+
+export interface QueueAuthContext {
+  userId?: string;
+  token?: string;
+  clinicId?: string;
 }

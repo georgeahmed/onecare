@@ -19,7 +19,7 @@ const detail: ClinicianTaskDetail = {
   createdAt: new Date().toISOString(),
   narrative: 'Pain rated 9/10',
   attachments: [],
-  actionsAllowed: ['CALL', 'SCHEDULE', 'RESOLVE', 'ESCALATE'],
+  actionsAllowed: ['CALL', 'SCHEDULE', 'BOOK', 'RESOLVE', 'ESCALATE'],
   audit: [],
   correlationId: 'corr-xyz'
 };

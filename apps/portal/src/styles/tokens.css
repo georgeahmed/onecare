@@ -1,9 +1,9 @@
 :root {
-  --color-background: #f6f8fb;
+  --color-background: #eef3fb;
   --color-surface: #ffffff;
-  --color-surface-subtle: #f1f5f9;
-  --color-border: #cbd5f5;
-  --color-border-strong: #94a3b8;
+  --color-surface-subtle: #e7eefc;
+  --color-border: #c5d4f2;
+  --color-border-strong: #7b91b3;
   --color-text-primary: #1f2937;
   --color-text-secondary: #475569;
   --color-link: #1d4ed8;
@@ -16,7 +16,8 @@
   --color-focus: #0ea5e9;
   --focus-outline: 3px solid var(--color-focus);
 
-  --font-family-base: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-family-base: 'DM Sans', 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-family-display: 'Space Grotesk', 'DM Sans', 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --font-family-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.875rem;
@@ -65,6 +66,7 @@ html.theme-dark {
   --color-muted: #1f2a44;
   --color-focus: #38bdf8;
   --focus-outline: 3px solid var(--color-focus);
+  --font-family-display: 'Space Grotesk', 'DM Sans', 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
 }
 
 html.theme-high-contrast {
@@ -83,4 +85,5 @@ html.theme-high-contrast {
   --focus-outline: 3px solid var(--color-focus);
   --shadow-sm: 0 0 0 2px rgba(250, 204, 21, 0.4);
   --shadow-md: 0 0 0 4px rgba(250, 204, 21, 0.45);
+  --font-family-display: 'Space Grotesk', 'DM Sans', 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
 }

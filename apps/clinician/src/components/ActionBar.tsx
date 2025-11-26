@@ -9,7 +9,7 @@ type ActionInvokeResult = void | boolean | { success?: boolean; message?: string
 const ACTION_CAPABILITIES: Record<ActionKind, readonly string[]> = {
   call: ['CALL'],
   schedule: ['SCHEDULE'],
-  book: ['BOOK', 'SCHEDULE'],
+  book: ['BOOK'],
   escalate: ['ESCALATE'],
   resolve: ['RESOLVE'],
 } as const;

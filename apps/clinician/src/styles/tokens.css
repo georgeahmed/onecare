@@ -1,7 +1,7 @@
 :root {
   /* Typography */
-  --font-family-base: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-  --font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  --font-family-base: 'Manrope', 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'Space Grotesk', ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   --font-size-root: 16px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -9,22 +9,22 @@
   --line-height-base: 1.55;
 
   /* Color palette */
-  --color-background: #f2f5fb;
+  --color-background: #f6fbff;
   --color-surface: #ffffff;
-  --color-surface-subtle: #f8faff;
-  --color-muted: #e3e9fb;
-  --color-border: #cbd5f5;
-  --color-border-strong: #94a3f4;
+  --color-surface-subtle: #eef5ff;
+  --color-muted: #dfeaf7;
+  --color-border: #d4e3f4;
+  --color-border-strong: #0ea5e9;
   --color-text-primary: #0f172a;
-  --color-text-secondary: #4b5563;
-  --color-link: #4f46e5;
-  --color-link-hover: #4338ca;
-  --color-focus: #2563eb;
-  --color-info: #2563eb;
+  --color-text-secondary: #445168;
+  --color-link: #0ea5e9;
+  --color-link-hover: #0284c7;
+  --color-focus: #0ea5e9;
+  --color-info: #0f9d58;
   --color-success: #16a34a;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
-  --overlay-backdrop: rgba(15, 23, 42, 0.45);
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --overlay-backdrop: rgba(15, 118, 110, 0.55);
   --focus-outline: 3px solid var(--color-focus);
 
   /* Spacing scale */
@@ -52,21 +52,21 @@
 }
 
 html.theme-high-contrast {
-  --color-background: #0b1120;
-  --color-surface: #111827;
-  --color-surface-subtle: #1f2937;
-  --color-muted: #1f2937;
-  --color-border: #f8fafc;
-  --color-border-strong: #facc15;
+  --color-background: #0b1724;
+  --color-surface: #0f1f2f;
+  --color-surface-subtle: #12273b;
+  --color-muted: #0f1f2f;
+  --color-border: #e2f3ff;
+  --color-border-strong: #fcd34d;
   --color-text-primary: #ffffff;
-  --color-text-secondary: #e2e8f0;
-  --color-link: #38bdf8;
-  --color-link-hover: #facc15;
-  --color-focus: #facc15;
-  --color-info: #38bdf8;
-  --color-success: #4ade80;
-  --color-warning: #facc15;
+  --color-text-secondary: #dbeafe;
+  --color-link: #67e8f9;
+  --color-link-hover: #fcd34d;
+  --color-focus: #fcd34d;
+  --color-info: #67e8f9;
+  --color-success: #22c55e;
+  --color-warning: #fcd34d;
   --color-danger: #f87171;
-  --overlay-backdrop: rgba(8, 47, 73, 0.7);
+  --overlay-backdrop: rgba(8, 47, 73, 0.75);
   --focus-outline: 3px solid var(--color-focus);
 }

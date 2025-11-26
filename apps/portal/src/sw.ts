@@ -1,6 +1,10 @@
 /// <reference lib="webworker" />
 
-import { OFFLINE_QUEUE_BROADCAST_CHANNEL, OFFLINE_QUEUE_SYNC_TAG } from './lib/offlineQueue.constants';
+import {
+  OFFLINE_QUEUE_BROADCAST_CHANNEL,
+  OFFLINE_QUEUE_SYNC_TAG,
+  OFFLINE_QUEUE_TTL_MS
+} from './lib/offlineQueue.constants';
 import type { OfflineBookingJob } from './lib/offlineQueue.types';
 import { confirmBooking } from './lib/api';
 import { persistQueueSnapshotToDb, readQueueSnapshotFromDb } from './lib/offlineStorage';
@@ -12,8 +16,18 @@ const CACHE_PREFIX = 'onecare-portal';
 const CACHE_VERSION = 'v20250214';
 const SHELL_CACHE = `${CACHE_PREFIX}-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`;
-const SHELL_ASSETS: readonly string[] = ['/', '/index.html'];
-const OFFLINE_FALLBACK = '/index.html';
+const SCOPE_PATH = (() => {
+  try {
+    const pathname = new URL(self.registration.scope).pathname;
+    const trimmed = pathname.endsWith('/') && pathname !== '/' ? pathname.slice(0, -1) : pathname;
+    return trimmed || '';
+  } catch {
+    return '';
+  }
+})();
+const SHELL_BASE = SCOPE_PATH || '/';
+const SHELL_ASSETS: readonly string[] = [SHELL_BASE, `${SCOPE_PATH || ''}/index.html`];
+const OFFLINE_FALLBACK = `${SCOPE_PATH || ''}/index.html`;
 const BASE_BACKOFF_MS = 1_500;
 const MAX_BACKOFF_MS = 30_000;
 const JITTER_MAX_MS = 750;
@@ -37,16 +51,26 @@ const broadcastChannel =
 const isNavigationRequest = (request: Request): boolean =>
   request.mode === 'navigate' || (request.method === 'GET' && request.headers.get('accept')?.includes('text/html') === true);
 
-const shouldCacheRuntimeAsset = (url: URL): boolean =>
-  url.origin === self.location.origin &&
-  (url.pathname.startsWith('/assets/') ||
-    url.pathname.endsWith('.css') ||
-    url.pathname.endsWith('.js') ||
-    url.pathname.endsWith('.woff2'));
+const shouldCacheRuntimeAsset = (url: URL): boolean => {
+  if (url.origin !== self.location.origin) {
+    return false;
+  }
+  const path = url.pathname;
+  const scopePrefix = SCOPE_PATH && SCOPE_PATH !== '/' ? `${SCOPE_PATH}/` : '/';
+  const assetsPrefix = `${scopePrefix}assets/`;
+  if (!(path === `${scopePrefix}index.html` || path.startsWith(assetsPrefix))) {
+    return false;
+  }
+  if (path.startsWith(assetsPrefix)) {
+    return path.endsWith('.js') || path.endsWith('.css') || path.endsWith('.woff2');
+  }
+  return false;
+};
 
 const cacheShellAssets = async (): Promise<void> => {
   const cache = await caches.open(SHELL_CACHE);
-  await cache.addAll(SHELL_ASSETS);
+  const requests = SHELL_ASSETS.map((asset) => new Request(asset, { cache: 'reload', credentials: 'omit' }));
+  await cache.addAll(requests);
 };
 
 const cleanOldCaches = async (): Promise<void> => {
@@ -127,14 +151,23 @@ const scheduleBackgroundSync = async (): Promise<void> => {
   }
 };
 
+const isExpired = (createdAt: number | undefined): boolean =>
+  typeof createdAt === 'number' && Number.isFinite(createdAt)
+    ? Date.now() - createdAt > OFFLINE_QUEUE_TTL_MS
+    : true;
+
 const processOfflineQueue = async (): Promise<void> => {
   if (!isOnline()) {
     await scheduleBackgroundSync();
     return;
   }
 
-  const snapshot = await readQueueSnapshotFromDb();
+  const rawSnapshot = await readQueueSnapshotFromDb();
+  const snapshot = rawSnapshot.filter((job) => !isExpired(job.createdAt));
   if (snapshot.length === 0) {
+    if (rawSnapshot.length > 0) {
+      await persistQueueSnapshotToDb([]);
+    }
     return;
   }
 
@@ -142,7 +175,7 @@ const processOfflineQueue = async (): Promise<void> => {
     .map((job) => ({ ...job, payload: { ...job.payload }, slot: { ...job.slot } }))
     .sort((a, b) => a.nextAttemptAt - b.nextAttemptAt);
 
-  let updated = false;
+  let updated = rawSnapshot.length !== snapshot.length;
 
   for (const job of [...workingQueue]) {
     if (job.nextAttemptAt > Date.now()) {
@@ -234,10 +267,17 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         try {
-          const response = await fetch(request);
-          const cache = await caches.open(SHELL_CACHE);
-          void cache.put(OFFLINE_FALLBACK, response.clone());
-          return response;
+          const navigationRequest = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            mode: request.mode,
+            redirect: request.redirect,
+            referrer: request.referrer,
+            referrerPolicy: request.referrerPolicy,
+            cache: 'no-store',
+            credentials: 'omit'
+          });
+          return await fetch(navigationRequest);
         } catch {
           return respondWithOfflineFallback(request);
         }

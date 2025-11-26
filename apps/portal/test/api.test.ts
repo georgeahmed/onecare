@@ -1,8 +1,14 @@
 /// <reference types="vitest/globals" />
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { webcrypto } from 'crypto';
 import * as dataClient from '../src/lib/dataClient';
-import { fetchBookingSlots, confirmBooking } from '../src/lib/api';
+import { fetchBookingSlots, confirmBooking, submitIntake } from '../src/lib/api';
+import { createHmacSignature } from '../src/lib/security';
+
+if (!globalThis.crypto?.subtle) {
+  Object.defineProperty(globalThis, 'crypto', { value: webcrypto as unknown as Crypto, configurable: true });
+}
 
 describe('portal api helpers', () => {
   beforeEach(() => {
@@ -101,5 +107,49 @@ describe('portal api helpers', () => {
     expect(calls).toHaveLength(1);
     const [, options] = calls[0] ?? [];
     expect((options as { headers?: Record<string, string> }).headers?.['Idempotency-Key']).toBe('key-123');
+  });
+
+  it('signs safety-check requests with idempotency and actor headers', async () => {
+    const postJsonMock = vi.mocked(dataClient.postJson);
+    postJsonMock.mockResolvedValue({
+      data: { outcome: 'SAFE_TO_CONTINUE' },
+      response: {
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'x-correlation-id' ? 'resp-correlation' : null),
+        },
+      } as unknown as Response,
+    });
+
+    const originalEnv = (import.meta as unknown as { env?: Record<string, string> }).env;
+    const updatedEnv = {
+      ...(originalEnv ?? {}),
+      VITE_SECURITY_SHARED_SECRET: 'dev-shared-secret',
+    };
+    (import.meta as unknown as { env?: Record<string, string> }).env = updatedEnv;
+
+    try {
+      const payload = {
+        practiceId: 'demo',
+        patient: { id: 'patient-1' },
+        narrative: 'Headache and fever',
+        channel: 'web' as const,
+      };
+
+      await submitIntake(payload);
+      const [, options] = postJsonMock.mock.calls[0] ?? [];
+      const headers = (options as { headers?: Record<string, string> }).headers ?? {};
+      const requestId = (options as { requestId?: string }).requestId ?? '';
+      const idempotencyKey = headers['x-idempotency-key'] ?? '';
+
+      expect(idempotencyKey).toBeTruthy();
+      expect(headers['x-actor-type']).toBe('patient');
+      expect(headers['x-actor-id']).toBe(payload.patient.id);
+
+      const fingerprint = `${requestId}:${idempotencyKey}`;
+      const expectedToken = await createHmacSignature(fingerprint, 'dev-shared-secret');
+      expect(headers.Authorization).toBe(`Bearer ${expectedToken}`);
+    } finally {
+      (import.meta as unknown as { env?: Record<string, string> }).env = originalEnv;
+    }
   });
 });

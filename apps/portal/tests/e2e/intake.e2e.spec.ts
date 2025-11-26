@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-const enableE2E = process.env.PORTAL_E2E_ENABLE === 'true';
-const skipIfDisabled = enableE2E ? test : test.skip;
+const enableE2E = process.env.PORTAL_E2E_ENABLE === 'true' && process.env.PORTAL_E2E_SKIP !== 'true';
+const describeIfEnabled = enableE2E ? test.describe : test.describe.skip;
 
-skipIfDisabled.describe('Portal Intake flow', () => {
+describeIfEnabled('Portal Intake flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/', { waitUntil: 'networkidle' });
   });

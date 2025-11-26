@@ -11,7 +11,7 @@ const demoSlot: BookingSlot = {
   start: '2025-01-01T09:00:00.000Z',
   end: '2025-01-01T09:30:00.000Z',
   modality: 'phone',
-  location: 'OneCare Health'
+  location: 'Vecells Health'
 };
 
 describe('Booking confirmation', () => {

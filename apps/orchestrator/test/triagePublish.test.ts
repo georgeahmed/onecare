@@ -10,6 +10,7 @@ import { setConsentFixtureEnv } from './consentFixture';
 import { resetSecurityServices } from '../src/adapters/security';
 import { deriveIdempotencyKey } from '../src/application/idempotency';
 import { safePatientReference } from '../src/support/privacy';
+import { PRACTICE_ID } from './practice';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -24,7 +25,7 @@ vi.mock('../src/adapters/services/safetyGate', async () => {
 });
 
 const submission: PortalSubmission = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'patient-123' },
   narrative: 'non emergency narrative',
   channel: 'web' as const,

@@ -25,6 +25,7 @@ import { useLocale, supportedLocales } from '../i18n';
 import InterpreterPreferences, { type InterpreterPreferencesValue } from './InterpreterPreferences';
 import { useAccessibilityConfig } from '../hooks/useAccessibilityConfig';
 import Button from './ui/Button';
+import GuidedHelpPanel from './GuidedHelpPanel';
 import {
   DEFAULT_WIZARD_META,
   createIntakeWizardSteps,
@@ -46,6 +47,26 @@ const MAX_ATTACHMENTS = 10;
 const ALLOWED_ATTACHMENT_TYPES = /^(application\/pdf|image\/[A-Za-z0-9.+-]+|audio\/[A-Za-z0-9.+-]+)$/i;
 const MAX_INTERPRETER_LANGUAGES = 3;
 const MAX_INTERPRETER_NOTES_LENGTH = 300;
+const ATTACHMENT_HOST_ALLOWLIST = (() => {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const raw = env.VITE_ATTACHMENT_HOSTS ?? env.VITE_ALLOWED_ATTACHMENT_HOSTS;
+  const envHosts = (raw ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  const currentOriginHost =
+    typeof window !== 'undefined' && window.location?.origin
+      ? (() => {
+          try {
+            return new URL(window.location.origin).host;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  const hosts = [...envHosts, ...(currentOriginHost ? [currentOriginHost] : [])];
+  return Array.from(new Set(hosts));
+})();
 const KNOWN_ERROR_CODES: readonly ErrorObject['code'][] = [
   'unauthorized',
   'forbidden',
@@ -99,6 +120,14 @@ const sanitizeAttachments = (
     }
     const safeUrl = ensureHttpsUrl(rawUrl);
     if (!safeUrl) {
+      return acc;
+    }
+    try {
+      const url = new URL(safeUrl);
+      if (ATTACHMENT_HOST_ALLOWLIST.length > 0 && !ATTACHMENT_HOST_ALLOWLIST.includes(url.host)) {
+        return acc;
+      }
+    } catch {
       return acc;
     }
     if (acc.some((existing) => existing.url === safeUrl)) {
@@ -208,6 +237,7 @@ export const sanitizeInterpreterPreferences = (
 
 const INTAKE_DRAFT_STORAGE_KEY = 'onecare.portal.intakeDraft';
 const AUTOSAVE_DEBOUNCE_MS = 750;
+const INTAKE_DRAFT_TTL_MS = 4 * 60 * 60 * 1000;
 const WIZARD_STEP_IDS: IntakeWizardStepId[] = [
   'practice',
   'patient',
@@ -221,6 +251,22 @@ type IntakeDraftEnvelope = {
   updatedAt: number;
   stepId?: IntakeWizardStepId;
   wizard?: IntakeWizardMeta;
+};
+
+const getDraftStorage = (): Storage | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    if (window.sessionStorage) {
+      return window.sessionStorage;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -282,11 +328,10 @@ const coercePortalSubmission = (candidate: unknown): PortalSubmission | null => 
 };
 
 const readDraftEnvelope = (): IntakeDraftEnvelope | null => {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return null;
-  }
+  const storage = getDraftStorage();
+  if (!storage) return null;
   try {
-    const raw = window.localStorage.getItem(INTAKE_DRAFT_STORAGE_KEY);
+    const raw = storage.getItem(INTAKE_DRAFT_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as {
       submission?: unknown;
@@ -295,6 +340,10 @@ const readDraftEnvelope = (): IntakeDraftEnvelope | null => {
       wizard?: unknown;
     };
     if (!parsed.submission || typeof parsed.updatedAt !== 'number') {
+      return null;
+    }
+    if (Date.now() - parsed.updatedAt > INTAKE_DRAFT_TTL_MS) {
+      storage.removeItem(INTAKE_DRAFT_STORAGE_KEY);
       return null;
     }
     const submission = coercePortalSubmission(parsed.submission);
@@ -310,11 +359,10 @@ const readDraftEnvelope = (): IntakeDraftEnvelope | null => {
 };
 
 const writeDraftEnvelope = (envelope: IntakeDraftEnvelope): void => {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
+  const storage = getDraftStorage();
+  if (!storage) return;
   try {
-    window.localStorage.setItem(
+    storage.setItem(
       INTAKE_DRAFT_STORAGE_KEY,
       JSON.stringify({
         ...envelope,
@@ -327,11 +375,10 @@ const writeDraftEnvelope = (envelope: IntakeDraftEnvelope): void => {
 };
 
 const clearDraftEnvelope = (): void => {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return;
-  }
+  const storage = getDraftStorage();
+  if (!storage) return;
   try {
-    window.localStorage.removeItem(INTAKE_DRAFT_STORAGE_KEY);
+    storage.removeItem(INTAKE_DRAFT_STORAGE_KEY);
   } catch {
     // ignore failures
   }
@@ -1261,14 +1308,56 @@ const IntakeForm = () => {
       ) : null}
 
       {currentStep?.schema ? (
-        <SchemaForm
-          key={`${formResetKey}-${currentStep.id}`}
-          ref={schemaFormRef}
-          schema={currentStep.schema}
-          value={formData}
-          onChange={(next) => setFormData(next)}
-          onErrorsChange={setFormErrors}
-        />
+        currentStep.id === 'details' ? (
+          <div className="wizard-details-layout">
+            <div className="wizard-details-layout__form">
+              <SchemaForm
+                key={`${formResetKey}-${currentStep.id}`}
+                ref={schemaFormRef}
+                schema={currentStep.schema}
+                value={formData}
+                onChange={(next) => setFormData(next)}
+                onErrorsChange={setFormErrors}
+              />
+            </div>
+            <div className="wizard-details-layout__guided-help">
+              <GuidedHelpPanel
+                practiceId={formData.practiceId}
+                patientId={sanitizedPatientId}
+                narrative={formData.narrative ?? ''}
+                locale={formData.patient.locale ?? locale}
+                onUseSummary={(summary, mode) => {
+                  setFormData((prev) => {
+                    const current = prev.narrative ?? '';
+                    if (!current || mode === 'replace') {
+                      return { ...prev, narrative: summary };
+                    }
+                    const separator = current.endsWith('\n') ? '\n' : '\n\n';
+                    return { ...prev, narrative: `${current}${separator}${summary}` };
+                  });
+                }}
+                onEditSummary={(summary) => {
+                  setFormData((prev) => ({ ...prev, narrative: summary }));
+                  if (typeof document !== 'undefined') {
+                    const field = document.getElementById('schema-field-narrative');
+                    if (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) {
+                      field.focus();
+                    }
+                  }
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <SchemaForm
+            key={`${formResetKey}-${currentStep.id}`}
+            ref={schemaFormRef}
+            schema={currentStep.schema}
+            value={formData}
+            onChange={(next) => setFormData(next)}
+            onErrorsChange={setFormErrors}
+          />
+        )
       ) : (
         renderReview()
       )}

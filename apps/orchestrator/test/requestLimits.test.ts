@@ -14,6 +14,7 @@ import {
 } from '../src/index';
 import { resetSecurityServices } from '../src/adapters/security';
 import { setConsentFixtureEnv } from './consentFixture';
+import { PRACTICE_ID } from './practice';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -242,7 +243,7 @@ describe('request limits', () => {
   it('rejects large payloads when MAX_BODY_BYTES is invalid', async () => {
     process.env.MAX_BODY_BYTES = 'not-a-number';
     const submission: PortalSubmission = {
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-123' },
       narrative: 'x'.repeat(300_000),
       channel: 'web' as const,
@@ -259,7 +260,7 @@ describe('request limits', () => {
   it('accepts larger payloads when size suffix is provided', async () => {
     process.env.MAX_BODY_BYTES = '512k';
     const submission: PortalSubmission = {
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-123' },
       narrative: 'x'.repeat(400_000),
       channel: 'web' as const,
@@ -274,7 +275,7 @@ describe('request limits', () => {
 
   it('enforces pre-auth rate limiting', async () => {
     const buildSubmission = (suffix: number): PortalSubmission => ({
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-rate' },
       narrative: `check rate limiter ${suffix}`,
       channel: 'web' as const,
@@ -296,7 +297,7 @@ describe('request limits', () => {
   it('rejects unsupported content-type before reading body', async () => {
     process.env.MAX_BODY_BYTES = '1024';
     const submission: PortalSubmission = {
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-unsupported' },
       narrative: 'x'.repeat(200_000),
       channel: 'web' as const,
@@ -311,7 +312,7 @@ describe('request limits', () => {
 
   it('rejects requests containing control characters in headers', async () => {
     const submission: PortalSubmission = {
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-headers' },
       narrative: 'invalid header test',
       channel: 'web' as const,

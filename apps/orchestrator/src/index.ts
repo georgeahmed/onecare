@@ -6,7 +6,9 @@ import { isIP } from 'node:net';
 import { analyzePortalSubmission } from './adapters/services/safetyGate';
 import { errorEnvelope, mapErrorToStatus, redact } from './application/error';
 import { callWithGuard } from './adapters/services/callWithGuard';
-import { validatePortalSubmission } from './application/validator';
+import { callGuidedHelpLLM } from './adapters/services/guidedHelpLLM';
+import { validatePortalSubmission, validateGuidedHelpSessionRequest } from './application/validator';
+import { buildGuidedHelpStubResponse } from './application/guidedHelp.stub';
 import { getBus, getNatsBusHealth, markNatsBusConnected, parseNatsServerConfig, withMessageGuards } from '@onecare/bus';
 import type { MessageBus } from '@onecare/bus';
 import {
@@ -19,6 +21,8 @@ import {
   type ResolveRequest,
   type ScheduleCallbackRequest,
   type BookSlotRequest,
+  type GuidedHelpSessionRequest,
+  type GuidedHelpSessionResponse,
 } from '@onecare/events';
 import { validate } from '@onecare/domain';
 import {
@@ -31,7 +35,12 @@ import {
   getCounterRecords,
   getHistogramRecords,
 } from '@onecare/observability';
-import { deriveIdempotencyKey, releaseIdempotency, InMemoryIdempotencyStore } from './application/idempotency';
+import {
+  deriveIdempotencyKey,
+  releaseIdempotency,
+  reserveIdempotency,
+  InMemoryIdempotencyStore,
+} from './application/idempotency';
 import { ErrorCode } from './application/error';
 import { connect, type ConnectionOptions, type NatsConnection } from 'nats';
 import type { AuthContext } from '@onecare/security';
@@ -89,13 +98,35 @@ const BUS_RECONNECT_DELAY_BUCKETS = [10, 50, 100, 200, 400, 800, 1_500, 3_000, 5
 const httpServerDuration = createHistogram('http_server_duration_ms');
 const httpServerRequests = createCounter('http_server_requests_total');
 const httpServerErrors = createCounter('http_server_errors_total');
+const guidedHelpSessionsStarted = createCounter('guided_help_sessions_started_total');
+const guidedHelpStepsTotal = createCounter('guided_help_steps_total');
+const guidedHelpNeedsStep6Total = createCounter('guided_help_needs_step6_total');
+const guidedHelpRedFlagTotal = createCounter('guided_help_red_flag_total');
 const ORCHESTRATOR_SERVICE_LABEL = 'orchestrator';
+const GUIDED_HELP_SCOPE = 'guided_help:write';
+const GUIDED_HELP_RESOURCES = ['GuidedHelpSession'] as const;
+type GuidedHelpField = 'onset' | 'location' | 'severity' | 'otherSymptoms';
+type GuidedHelpStepId = GuidedHelpSessionRequest['stepId'];
+const GUIDED_HELP_FIELD_ORDER: GuidedHelpField[] = ['onset', 'location', 'severity', 'otherSymptoms'];
+const guidedHelpCache = new Map<
+  string,
+  {
+    response: GuidedHelpSessionResponse;
+    expiresAt: number;
+  }
+>();
+const guidedHelpStepTracker = new Map<string, GuidedHelpStepId>();
 type CorsConfig =
   | { mode: 'disabled' }
   | { mode: 'wildcard' }
   | { mode: 'allowlist'; origins: Set<string> };
 
-const DEFAULT_DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'] as const;
+const DEFAULT_DEV_CORS_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+] as const;
 
 const corsConfig: CorsConfig = (() => {
   const raw = process.env.ORCHESTRATOR_CORS_ORIGINS;
@@ -159,6 +190,7 @@ function applyCorsHeaders(res: http.ServerResponse, origin: string): void {
     'Access-Control-Expose-Headers',
     'x-correlation-id,x-request-id'
   );
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
 }
 
 function handleCorsPreflight(
@@ -230,6 +262,172 @@ function resolvePracticeId(): string {
   if (envValue) return envValue;
   if (process.env.NODE_ENV === 'test') return 'demo';
   throw new Error('PRACTICE_ID environment variable is required');
+}
+
+function coveredFieldsFromConversation(
+  conversation: GuidedHelpSessionRequest['conversation'],
+): Set<GuidedHelpField> {
+  const covered = new Set<GuidedHelpField>();
+  if (!Array.isArray(conversation)) return covered;
+  for (const item of conversation) {
+    if (item?.role !== 'user') continue;
+    const tags = item.fieldTags ?? [];
+    for (const tag of tags) {
+      if (tag === 'onset' || tag === 'location' || tag === 'severity' || tag === 'otherSymptoms') {
+        covered.add(tag);
+      }
+    }
+  }
+  return covered;
+}
+
+function deriveMissingFieldsForStep(
+  stepId: GuidedHelpStepId,
+  conversation: GuidedHelpSessionRequest['conversation'],
+): GuidedHelpField[] {
+  const axisForStep: Partial<Record<GuidedHelpStepId, GuidedHelpField>> = {
+    step1: 'onset',
+    step2: 'location',
+    step3: 'severity',
+    step4: 'otherSymptoms',
+  };
+  const startIndexByStep: Record<GuidedHelpStepId, number> = {
+    step1: 0,
+    step2: 1,
+    step3: 2,
+    step4: 3,
+    step5: 0,
+  };
+  const covered = coveredFieldsFromConversation(conversation);
+  const missing: GuidedHelpField[] = [];
+  const preferredAxis = axisForStep[stepId];
+  if (preferredAxis && !covered.has(preferredAxis)) {
+    missing.push(preferredAxis);
+  }
+  const startIndex = startIndexByStep[stepId] ?? 0;
+  for (let i = startIndex; i < GUIDED_HELP_FIELD_ORDER.length; i += 1) {
+    const field = GUIDED_HELP_FIELD_ORDER[i];
+    if (!covered.has(field) && !missing.includes(field)) {
+      missing.push(field);
+    }
+  }
+  return missing;
+}
+
+function computeGuidedHelpCacheKey(payload: GuidedHelpSessionRequest): string {
+  const hash = createHash('sha256');
+  hash.update(payload.practiceId ?? '');
+  hash.update('\u0000');
+  hash.update(payload.patientId ?? '');
+  hash.update('\u0000');
+  hash.update(payload.sessionId ?? '');
+  hash.update('\u0000');
+  hash.update(payload.stepId ?? '');
+  if (payload.seedNarrative) {
+    hash.update(createHash('sha256').update(payload.seedNarrative).digest('hex'));
+  }
+  const conversation = payload.conversation ?? [];
+  for (const item of conversation) {
+    hash.update(item.role ?? '');
+    hash.update('\u0000');
+    hash.update(createHash('sha256').update(String(item.text ?? '')).digest('hex'));
+    if (Array.isArray(item.fieldTags)) {
+      hash.update(item.fieldTags.join('|'));
+    }
+  }
+  return hash.digest('hex');
+}
+
+function getCachedGuidedHelpResponse(key: string): GuidedHelpSessionResponse | null {
+  const cached = guidedHelpCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    guidedHelpCache.delete(key);
+    return null;
+  }
+  return cached.response;
+}
+
+function putGuidedHelpCache(key: string, response: GuidedHelpSessionResponse): void {
+  const ttlSeconds = getIdempotencyTtlSeconds();
+  guidedHelpCache.set(key, {
+    response,
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  });
+}
+
+function getPreviousStep(stepId: GuidedHelpStepId): GuidedHelpStepId | null {
+  if (stepId === 'step2') return 'step1';
+  if (stepId === 'step3') return 'step2';
+  if (stepId === 'step4') return 'step3';
+  if (stepId === 'step5') return 'step4';
+  return null;
+}
+
+function validateStepOrder(sessionId: string, stepId: GuidedHelpStepId): boolean {
+  if (stepId === 'step1') return true;
+  const last = guidedHelpStepTracker.get(sessionId);
+  if (!last) return false;
+  if (last === stepId) return true; // allow idempotent retry
+  const prev = getPreviousStep(stepId);
+  return prev !== null && last === prev;
+}
+
+function recordStepProgress(sessionId: string, stepId: GuidedHelpStepId): void {
+  guidedHelpStepTracker.set(sessionId, stepId);
+}
+
+function buildGuidedHelpNarrative(payload: GuidedHelpSessionRequest): string {
+  const parts: string[] = [];
+  if (typeof payload.seedNarrative === 'string') {
+    parts.push(payload.seedNarrative);
+  }
+  const conversation = payload.conversation ?? [];
+  for (const item of conversation) {
+    if (item?.role === 'user' && typeof item.text === 'string') {
+      parts.push(item.text);
+    }
+  }
+  const joined = parts.join(' ').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  return joined.slice(0, 2_000);
+}
+
+function deriveGuidedHelpIdempotencyKey(payload: GuidedHelpSessionRequest): string {
+  // Tie idempotency to the full payload so callers can retry with revised answers without being blocked.
+  return computeGuidedHelpCacheKey(payload);
+}
+
+function validateGuidedHelpResponse(
+  response: GuidedHelpSessionResponse,
+  payload: GuidedHelpSessionRequest,
+  missingFields: GuidedHelpField[],
+): GuidedHelpSessionResponse | null {
+  const allowedStepTransitions: Partial<Record<GuidedHelpStepId, GuidedHelpStepId>> = {
+    step1: 'step2',
+    step2: 'step3',
+    step3: 'step4',
+    step4: 'step5',
+    step5: undefined,
+  };
+  const nextAllowed = allowedStepTransitions[payload.stepId];
+  if (response.stepId !== payload.stepId) return null;
+  if (response.nextStepId && response.nextStepId !== nextAllowed) return null;
+  if (response.missingFields) {
+    for (const field of response.missingFields) {
+      if (!GUIDED_HELP_FIELD_ORDER.includes(field as GuidedHelpField)) return null;
+    }
+  }
+  for (const field of missingFields) {
+    if (
+      response.missingFields &&
+      !response.missingFields.includes(field) &&
+      payload.stepId !== 'step5' &&
+      response.nextStepId !== nextAllowed
+    ) {
+      return null;
+    }
+  }
+  return response;
 }
 
 function assertHttpsUrl(raw: string, envName: string): URL {
@@ -796,6 +994,7 @@ function createConcurrencyLimiter(): ConcurrencyLimiter {
       'POST /safety-check': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_SAFETY', 24, 5_000),
       'GET /booking/slots': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_BOOKING', 16, 5_000),
       'POST /feature-log': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_FEATURE_LOG', 12, 5_000),
+      'POST /guided-help/step': parseLimitEnv('ORCHESTRATOR_MAX_CONCURRENCY_GUIDED_HELP', 24, 5_000),
     },
   });
 }
@@ -803,6 +1002,11 @@ function createConcurrencyLimiter(): ConcurrencyLimiter {
 function createRateLimiter(): RateLimiter {
   const defaultRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_DEFAULT_PER_MINUTE', 120, 100_000);
   const safetyRateLimitPerMinute = parseLimitEnv('ORCHESTRATOR_RATE_LIMIT_SAFETY_PER_MINUTE', 40, 10_000);
+  const guidedHelpRateLimitPerMinute = parseLimitEnv(
+    'ORCHESTRATOR_RATE_LIMIT_GUIDED_HELP_PER_MINUTE',
+    60,
+    10_000,
+  );
   const defaultRateLimiterConfig = {
     maxRequests: defaultRateLimitPerMinute,
     windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
@@ -813,6 +1017,21 @@ function createRateLimiter(): RateLimiter {
       maxRequests: safetyRateLimitPerMinute,
       windowMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_WINDOW_MS, 60_000, 1_000, 10 * 60_000),
       blockMs: parseDurationMs(process.env.ORCHESTRATOR_RATE_LIMIT_SAFETY_BLOCK_MS, 20_000, 0, 15 * 60_000),
+    },
+    'POST /guided-help/step': {
+      maxRequests: guidedHelpRateLimitPerMinute,
+      windowMs: parseDurationMs(
+        process.env.ORCHESTRATOR_RATE_LIMIT_GUIDED_HELP_WINDOW_MS,
+        60_000,
+        1_000,
+        10 * 60_000,
+      ),
+      blockMs: parseDurationMs(
+        process.env.ORCHESTRATOR_RATE_LIMIT_GUIDED_HELP_BLOCK_MS,
+        10_000,
+        0,
+        15 * 60_000,
+      ),
     },
   });
 }
@@ -3902,6 +4121,254 @@ const server = http.createServer((req, res) => withCorrelationContext(() => {
       }
       res.end('accepted');
       setOutcome('ok');
+    });
+    return;
+  }
+  if (req.method === 'POST' && parsedUrl.pathname === '/guided-help/step') {
+    const routeLabel = 'POST /guided-help/step';
+    handleHttp(req, res, routeLabel, corr, async (setOutcome) => {
+      const ctype = (req.headers['content-type'] || '').toString().toLowerCase();
+      if (!ctype.includes('application/json')) {
+        req.resume();
+        respondError(res, 'unsupported_media_type', 'Only application/json is supported', corr, setOutcome);
+        return;
+      }
+
+      const maxBytes = Math.min(resolveMaxBodyBytes(), 64 * 1024);
+      const rawBuf = await readRequestBody(req, maxBytes);
+
+      const raw = rawBuf.toString('utf8');
+      let payload: GuidedHelpSessionRequest;
+      try {
+        payload = JSON.parse(raw) as GuidedHelpSessionRequest;
+      } catch {
+        throw new HttpError('invalid_input', 'Invalid JSON body');
+      }
+
+      const validation = validateGuidedHelpSessionRequest(payload);
+      if (validation.ok !== true) {
+        const primaryError = validation.errors[0]?.message;
+        respondError(
+          res,
+          'invalid_input',
+          primaryError ? `Invalid request body: ${primaryError}` : 'Invalid request body',
+          corr,
+          setOutcome,
+          { errors: validation.errors.slice(0, 5) as Record<string, unknown>[] },
+        );
+        return;
+      }
+
+      if (payload.stepId !== 'step1' && (!payload.conversation || payload.conversation.length === 0)) {
+        respondError(res, 'invalid_input', 'Conversation is required for later guided-help steps', corr, setOutcome);
+        return;
+      }
+
+      if (!validateStepOrder(payload.sessionId, payload.stepId)) {
+        respondError(res, 'invalid_input', 'Guided-help steps must be sequential', corr, setOutcome);
+        return;
+      }
+
+      const cacheKey = computeGuidedHelpCacheKey(payload);
+      const cached = getCachedGuidedHelpResponse(cacheKey);
+      if (cached) {
+        respondJson(res, 200, cached, corr, setOutcome, 'ok');
+        return;
+      }
+
+      const practiceConfigSnapshot = currentPracticeConfig();
+      if (payload.practiceId !== practiceConfigSnapshot.practiceId) {
+        logger.warn('guided_help.practice_mismatch', {
+          expectedPractice: practiceConfigSnapshot.practiceId,
+          receivedPractice: payload.practiceId,
+          correlationId: corr,
+        });
+        respondError(res, 'forbidden', 'Practice mismatch', corr, setOutcome);
+        return;
+      }
+      const guidedHelpIdemKey = deriveGuidedHelpIdempotencyKey(payload);
+      res.setHeader('x-idempotency-key', guidedHelpIdemKey);
+
+      const security = getSecurityServices();
+      const requestId = getHeader(req.headers, 'x-request-id') ?? corr ?? randomUUID();
+      const authHeader = getHeader(req.headers, 'authorization');
+      const authContext = buildAuthContext(req.headers);
+      const patientId = payload.patientId;
+      const patientRef = safePatientReference(patientId);
+
+      const denyGuidedHelp = async (
+        reason: string,
+        details?: Record<string, unknown>,
+      ): Promise<void> => {
+        logger.warn('guided_help.denied', {
+          reason,
+          correlationId: corr,
+          requestId,
+          actorType: authContext?.actor?.type,
+        });
+        const auditEvent = recordAudit('orchestrator.guided_help.denied', corr, {
+          actor: authContext?.actor ?? null,
+          subjectRef: patientRef,
+          outcome: 'deny',
+          reasonCode: reason,
+          details: {
+            reason,
+            requestId,
+            sessionId: payload.sessionId,
+            stepId: payload.stepId,
+            ...(details ?? {}),
+          },
+        });
+        await emitAuditEvent(auditEvent);
+        respondError(res, 'forbidden', 'Access denied', corr, setOutcome);
+      };
+
+      const fingerprint = `${requestId}:guidedhelp:${payload.sessionId}:${payload.stepId}`;
+      if (!(await security.verifySignatureAndReplayGuard(authHeader, fingerprint))) {
+        await denyGuidedHelp('signature_invalid');
+        return;
+      }
+
+      if (!authContext) {
+        await denyGuidedHelp('actor_missing');
+        return;
+      }
+
+      if (authContext.actor.type === 'patient' && authContext.actor.id !== patientId) {
+        await denyGuidedHelp('not_authorized', { reason: 'patient_mismatch' });
+        return;
+      }
+
+      if (!(await security.authorize(authContext.actor, GUIDED_HELP_SCOPE, patientId, authContext.scope))) {
+        await denyGuidedHelp('not_authorized');
+        return;
+      }
+
+      const consentDecision = await security.checkConsent(
+        patientId,
+        'care',
+        Array.from(GUIDED_HELP_RESOURCES),
+        { correlationId: corr },
+      );
+      if (!consentDecision.allowed) {
+        await denyGuidedHelp('consent_denied', { consentReason: consentDecision.reason });
+        return;
+      }
+      const consentEvidence = consentDecision.evidence ?? getConsentEvidence(patientId, 'care');
+      if (!consentEvidence) {
+        await denyGuidedHelp('consent_evidence_missing');
+        return;
+      }
+      const idemReservation = await reserveIdempotency(idempotencyStore, guidedHelpIdemKey, {
+        ttlSeconds: getIdempotencyTtlSeconds(),
+      });
+      if (idemReservation === 'exists') {
+        const cachedResponse = getCachedGuidedHelpResponse(cacheKey);
+        if (cachedResponse) {
+          respondJson(res, 200, cachedResponse, corr, setOutcome, 'ok');
+          return;
+        }
+        respondError(res, 'too_many_requests', 'Duplicate guided-help request', corr, setOutcome);
+        return;
+      }
+
+      const missingFields = deriveMissingFieldsForStep(payload.stepId, payload.conversation);
+      const safetyNarrative = buildGuidedHelpNarrative(payload);
+      const safetySubmission: PortalSubmission = {
+        practiceId: payload.practiceId,
+        patient: { id: payload.patientId },
+        narrative: safetyNarrative,
+        channel: 'web',
+      };
+      const safetyController = new AbortController();
+      const safetyTimeout = Math.min(getSafetyGateTimeoutMs(), 2_000);
+      const safetyTimer = setTimeout(() => safetyController.abort(), safetyTimeout);
+      try {
+        const safetyDecision = await analyzePortalSubmission(safetySubmission, undefined, {
+          correlationId: corr,
+          requestId,
+          actor: authContext.actor,
+          scope: authContext.scope,
+          consentReference: consentEvidence.reference,
+          signal: safetyController.signal,
+        });
+        if (safetyDecision.outcome === 'DIVERTED') {
+          await denyGuidedHelp('safety_diverted');
+          clearTimeout(safetyTimer);
+          return;
+        }
+      } catch (error) {
+        clearTimeout(safetyTimer);
+        logger.warn('guided_help.safety_gate_failed', {
+          correlationId: corr,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        respondError(res, 'upstream_unavailable', 'Safety check unavailable', corr, setOutcome);
+        return;
+      }
+      clearTimeout(safetyTimer);
+
+      const responseBody = await callGuidedHelpLLM(
+        {
+          request: payload,
+          missingFields,
+          maxSteps: 5,
+        },
+        {
+          purpose: 'step',
+          correlationId: corr,
+        },
+      );
+      responseBody.sessionId = payload.sessionId;
+      responseBody.stepId = payload.stepId;
+      responseBody.missingFields = responseBody.missingFields ?? missingFields;
+      if (Array.isArray(responseBody.redFlags) && responseBody.redFlags.some((value) => value && value !== 'none')) {
+        responseBody.proceedToSummary = false;
+        responseBody.nextStepId = undefined;
+        responseBody.question = undefined;
+        responseBody.rationale = undefined;
+        responseBody.summary = undefined;
+        responseBody.bullets = undefined;
+        responseBody.limitations = undefined;
+        responseBody.confidence = undefined;
+        responseBody.needsStep6 = false;
+      }
+      const normalizedResponse =
+        validateGuidedHelpResponse(responseBody, payload, missingFields) ?? buildGuidedHelpStubResponse(payload);
+      putGuidedHelpCache(cacheKey, normalizedResponse);
+      recordStepProgress(payload.sessionId, payload.stepId);
+      const auditEvent = recordAudit('orchestrator.guided_help.accepted', corr, {
+        actor: authContext.actor,
+        subjectRef: patientRef,
+        outcome: 'allow',
+        reasonCode: 'accepted',
+        details: {
+          requestId,
+          sessionId: payload.sessionId,
+          stepId: payload.stepId,
+          consentReference: consentEvidence.reference,
+          redFlags: responseBody.redFlags ?? [],
+        },
+      });
+      await emitAuditEvent(auditEvent);
+      guidedHelpStepsTotal.add(1, {
+        service: ORCHESTRATOR_SERVICE_LABEL,
+        stepId: responseBody.stepId,
+      });
+      if (payload.stepId === 'step1') {
+        guidedHelpSessionsStarted.add(1, { service: ORCHESTRATOR_SERVICE_LABEL });
+      }
+      if (responseBody.needsStep6) {
+        guidedHelpNeedsStep6Total.add(1, {
+          service: ORCHESTRATOR_SERVICE_LABEL,
+        });
+      }
+      if (Array.isArray(responseBody.redFlags) && responseBody.redFlags.some((value) => value && value !== 'none')) {
+        guidedHelpRedFlagTotal.add(1, {
+          service: ORCHESTRATOR_SERVICE_LABEL,
+        });
+      }
+      respondJson(res, 200, normalizedResponse, corr, setOutcome, 'ok');
     });
     return;
   }

@@ -29,7 +29,7 @@
     "feature:ingest": "node scripts/feature_store/ingest_stream.js",
     "feature:views": "node scripts/feature_store/views.js",
     "drift:report": "node scripts/drift_report.js",
-    "a11y:portal": "npx tsx apps/portal/scripts/a11y-ci.ts",
+    "a11y:portal": "npm run --workspace @onecare/app-portal a11y:ci",
     "dev:clinician": "npm run --workspace @onecare/app-clinician dev",
     "build:clinician": "npm run --workspace @onecare/app-clinician build",
     "typecheck:clinician": "npm run --workspace @onecare/app-clinician typecheck",

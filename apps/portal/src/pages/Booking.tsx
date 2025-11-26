@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import SearchSlots from '../components/booking/SearchSlots';
 import BookingCalendar from '../components/booking/Calendar';
@@ -22,6 +23,7 @@ import {
   formatTimeRange,
   formatTimeZoneName,
 } from '../lib/format';
+import { listOfflineJobs, pruneOfflineJobsForPatient } from '../lib/offlineQueue';
 
 interface BookingErrorState {
   slot: BookingSlot;
@@ -40,6 +42,7 @@ const BookingScreen = () => {
     putSlots,
     lastConfirmResult,
     setLastConfirmResult,
+    clear: clearBookingFlow,
   } = useBookingFlow();
 
   const [slots, setSlots] = useState<BookingSlot[]>([]);
@@ -56,6 +59,23 @@ const BookingScreen = () => {
   const successStatusId = useId();
   const mainRef = useRef<HTMLElement | null>(null);
   const searchCorrelationRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    clearBookingFlow();
+    setSlots([]);
+    setSelectedSlot(null);
+    setIdempotencyKey(null);
+    setSelectionTimestamp(null);
+    setConfirmationError(null);
+    setConfirmationResult(null);
+    pruneOfflineJobsForPatient(patientId);
+    if (patientId) {
+      const otherJobs = listOfflineJobs().filter((job) => job.payload.patientId !== patientId);
+      if (otherJobs.length > 0) {
+        safeLog('booking.offlineQueue.prunedOtherPatient', { removed: otherJobs.length });
+      }
+    }
+  }, [patientId, clearBookingFlow]);
 
   useEffect(() => {
     mainRef.current?.focus();
@@ -104,6 +124,26 @@ const BookingScreen = () => {
     }
     return intl.formatMessage({ id: 'booking.fairness.note' }, { percentage });
   }, [fairnessConfig, intl]);
+
+  const fairnessPercentage = fairnessConfig.telephoneMinFraction > 0
+    ? Math.max(0, Math.round(fairnessConfig.telephoneMinFraction * 100))
+    : null;
+
+  const timezoneLabel = useMemo(
+    () => formatTimeZoneName(enhancedAccessConfig.timezone, { locale: intl.locale }),
+    [enhancedAccessConfig.timezone, intl.locale],
+  );
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const base = intl.formatMessage({ id: 'booking.section.title' });
+    const title = confirmationResult
+      ? intl.formatMessage({ id: 'booking.confirm.success.title' })
+      : !patientId
+        ? intl.formatMessage({ id: 'booking.missingPatient.title' })
+        : base;
+    document.title = `${title} – Vecells`;
+  }, [intl, patientId, confirmationResult]);
 
   const handleFilterChange = useCallback((next: BookingFilterState) => {
     setFilters((previous) => {
@@ -168,16 +208,18 @@ const BookingScreen = () => {
       .catch((reason) => {
         if (controller.signal.aborted) return;
         if (reason instanceof Error && reason.name === 'AbortError') return;
-        const message = reason instanceof Error ? reason.message : undefined;
         const durationMs = stopTimer();
         const fallback = intl.formatMessage({ id: 'booking.slots.error' });
-        const friendly = message && message.trim().length > 0 ? message : fallback;
         recordRumEvent('booking.search.error', {
           correlationId,
           durationMs,
         });
-        safeLog('booking.search.error', { correlationId, durationMs, message: friendly });
-        setError(friendly);
+        const sanitizedMessage =
+          reason instanceof Error && typeof reason.message === 'string'
+            ? reason.message.slice(0, 160)
+            : undefined;
+        safeLog('booking.search.error', { correlationId, durationMs, message: sanitizedMessage ?? 'unknown' });
+        setError(fallback);
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -246,10 +288,18 @@ const BookingScreen = () => {
 
   if (!patientId) {
     return (
-      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="booking-missing-patient">
-        <section role="alert" aria-live="assertive">
-          <h1>{intl.formatMessage({ id: 'booking.missingPatient.title' })}</h1>
-          <p>{intl.formatMessage({ id: 'booking.missingPatient.body' })}</p>
+      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="page page--booking">
+        <section role="alert" aria-live="assertive" className="page-hero page-hero--muted">
+          <div className="page-hero__content">
+            <p className="page-hero__eyebrow">{intl.formatMessage({ id: 'app.nav.booking' })}</p>
+            <h1 className="page-hero__title">{intl.formatMessage({ id: 'booking.missingPatient.title' })}</h1>
+            <p className="page-hero__lede">{intl.formatMessage({ id: 'booking.missingPatient.body' })}</p>
+            <div className="page-hero__actions">
+              <Link className="ui-button" to="/intake">
+                {intl.formatMessage({ id: 'booking.missingPatient.cta' })}
+              </Link>
+            </div>
+          </div>
         </section>
       </main>
     );
@@ -292,8 +342,8 @@ const BookingScreen = () => {
     })}`;
 
     return (
-      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction}>
-        <section role="status" aria-labelledby={successStatusId} className="booking-success">
+      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="page page--booking">
+        <section role="status" aria-labelledby={successStatusId} className="booking-success page-card page-card--surface">
           <ConfettiBurst />
           <h1 id={successStatusId}>{intl.formatMessage({ id: 'booking.confirm.success.title' })}</h1>
           <p>
@@ -326,7 +376,7 @@ const BookingScreen = () => {
             <a
               className="ui-button ui-button--subtle"
               href={icsUrl}
-              download={`onecare-${confirmationResult.appointmentId}.ics`}
+              download={`vecells-${confirmationResult.appointmentId}.ics`}
             >
               {intl.formatMessage({ id: 'booking.confirm.success.downloadIcs' })}
             </a>
@@ -347,73 +397,114 @@ const BookingScreen = () => {
 
   if (confirmationError && selectedSlot) {
     return (
-      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction}>
-        <BookingErrorView
-          slot={confirmationError.slot}
-          filters={confirmationError.filters}
-          error={confirmationError.error}
-          retryUntil={confirmationError.retryUntil}
-          onRetry={() => setConfirmationError(null)}
-          onResetSelection={clearSelection}
-          timezone={enhancedAccessConfig.timezone}
-        />
+      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="page page--booking">
+        <section className="page-card page-card--surface">
+          <BookingErrorView
+            slot={confirmationError.slot}
+            filters={confirmationError.filters}
+            error={confirmationError.error}
+            retryUntil={confirmationError.retryUntil}
+            onRetry={() => setConfirmationError(null)}
+            onResetSelection={clearSelection}
+            timezone={enhancedAccessConfig.timezone}
+          />
+        </section>
       </main>
     );
   }
 
   if (selectedSlot && idempotencyKey) {
     return (
-      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction}>
-        <ConfirmBooking
-          slot={selectedSlot}
-          patientId={patientId}
-          idempotencyKey={idempotencyKey}
-          timezone={enhancedAccessConfig.timezone}
-          onBack={clearSelection}
-          onSuccess={handleConfirmationSuccess}
-          onError={handleConfirmationError}
-        />
-        {selectionTimestamp ? (
-          <p className="booking-selection-timestamp">
-            {intl.formatMessage(
-              { id: 'booking.confirm.selectionTimestamp' },
-              {
-                timestamp: formatDateTime(selectionTimestamp, {
-                  locale: intl.locale,
-                  timeZone: enhancedAccessConfig.timezone,
-                  dateStyle: 'medium',
-                  timeStyle: 'short'
-                })
-              },
-            )}
-          </p>
-        ) : null}
+      <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="page page--booking">
+        <section className="page-card page-card--surface booking-confirm-card">
+          <ConfirmBooking
+            slot={selectedSlot}
+            patientId={patientId}
+            idempotencyKey={idempotencyKey}
+            timezone={enhancedAccessConfig.timezone}
+            onBack={clearSelection}
+            onSuccess={handleConfirmationSuccess}
+            onError={handleConfirmationError}
+          />
+          {selectionTimestamp ? (
+            <p className="booking-selection-timestamp page-footnote">
+              {intl.formatMessage(
+                { id: 'booking.confirm.selectionTimestamp' },
+                {
+                  timestamp: formatDateTime(selectionTimestamp, {
+                    locale: intl.locale,
+                    timeZone: enhancedAccessConfig.timezone,
+                    dateStyle: 'medium',
+                    timeStyle: 'short'
+                  })
+                },
+              )}
+            </p>
+          ) : null}
+        </section>
       </main>
     );
   }
 
+  const bookingTitle = intl.formatMessage({ id: 'booking.section.title' });
+  const bookingSummary = intl.formatMessage({ id: 'booking.confirm.summary' });
+
   return (
-    <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction}>
-      <header>
-        <h1>{intl.formatMessage({ id: 'booking.section.title' })}</h1>
-      </header>
-      <BookingCalendar
-        slots={slots}
-        timezone={enhancedAccessConfig.timezone}
-        windows={enhancedAccessConfig.windows}
-        onSelectSlot={handleSelectSlot}
-        selectedSlotId={selectedSlot?.id ?? null}
-      />
-      <SearchSlots
-        slots={slots}
-        isLoading={isLoading}
-        error={error}
-        onFilterChange={handleFilterChange}
-        selectedSlotId={selectedSlot?.id ?? null}
-        onSelect={handleSelectSlot}
-        fairnessNote={fairnessNote}
-        timezone={enhancedAccessConfig.timezone}
-      />
+    <main id="main-content" ref={mainRef} tabIndex={-1} dir={direction} className="page page--booking">
+      <section className="page-hero page-hero--booking">
+        <div className="page-hero__content">
+          <p className="page-hero__eyebrow">{intl.formatMessage({ id: 'app.nav.booking' })}</p>
+          <h1 className="page-hero__title">{bookingTitle}</h1>
+          <p className="page-hero__lede">{bookingSummary}</p>
+          <div className="page-hero__meta">
+            <div className="hero-chip">
+              <span>{intl.formatMessage({ id: 'booking.confirm.patient' })}</span>
+              <strong>{patientId}</strong>
+            </div>
+            <div className="hero-chip">
+              <span>{intl.formatMessage({ id: 'booking.confirm.timeZone' })}</span>
+              <strong>{timezoneLabel}</strong>
+            </div>
+            {fairnessPercentage !== null ? (
+              <div className="hero-chip hero-chip--info">
+                <span>{intl.formatMessage({ id: 'booking.fairness.label' })}</span>
+                <strong>{fairnessPercentage}%</strong>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {fairnessNote ? (
+          <div className="page-hero__aside">
+            <div className="hero-note">
+              <p className="hero-note__title">{intl.formatMessage({ id: 'booking.fairness.label' })}</p>
+              <p className="hero-note__body">{fairnessNote}</p>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <div className="booking-layout">
+        <section className="page-card page-card--ghost">
+          <BookingCalendar
+            slots={slots}
+            timezone={enhancedAccessConfig.timezone}
+            windows={enhancedAccessConfig.windows}
+            onSelectSlot={handleSelectSlot}
+            selectedSlotId={selectedSlot?.id ?? null}
+          />
+        </section>
+        <section className="page-card page-card--surface">
+          <SearchSlots
+            slots={slots}
+            isLoading={isLoading}
+            error={error}
+            onFilterChange={handleFilterChange}
+            selectedSlotId={selectedSlot?.id ?? null}
+            onSelect={handleSelectSlot}
+            timezone={enhancedAccessConfig.timezone}
+          />
+        </section>
+      </div>
     </main>
   );
 };

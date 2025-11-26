@@ -41,6 +41,7 @@ const ar: Record<string, string> = {
   'booking.slots.empty': 'لا توجد مواعيد تطابق فلاترك حاليًا.',
   'booking.slots.emptyGuidance': 'جرب تعديل الفلاتر أو اطلب مكالمة حتى نعاود التواصل عند توفر موعد.',
   'booking.slots.error': 'تعذر تحميل التوفر الآن. حاول مرة أخرى بعد قليل.',
+  'booking.slots.loading': 'يتم تحميل المواعيد المتاحة…',
   'booking.slot.ariaLabel': '{modality} يوم {start} حتى {end} في {location}',
   'booking.slot.description': '{modality} يوم {date} من {time} في {location}',
   'intake.wizard.progress.label': 'تقدّم الطلب',
@@ -132,7 +133,7 @@ const ar: Record<string, string> = {
   'booking.confirm.success.calendarHint': 'أضِف الموعد إلى التقويم حتى تبقى التفاصيل في متناولك.',
   'booking.confirm.success.googleCalendar': 'إضافة إلى Google Calendar',
   'booking.confirm.success.downloadIcs': 'تنزيل ملف ‎.ics',
-  'booking.confirm.success.calendarTitle': 'موعد OneCare',
+  'booking.confirm.success.calendarTitle': 'موعد Vecells',
   /**
    * Translator: Calendar description. Keep placeholders and bullet symbol as-is.
    */

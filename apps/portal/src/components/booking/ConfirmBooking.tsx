@@ -303,6 +303,8 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
   const [queueStatus, setQueueStatus] = useState<QueueStatus>(() => (getOfflineJob(idempotencyKey) ? 'queued' : 'idle'));
   const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
+  const foregroundRetryTimerRef = useRef<number | null>(null);
+  const [backgroundSyncSupported, setBackgroundSyncSupported] = useState<boolean>(true);
 
   const clearCountdownTimer = useCallback(() => {
     if (countdownTimerRef.current !== null) {
@@ -356,9 +358,35 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
   }, [onBack]);
 
   useEffect(() => {
+    if (!isBrowser || !navigator.serviceWorker) {
+      setBackgroundSyncSupported(false);
+      return;
+    }
+    let cancelled = false;
+    navigator.serviceWorker.ready
+      .then((registration) => {
+        const hasSync = Boolean((registration as ServiceWorkerRegistration & { sync?: { register?: unknown } }).sync);
+        if (!cancelled) {
+          setBackgroundSyncSupported(hasSync);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBackgroundSyncSupported(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
+      if (foregroundRetryTimerRef.current !== null) {
+        window.clearTimeout(foregroundRetryTimerRef.current);
+      }
     };
   }, []);
 
@@ -524,6 +552,33 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
     });
   }, [idempotencyKey, patientId, slot]);
 
+  useEffect(() => {
+    if (backgroundSyncSupported) {
+      if (foregroundRetryTimerRef.current !== null) {
+        window.clearTimeout(foregroundRetryTimerRef.current);
+        foregroundRetryTimerRef.current = null;
+      }
+      return;
+    }
+    if (!queueJob || queueStatus !== 'queued') {
+      return;
+    }
+    const delay = Math.max(0, queueJob.nextAttemptAt - Date.now());
+    const timer = window.setTimeout(() => {
+      const latest = getOfflineJob(queueJob.id);
+      if (!latest) return;
+      if (!isNavigatorOnline()) return;
+      void processQueuedJob(latest);
+    }, delay);
+    foregroundRetryTimerRef.current = timer;
+    return () => {
+      if (foregroundRetryTimerRef.current !== null) {
+        window.clearTimeout(foregroundRetryTimerRef.current);
+        foregroundRetryTimerRef.current = null;
+      }
+    };
+  }, [backgroundSyncSupported, queueJob, queueStatus, processQueuedJob]);
+
   const handleRetryQueued = useCallback(() => {
     const job = getOfflineJob(idempotencyKey);
     if (!job) return;
@@ -610,10 +665,6 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
         return;
       }
       const durationMs = stopTimer();
-      const message =
-        candidate instanceof Error && typeof candidate.message === 'string' && candidate.message.trim().length > 0
-          ? candidate.message
-          : fallbackMessage;
       const correlationId =
         'envelope' in candidate && candidate.envelope?.error?.correlationId
           ? candidate.envelope.error.correlationId
@@ -622,7 +673,7 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
             : undefined;
       const payload: BookingConfirmationError = {
         code: 'code' in candidate ? candidate.code : undefined,
-        message,
+        message: fallbackMessage,
         correlationId,
         retryAfterSeconds: 'retryAfterSeconds' in candidate ? candidate.retryAfterSeconds : undefined,
         status: 'status' in candidate ? candidate.status : undefined
@@ -634,7 +685,7 @@ const ConfirmBooking = ({ slot, patientId, idempotencyKey, timezone, onBack, onS
       safeLog('booking.confirm.error', {
         correlationId: confirmCorrelationRef.current,
         durationMs,
-        message: payload.message,
+        message: fallbackMessage,
       });
       onError(payload);
     } finally {

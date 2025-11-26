@@ -31,9 +31,17 @@ Dev Endpoint (example)
     }
   - On `SAFE_TO_CONTINUE`, publishes `triage.input` event via in-memory bus with `EventEnvelope`.
 
+- POST `/guided-help/step` → returns the next guided-help question and (optionally) a suggested summary for the portal narrative.
+  - Body: `GuidedHelpSessionRequest` (see `schemas/ingest/guided-help-session.request.json`), including `practiceId`, `patientId` (token/ref), `sessionId`, `stepId` (`"step1"`–`"step5"`), optional `seedNarrative`, and a short `conversation[]` (role + text + fieldTags).
+  - Response: `GuidedHelpSessionResponse` (see `schemas/ingest/guided-help-session.response.json`), including `question`, `rationale`, `missingFields`, `redFlags`, `proceedToSummary`, `needsStep6`, `qualityScore`, and optional `summary` / `bullets` / `limitations` for the portal textarea.
+  - LLM integration:
+    - When `GUIDED_HELP_LLM_MODE=stub` (default), the service returns deterministic, schema-valid stub responses.
+    - When `GUIDED_HELP_LLM_MODE=openai` and `LLM_API_KEY` / `LLM_MODEL` / `LLM_API_ENDPOINT` are set, the service calls the configured OpenAI Chat endpoint with a contract-bound prompt, validates the JSON output against the guided-help response schema, and falls back to the stub on any error.
+  - Local auth/consent setup: set `SECURITY_SHARED_SECRET` (orchestrator) and `VITE_SECURITY_SHARED_SECRET` (portal) to the same value so the portal can sign `Authorization` + `X-Actor-*` headers, and populate `CONSENT_CACHE` with a care consent that includes `GuidedHelpSession` (e.g. `{"patient-123":[{"purpose":"care","resources":["GuidedHelpSession","QuestionnaireResponse","Communication","Slot"],"reference":"Consent/patient-123-care"}]}`). Without these, requests will be rejected with `signature_invalid` / `consent_denied` (HTTP 403).
+
 Zero-Trust Gate
 - Requests must include `Authorization` (`Bearer <token>`), `X-Actor-Type` (`patient|practitioner|system`), `X-Actor-Id`, and `X-Request-Id`; optional `X-Auth-Scope` conveys granted scopes.
-- The orchestrator runs `verifySignatureAndReplayGuard`, `authorize(actor,'submit',patientId,scope)`, and `checkConsent(patientId,'care',['QuestionnaireResponse','Communication'])` before touching downstream systems.
+- The orchestrator runs `verifySignatureAndReplayGuard`, `authorize(actor,'submit',patientId,scope)`, and `checkConsent(patientId,'care',[requested resources such as QuestionnaireResponse, Communication, GuidedHelpSession])` before touching downstream systems.
 - Any denial returns HTTP 403 with the standard error envelope and emits an `audit.event` containing the correlation ID, actor, and reason.
 - Replay guard deduplicates `requestId`+`Authorization` combinations for `SECURITY_REPLAY_WINDOW_MS` (default 300,000 ms / 5 minutes).
 

@@ -8,6 +8,7 @@ import { deriveIdempotencyKey } from '../../src/application/idempotency';
 import { resetSecurityServices } from '../../src/adapters/security';
 import { resetAuditLedger, setAuditLedger } from '../../src/adapters/audit';
 import { setConsentFixtureEnv } from '../consentFixture';
+import { PRACTICE_ID } from '../practice';
 
 vi.mock('../../src/adapters/services/safetyGate', () => ({
   analyzePortalSubmission: vi.fn(),
@@ -32,7 +33,7 @@ describe('triage flow e2e', () => {
   let auditEvents: LedgerAuditEvent[];
 
   const submission: PortalSubmission = {
-    practiceId: 'demo',
+    practiceId: PRACTICE_ID,
     patient: { id: 'patient-42' },
     narrative: 'triage flow e2e narrative',
     channel: 'web',

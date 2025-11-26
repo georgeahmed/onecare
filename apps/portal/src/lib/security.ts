@@ -100,3 +100,25 @@ export const scrubHeaders = (headers: Record<string, string | undefined>): Recor
     return acc;
   }, {});
 };
+
+const toBase64Url = (bytes: Uint8Array): string => {
+  const binary = String.fromCharCode(...bytes);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+export const createHmacSignature = async (payload: string, secret: string): Promise<string | null> => {
+  try {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+    return toBase64Url(new Uint8Array(signature));
+  } catch {
+    return null;
+  }
+};

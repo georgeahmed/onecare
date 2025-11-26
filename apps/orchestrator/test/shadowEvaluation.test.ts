@@ -3,10 +3,11 @@ import type { ShadowSafetyGateContext } from '../src/types';
 import { maybeRunShadowEvaluation, runShadowEvaluation } from '../src/application/shadowEvaluation';
 import type { OrchestratorContext } from '../src/types';
 import type { PortalSubmission } from '@onecare/events';
+import { PRACTICE_ID } from './practice';
 
 function buildSubmission(): PortalSubmission {
   return {
-    practiceId: 'demo',
+    practiceId: PRACTICE_ID,
     patient: { id: 'patient-1' },
     narrative: 'Patient reports mild headache.',
     channel: 'web',
@@ -25,7 +26,7 @@ function createContext(shadow: ShadowSafetyGateContext) {
     correlationId: 'corr-1',
     requestId: 'req-1',
     submission: buildSubmission(),
-    practiceId: 'demo',
+    practiceId: PRACTICE_ID,
     authHeader: undefined,
     authContext: null,
     actor: { id: 'actor-1', type: 'patient' },

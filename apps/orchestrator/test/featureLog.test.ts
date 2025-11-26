@@ -1,6 +1,7 @@
 import { describe, it, beforeAll, afterAll, expect, beforeEach, afterEach } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import { consentReference, setConsentFixtureEnv } from './consentFixture';
+import { PRACTICE_ID } from './practice';
 
 let server: import('http').Server;
 let baseUrl: () => string;
@@ -66,7 +67,7 @@ describe('feature logging endpoint', () => {
         entityId: 'patient-123',
         patientId: 'patient-123',
         features: { probEmergency: 0.9 },
-        metadata: { practiceId: 'demo' },
+        metadata: { practiceId: PRACTICE_ID },
       }),
     });
 
@@ -79,7 +80,7 @@ describe('feature logging endpoint', () => {
     expect(record).toMatchObject({
       source: 'safety',
       features: { probEmergency: 0.9 },
-      metadata: { practiceId: 'demo', consentReference: consentRef },
+      metadata: { practiceId: PRACTICE_ID, consentReference: consentRef },
       patientId: 'patient-123',
     });
   });

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/ingest/guided-help-session.response.json",
+  "title": "GuidedHelpSessionResponse",
+  "type": "object",
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "stepId": {
+      "type": "string",
+      "enum": ["step1", "step2", "step3", "step4", "step5"]
+    },
+    "nextStepId": {
+      "type": "string",
+      "enum": ["step2", "step3", "step4", "step5"]
+    },
+    "question": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "rationale": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "missingFields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["onset", "location", "severity", "otherSymptoms"]
+      },
+      "uniqueItems": true
+    },
+    "redFlags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "chest_pain",
+          "shortness_of_breath",
+          "sudden_weakness_or_confusion",
+          "heavy_bleeding",
+          "severe_allergic_reaction",
+          "suicidal_thoughts",
+          "none"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "proceedToSummary": {
+      "type": "boolean"
+    },
+    "needsStep6": {
+      "type": "boolean"
+    },
+    "qualityScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "lowSignalReasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxItems": 8
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "bullets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "maxItems": 8
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxItems": 8
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "telemetryMeta": {
+      "type": "object",
+      "title": "GuidedHelpTelemetryMeta",
+      "properties": {
+        "llmProvider": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "llmModel": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["sessionId", "stepId"],
+  "additionalProperties": false
+}
+

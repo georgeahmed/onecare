@@ -10,9 +10,10 @@ import { deriveIdempotencyKey } from '../src/application/idempotency';
 import { resetSecurityServices, setSecurityServices } from '../src/adapters/security';
 import { setConsentFixtureEnv } from './consentFixture';
 import { resetAuditLedger, setAuditLedger } from '../src/adapters/audit';
+import { PRACTICE_ID } from './practice';
 
 const submission = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'patient-123' },
   narrative: 'example narrative',
   channel: 'web' as const,
@@ -247,7 +248,7 @@ describe('orchestrator decision metrics', () => {
     const mod = await import('../src/adapters/services/safetyGate');
     vi.spyOn(mod, 'analyzePortalSubmission').mockResolvedValue({ outcome: 'SAFE_TO_CONTINUE' });
 
-    const submissionInput = { practiceId: 'demo', patient: { id: 'patient-123' }, narrative: 'metrics', channel: 'web' };
+    const submissionInput = { practiceId: PRACTICE_ID, patient: { id: 'patient-123' }, narrative: 'metrics', channel: 'web' };
     const requestId = 'metrics-req-1';
     const idempotencyKey = deriveIdempotencyKey(submissionInput, submissionInput.patient.id);
     const fingerprint = `${requestId}:${idempotencyKey}`;
@@ -284,7 +285,7 @@ describe('orchestrator decision metrics', () => {
     const mod = await import('../src/adapters/services/safetyGate');
     vi.spyOn(mod, 'analyzePortalSubmission').mockRejectedValue(new Error('safety_gate_unavailable'));
 
-    const submissionInput = { practiceId: 'demo', patient: { id: 'patient-123' }, narrative: 'metrics', channel: 'web' };
+    const submissionInput = { practiceId: PRACTICE_ID, patient: { id: 'patient-123' }, narrative: 'metrics', channel: 'web' };
     const requestId = 'metrics-req-2';
     const idempotencyKey = deriveIdempotencyKey(submissionInput, submissionInput.patient.id);
     const fingerprint = `${requestId}:${idempotencyKey}`;

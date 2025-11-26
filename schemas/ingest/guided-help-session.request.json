@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onecare/schemas/ingest/guided-help-session.request.json",
+  "title": "GuidedHelpSessionRequest",
+  "type": "object",
+  "properties": {
+    "practiceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "patientId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "stepId": {
+      "type": "string",
+      "enum": ["step1", "step2", "step3", "step4", "step5"]
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(?:-[A-Z]{2})?$"
+    },
+    "seedNarrative": {
+      "type": "string",
+      "maxLength": 500000
+    },
+    "conversation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "GuidedHelpConversationItem",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant"]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500000
+          },
+          "fieldTags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["onset", "location", "severity", "otherSymptoms"]
+            },
+            "uniqueItems": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": ["role", "text"],
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "clientMeta": {
+      "type": "object",
+      "title": "GuidedHelpClientMeta",
+      "properties": {
+        "userAgent": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "tzOffsetMinutes": {
+          "type": "integer",
+          "minimum": -840,
+          "maximum": 840
+        }
+      },
+      "additionalProperties": false
+    },
+    "flags": {
+      "type": "object",
+      "title": "GuidedHelpFlags",
+      "properties": {
+        "fromSummaryButton": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["practiceId", "patientId", "sessionId", "stepId"],
+  "additionalProperties": false
+}
+

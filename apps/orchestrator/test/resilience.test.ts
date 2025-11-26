@@ -6,6 +6,7 @@ import { Topics, type PortalSubmission } from '@onecare/events';
 import { setConsentFixtureEnv } from './consentFixture';
 import { resetSecurityServices, setSecurityServices } from '../src/adapters/security';
 import { safePatientReference } from '../src/support/privacy';
+import { PRACTICE_ID } from './practice';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -21,7 +22,7 @@ vi.mock('../src/adapters/services/safetyGate', async () => {
 });
 
 const submission: PortalSubmission = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'patient-123' },
   narrative: 'test narrative',
   channel: 'web',

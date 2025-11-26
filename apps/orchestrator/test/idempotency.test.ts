@@ -14,6 +14,7 @@ import {
 import { resetSecurityServices } from '../src/adapters/security';
 import { setConsentFixtureEnv } from './consentFixture';
 import * as callGuard from '../src/adapters/services/callWithGuard';
+import { PRACTICE_ID } from './practice';
 
 vi.mock('../src/adapters/services/safetyGate', async () => {
   const actual = await vi.importActual<typeof import('../src/adapters/services/safetyGate')>(
@@ -51,7 +52,7 @@ async function postSafetyCheck(payload: unknown, headers: Record<string, string>
 const SHARED_SECRET = 'test-shared-secret';
 
 const submission = {
-  practiceId: 'p1',
+  practiceId: PRACTICE_ID,
   patient: { id: 'patient-123' },
   narrative: 'sample narrative',
   channel: 'web' as const,
@@ -81,7 +82,7 @@ function buildAuthHeaders(
 describe('deriveIdempotencyKey', () => {
   it('changes when attachment metadata differs', () => {
     const baseSubmission = {
-      practiceId: 'p1',
+      practiceId: PRACTICE_ID,
       patient: { id: 'patient-1' },
       narrative: 'same length narrative',
       channel: 'web' as const,

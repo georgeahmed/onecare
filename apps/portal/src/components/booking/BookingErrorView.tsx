@@ -143,8 +143,6 @@ const BookingErrorView = ({
     ? intl.formatMessage({ id: 'booking.error.rateLimited.body' })
     : intl.formatMessage({ id: 'booking.error.generic.body' });
 
-  const serverMessage = error.message && error.message.trim().length > 0 ? error.message : null;
-
   return (
     <section aria-labelledby={effectiveTitleId} role="alert">
       <header>
@@ -152,7 +150,6 @@ const BookingErrorView = ({
           {title}
         </h2>
         <p>{body}</p>
-        {serverMessage && !isConflict ? <p>{serverMessage}</p> : null}
       </header>
 
       <div className="booking-error-detail">

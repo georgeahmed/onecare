@@ -90,10 +90,11 @@ services:
       - PORT=3001
       - PRACTICE_ID=demo
       - PY_SAFETY_GATE_URL=http://safety-gate:8081
-      - PY_SAFETY_GATE_HOST_ALLOWLIST=safety-gate
+      - PY_SAFETY_GATE_HOST_ALLOWLIST=${PY_SAFETY_GATE_HOST_ALLOWLIST:-safety-gate}
+      - PY_SAFETY_GATE_API_KEY=${SAFETY_GATE_API_KEY:-dev-safety-key}
       - PY_SCRIBE_URL=http://scribe:8082
       - BUS_IMPL=memory
-      - ORCHESTRATOR_CORS_ORIGINS=${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:5173}
+      - ORCHESTRATOR_CORS_ORIGINS=${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173}
       - NATS_URL=nats://onecare:onecare-secret@nats:4222
       - NATS_USER=onecare
       - NATS_PASS=onecare-secret
@@ -104,6 +105,7 @@ services:
       - CONFIG_ROOT=/app/config
       - FHIR_BASE_URL=${FHIR_BASE_URL:-https://hapi.fhir.org/baseR4/}
       - SECURITY_SHARED_SECRET=${SECURITY_SHARED_SECRET:-dev-shared-secret}
+      - CONSENT_CACHE=${CONSENT_CACHE:-}
     ports:
       - "3001:3001"
     deploy:
@@ -129,6 +131,8 @@ services:
       context: services-py
       dockerfile: safety_gate_service/Dockerfile
     restart: unless-stopped
+    environment:
+      - SAFETY_GATE_API_KEY=${SAFETY_GATE_API_KEY:-dev-safety-key}
     # Resource budget tuned for FastAPI + lightweight model stub; adjust per docs/RUNBOOKS.md.
     ports:
       - "8081:8081"

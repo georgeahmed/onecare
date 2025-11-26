@@ -8,6 +8,7 @@ interface TelemetryDetail {
 }
 
 const SESSION_CORRELATION_STORAGE_KEY = 'onecare.portal.sessionCorrelationId';
+const SESSION_CORRELATION_TTL_MS = 6 * 60 * 60 * 1000;
 
 const hasWindow = (): boolean => typeof window !== 'undefined';
 
@@ -21,24 +22,44 @@ export const createCorrelationId = (): string => {
   return `corr-${Date.now().toString(36)}-${random}`;
 };
 
-const readStoredSessionCorrelationId = (): string | null => {
-  if (!hasWindow() || !window.localStorage) {
+type StoredCorrelation = { id: string; createdAt: number };
+
+const getSessionStorage = (): Storage | null => {
+  if (!hasWindow()) return null;
+  try {
+    return window.sessionStorage;
+  } catch {
     return null;
   }
+};
+
+const readStoredSessionCorrelationId = (): string | null => {
+  const storage = getSessionStorage();
+  if (!storage) return null;
   try {
-    const stored = window.localStorage.getItem(SESSION_CORRELATION_STORAGE_KEY);
-    return typeof stored === 'string' && stored.trim().length > 0 ? stored : null;
+    const raw = storage.getItem(SESSION_CORRELATION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredCorrelation;
+    if (!parsed?.id || typeof parsed.id !== 'string' || typeof parsed.createdAt !== 'number') {
+      storage.removeItem(SESSION_CORRELATION_STORAGE_KEY);
+      return null;
+    }
+    if (Date.now() - parsed.createdAt > SESSION_CORRELATION_TTL_MS) {
+      storage.removeItem(SESSION_CORRELATION_STORAGE_KEY);
+      return null;
+    }
+    return parsed.id;
   } catch {
     return null;
   }
 };
 
 const persistSessionCorrelationId = (value: string): void => {
-  if (!hasWindow() || !window.localStorage) {
-    return;
-  }
+  const storage = getSessionStorage();
+  if (!storage) return;
   try {
-    window.localStorage.setItem(SESSION_CORRELATION_STORAGE_KEY, value);
+    const envelope: StoredCorrelation = { id: value, createdAt: Date.now() };
+    storage.setItem(SESSION_CORRELATION_STORAGE_KEY, JSON.stringify(envelope));
   } catch {
     // ignore persistence failures
   }

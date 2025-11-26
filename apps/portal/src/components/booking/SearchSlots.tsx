@@ -308,9 +308,6 @@ const SearchSlots = ({
           .join(' ')}
         role="listbox"
         aria-label={intl.formatMessage({ id: 'booking.slots.listLabel' })}
-        aria-activedescendant={
-          activeIndex >= 0 && filteredSlots[activeIndex] ? `${filteredSlots[activeIndex].id}-option` : undefined
-        }
         onKeyDown={handleListKeyDown}
         ref={listContainerRef}
         dir={direction}
@@ -400,8 +397,15 @@ const SearchSlots = ({
     );
   };
 
+  const loadingMessage = intl.formatMessage({ id: 'booking.slots.loading' });
+
   return (
-    <section className="booking-search" aria-live="polite" dir={direction}>
+    <section className="booking-search" aria-live="polite" dir={direction} aria-busy={isLoading}>
+      {isLoading ? (
+        <div className="visually-hidden" role="status">
+          {loadingMessage}
+        </div>
+      ) : null}
       <form
         className="booking-search__filters"
         aria-labelledby={filterLegendId}

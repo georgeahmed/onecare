@@ -113,20 +113,19 @@ run_command() {
 show_overview() {
   print_step "Welcome"
   cat <<'EOF'
-This guided helper walks you through preparing, running, testing, and observing
-the ONECARE stack. Each section explains the *why* behind the command and
-offers interactive prompts, so feel free to explore at your own pace.
+This helper is your interactive runbook for the ONECARE stack. It keeps the
+commands accurate, explains why, and offers to open long-running processes in a
+separate terminal.
 
 Core phases:
-  1. Prepare dependencies and generated contracts.
-  2. Start the runtime stack (local or Docker).
-  3. Exercise API flows and frontends with sample credentials.
-  4. Run automated tests and smoke checks for confidence.
-  5. Review observability, troubleshooting, and clean-up tips.
+  1) Prepare dependencies and generated contracts.
+  2) Start the runtime stack (lightweight, full dev, or Docker).
+  3) Exercise APIs/frontends with sample headers.
+  4) Run automated checks for confidence.
+  5) Observe, troubleshoot, and clean up.
 
-Use the menu to jump between phases. When a step recommends running something
-in its own terminal, the helper will offer to launch one for you. If the system
-cannot open a new window automatically, it prints the command to copy-paste.
+When a step needs its own terminal, the helper offers to launch one. If it
+cannot, it prints a ready-to-copy command instead.
 EOF
   prompt_continue
 }
@@ -151,7 +150,7 @@ Environment variables for local workflows:
   export PY_SAFETY_GATE_HOST_ALLOWLIST=localhost,127.0.0.1
   export BOOKING_BASE_URL=http://localhost:4000
 
-When using curl against /safety-check:
+When using curl against /safety-check (orchestrator on :3001):
   curl -s -X POST http://localhost:3001/safety-check \
     -H 'content-type: application/json' \
     -H 'authorization: Bearer dev-token' \
@@ -164,13 +163,46 @@ EOF
   prompt_continue
 }
 
+quick_start() {
+  print_step "Quick start (5-minute path)"
+  cat <<'EOF'
+1) Install everything (Node + Python deps):
+     ./scripts/setup-requirements.sh
+
+2) Generate contracts from schemas (keep TS/Py models in sync):
+     npm run --workspaces=false codegen
+
+3) Start a stack (pick one):
+   • make dev-run
+       - Starts Safety Gate (Python) + Orchestrator on :8081 / :3001.
+       - If FHIR_BASE_URL is unset, defaults to https://hapi.fhir.org/baseR4.
+       - Uses BUS_IMPL=memory (no NATS needed).
+   • npm run --workspaces=false dev:all
+       - Portal + signing proxy + booking stub + Orchestrator + Safety Gate.
+       - Requires FHIR_BASE_URL and token (FHIR_TOKEN or FHIR_AUTH_TOKEN).
+       - Ports: Portal 5173, Proxy 4000, Orchestrator 3001, Safety Gate 8081, Booking stub 4002.
+   • make docker-up
+       - Docker Compose with NATS; stop with make docker-down.
+
+4) Smoke check:
+     curl -s http://localhost:3001/health && echo
+     curl -s http://localhost:8081/docs | head -n 5   # if Safety Gate running
+
+5) Stop when done:
+     make dev-stop | npm run --workspaces=false dev:all:stop | make docker-down
+EOF
+  prompt_continue
+}
+
 bootstrap_dependencies() {
   print_step "Bootstrap project requirements"
   cat <<'EOF'
-This installs Node.js workspace dependencies, provisions the Python virtualenv
-for services-py, and checks for optional tooling (k6, newman, nats CLI, etc.).
+Installs npm workspace dependencies, provisions the Python virtualenv for
+services-py, and checks optional tooling (k6, newman, nats CLI, etc.).
 
-Command: ./scripts/setup-requirements.sh
+Commands:
+  ./scripts/setup-requirements.sh           # full run
+  ./scripts/setup-requirements.sh --dry-run # see actions without installing
 EOF
   if confirm_action "Run setup now?"; then
     (cd "$REPO_ROOT" && bash ./scripts/setup-requirements.sh)
@@ -184,9 +216,10 @@ generate_contracts() {
   print_step "Generate TypeScript/Python contracts from schemas"
   cat <<'EOF'
 Run code generation after modifying JSON Schemas so that downstream TypeScript
-and Python models stay in sync.
+and Python models stay in sync. Dry-run mode checks without writing files.
 
 Commands:
+  0) npm run codegen:check                         # dry-run verification
   1) npm run --workspaces=false codegen                # TS generation (json-schema-to-typescript)
   2) RUN_PY=1 npm run --workspaces=false codegen       # TS + Python (requires datamodel-codegen)
 
@@ -213,8 +246,9 @@ start_runtime_menu() {
 Choose a stack launcher:
   1) Local orchestrator + Safety Gate (make dev-run)
   2) Full developer stack (npm run --workspaces=false dev:all)
-  3) Docker compose stack (make docker-up)
-  4) Back to main menu
+  3) Clinician console only (npm run --workspace @onecare/app-clinician dev)
+  4) Docker compose stack (make docker-up)
+  5) Back to main menu
 EOF
     printf '%sSelect option:%s ' "$BOLD" "$RESET"
     read -r choice
@@ -226,9 +260,12 @@ EOF
         explain_dev_all
         ;;
       3)
-        explain_docker_up
+        explain_clinician_console
         ;;
       4)
+        explain_docker_up
+        ;;
+      5)
         break
         ;;
       *)
@@ -248,6 +285,9 @@ It runs both services in the foreground until you stop them (Ctrl+C).
 Ports:
   • Safety Gate API: http://localhost:8081
   • Orchestrator API: http://localhost:3001
+Defaults:
+   • PRACTICE_ID=demo, BUS_IMPL=memory
+   • FHIR_BASE_URL defaults to https://hapi.fhir.org/baseR4 if unset
 
 Use this flow when you want the minimal local stack without Docker.
 EOF
@@ -264,14 +304,26 @@ explain_dev_all() {
   cat <<'EOF'
 This script starts Safety Gate, Orchestrator, Booking stub, Proxy, and Portal
 UI with live reload. Ideal for validating end-to-end flows locally without
-Docker.
+Docker. It requires a reachable FHIR endpoint and auth token.
 
-Important environment variables before launch:
-  export PRACTICE_ID=demo
-  export FHIR_BASE_URL=http://localhost:8000   # replace with your sandbox
-  export FHIR_TOKEN=dev-token
+Before launching, set:
+  export FHIR_BASE_URL="https://fhir-dev.example.com"   # required
+  export FHIR_TOKEN="<bearer token>"                    # or FHIR_AUTH_TOKEN
+  export PRACTICE_ID=${PRACTICE_ID:-demo}
 
-The helper command automatically uses BUS_IMPL=memory.
+Ports (default):
+  • Portal UI: 5173
+  • Signing proxy: 4000 (forwards to Orchestrator)
+  • Booking stub: 4002
+  • Orchestrator: 3001
+  • Safety Gate: 8081
+
+The helper command automatically sets BUS_IMPL=memory and spins up a signing
+proxy so the Portal can call the Orchestrator with zero-trust headers.
+
+Add-on: start the clinician console separately (needs the proxy on :4000):
+  npm run --workspace @onecare/app-clinician dev -- --port 5174
+  VITE_ORCH_URL=http://localhost:4000
 EOF
   if confirm_action "Launch npm run --workspaces=false dev:all in new terminal?"; then
     launch_terminal "ONECARE dev-all" "npm run --workspaces=false dev:all"
@@ -281,15 +333,45 @@ EOF
   prompt_continue
 }
 
+explain_clinician_console() {
+  print_step "Start clinician console (npm run --workspace @onecare/app-clinician dev)"
+  cat <<'EOF'
+Runs the clinician UI alone. Pair it with dev:all (for the proxy on :4000) or
+point directly at the Orchestrator if you started dev-run.
+
+With dev:all (recommended):
+  VITE_ORCH_URL=http://localhost:4000 \
+  npm run --workspace @onecare/app-clinician dev -- --port 5174
+  Open: http://localhost:5174
+
+With dev-run (no proxy):
+  VITE_ORCH_URL=http://localhost:3001 \
+  npm run --workspace @onecare/app-clinician dev -- --port 5174
+
+Note: BUS_IMPL=memory locally; Docker uses NATS.
+EOF
+  if confirm_action "Launch clinician console in a new terminal window?" "n"; then
+    launch_terminal "ONECARE clinician" "VITE_ORCH_URL=http://localhost:4000 npm run --workspace @onecare/app-clinician dev -- --port 5174"
+  else
+    print_info "Run manually (pair with dev:all proxy on :4000): VITE_ORCH_URL=http://localhost:4000 npm run --workspace @onecare/app-clinician dev -- --port 5174"
+  fi
+  prompt_continue
+}
+
 explain_docker_up() {
   print_step "Start Docker compose stack"
   cat <<'EOF'
 Docker Compose builds and runs the containerised stack (orchestrator, Safety
-Gate, Postgres mocks, etc.). Use this when mirroring production-like topology.
+Gate, NATS, Postgres mocks, etc.). Use this when mirroring production-like
+topology. Stop with make docker-down.
 
 Health endpoints to watch:
   curl -s http://localhost:8081/docs
   curl -s http://localhost:3001/health
+
+Observability (Docker stack):
+  • Loki API (logs): http://localhost:3100/ready
+  • Stream logs inline: docker-compose logs -f
 
 Stop with: make docker-down
 EOF
@@ -306,25 +388,33 @@ run_tests_menu() {
     cat <<'EOF'
 
 Test helpers:
-  1) TypeScript unit tests (npm run test)
-  2) Python tests (services-py/run-tests.sh)
-  3) Contract tests (npm run test:contracts)
-  4) Performance smoke (make perf-smoke)
-  5) Back to main menu
+  1) TypeScript typecheck (npm run typecheck)
+  2) TypeScript unit tests (npm run test)
+  3) Python tests (services-py/run-tests.sh)
+  4) Contract tests (npm run test:contracts)
+  5) CI-style bundle (npm run build && npm run typecheck && npm run lint && npm run test)
+  6) Performance smoke (make perf-smoke)
+  7) Back to main menu
 EOF
     printf '%sPick a test suite:%s ' "$BOLD" "$RESET"
     read -r choice
     case "$choice" in
       1)
-        run_command "Run Vitest unit suite" npm run test
+        run_command "Run TypeScript project references typecheck" npm run typecheck
         ;;
       2)
-        run_command "Run Python pytest suite" ./services-py/run-tests.sh
+        run_command "Run Vitest unit suite" npm run test
         ;;
       3)
-        run_command "Run contract test suite" npm run test:contracts
+        run_command "Run Python pytest suite" ./services-py/run-tests.sh
         ;;
       4)
+        run_command "Run contract test suite" npm run test:contracts
+        ;;
+      5)
+        run_command "Run CI bundle (build + typecheck + lint + test)" bash -lc "npm run build && npm run typecheck && npm run lint && npm run test"
+        ;;
+      6)
         print_step "Performance smoke prerequisites"
         cat <<'EOF'
 Requires k6 and newman installed. Uses BOOKING_BASE_URL and SAFETY_CHECK_BASE_URL
@@ -340,7 +430,7 @@ EOF
         fi
         prompt_continue
         ;;
-      5)
+      7)
         break
         ;;
       *)
@@ -355,14 +445,17 @@ observability_help() {
   cat <<'EOF'
 Monitoring tips:
   • Logs: services print to stdout. Use tail -f var/logs/* or docker logs.
-  • Traces: When running locally, check console spans emitted with correlation IDs.
+  • Traces: Console spans include correlation IDs; pass x-correlation-id on test calls.
   • Metrics: Safety Gate exposes Prometheus metrics at http://localhost:8081/metrics.
+  • Docker stack logs/OTEL: docker-compose logs -f; Loki API at http://localhost:3100/ready.
 
 Troubleshooting checklist:
   1. Ensure .env is populated (copy from .env.example).
-  2. Validate required services are reachable (curl health endpoints).
+  2. Validate required services are reachable (curl health endpoints above).
   3. Reset Docker stack if ports are stuck: make docker-down && docker ps (verify).
   4. Regenerate contracts after schema edits: npm run --workspaces=false codegen.
+  5. For dev:all, confirm FHIR_BASE_URL/FHIR_TOKEN are exported before launch.
+   - dev-run/dev:all use BUS_IMPL=memory; Docker uses NATS (check NATS health if Docker services look idle).
 
 To stream orchestrator logs in a new window using npm workspaces:
   npm run --workspace @onecare/app-orchestrator dev
@@ -402,28 +495,30 @@ main_menu() {
     cat <<'EOF'
 
 Main menu:
-  1) Overview of the operations journey
-  2) Bootstrap dependencies (setup-requirements)
-  3) Generate contracts from schemas
-  4) Start runtime stack
-  5) Run tests and smokes
-  6) Sample credentials & API helpers
-  7) Observability & troubleshooting tips
-  8) Clean-up / stop services
-  9) Exit
+  1) Quick start (recommended)
+  2) Overview of the operations journey
+  3) Bootstrap dependencies (setup-requirements)
+  4) Generate contracts from schemas
+  5) Start runtime stack
+  6) Run tests and smokes
+  7) Sample credentials & API helpers
+  8) Observability & troubleshooting tips
+  9) Clean-up / stop services
+ 10) Exit
 EOF
     printf '%sChoose an option:%s ' "$BOLD" "$RESET"
     read -r option
     case "$option" in
-      1) show_overview ;;
-      2) bootstrap_dependencies ;;
-      3) generate_contracts ;;
-      4) start_runtime_menu ;;
-      5) run_tests_menu ;;
-      6) show_sample_credentials ;;
-      7) observability_help ;;
-      8) cleanup_guidance ;;
-      9)
+      1) quick_start ;;
+      2) show_overview ;;
+      3) bootstrap_dependencies ;;
+      4) generate_contracts ;;
+      5) start_runtime_menu ;;
+      6) run_tests_menu ;;
+      7) show_sample_credentials ;;
+      8) observability_help ;;
+      9) cleanup_guidance ;;
+      10)
         print_info "Good luck, and happy shipping!"
         break
         ;;
