@@ -11,7 +11,7 @@
   "dependencies": {
     "@onecare/events": "file:../../packages/events",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react-dom": "^19.2.0",
     "react-intl": "^7.1.14",
     "react-router-dom": "^6.22.3"
   },
