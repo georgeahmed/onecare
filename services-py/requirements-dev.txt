@@ -1,4 +1,4 @@
-fastapi==0.109.2
+fastapi==0.120.0
 uvicorn==0.37.0
 pydantic==1.10.24
 prometheus-client==0.20.0
